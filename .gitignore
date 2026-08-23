@@ -1,0 +1,42 @@
+# Local planning, prototypes, benchmarks, and captured evidence
+.scratch/
+
+# Rust build output
+target/
+**/target/
+
+# IDE and editor state
+.vs/
+.vscode/
+.idea/
+*.suo
+*.user
+
+# Local configuration and secrets
+.env
+.env.*
+!.env.example
+
+# Timelens runtime data
+data/
+snapshots/
+backups/
+logs/
+*.db
+*.db-*
+*.sqlite
+*.sqlite3
+*.sqlite3-*
+
+# Generated packages and symbols
+dist/
+out/
+*.pdb
+*.ilk
+*.msi
+*.msix
+*.appx
+
+# Windows metadata
+Thumbs.db
+Desktop.ini
