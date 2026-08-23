@@ -1,0 +1,99 @@
+{
+  "environment": {
+    "capturedAt": "2026-08-23T11:15:36.7100045+08:00",
+    "os": {
+      "Caption": "Microsoft Windows 11 专业版",
+      "Version": "10.0.26200",
+      "BuildNumber": "26200",
+      "OSArchitecture": "64 位"
+    },
+    "cpu": {
+      "Name": "AMD Ryzen 7 7840H w/Radeon 780M Graphics",
+      "NumberOfCores": 8,
+      "NumberOfLogicalProcessors": 16
+    },
+    "physicalMemoryBytes": 14731603968,
+    "powerPlan": "电源方案 GUID: 381b4222-f694-41f0-9685-ff5bb260df2e  (平衡)",
+    "rustc": "rustc 1.94.1 (e408947bf 2026-03-25)",
+    "cargo": "cargo 1.94.1 (29ea6fb6a 2026-03-24)",
+    "display": [
+      {
+        "Name": "GameViewer Virtual Display Adapter",
+        "CurrentHorizontalResolution": null,
+        "CurrentVerticalResolution": null
+      },
+      {
+        "Name": "MuMu Virtual Display Adapter",
+        "CurrentHorizontalResolution": null,
+        "CurrentVerticalResolution": null
+      },
+      {
+        "Name": "AMD Radeon 780M Graphics",
+        "CurrentHorizontalResolution": null,
+        "CurrentVerticalResolution": null
+      },
+      {
+        "Name": "NVIDIA GeForce RTX 4060 Laptop GPU",
+        "CurrentHorizontalResolution": 2560,
+        "CurrentVerticalResolution": 1600
+      }
+    ]
+  },
+  "scenarios": [
+    {
+      "scenario": "observer-normal",
+      "elapsedSeconds": 60.0705208,
+      "sampleCount": 255,
+      "averageCpuPercent": 0.016256934133322846,
+      "peakWorkingSetBytes": 31232000,
+      "peakPrivateBytes": 4501504,
+      "maximumProcessCount": 2,
+      "exitCodes": [
+        0
+      ],
+      "outputDirectory": "D:\\GitHub_Project\\Timelens\\.scratch\\timelens-v1\\performance-validation\\evidence\\20260823-111353\\observer-normal"
+    },
+    {
+      "scenario": "observer-window-storm",
+      "elapsedSeconds": 29.4664722,
+      "sampleCount": 102,
+      "averageCpuPercent": 3.062272754863407,
+      "peakWorkingSetBytes": 57974784,
+      "peakPrivateBytes": 9060352,
+      "maximumProcessCount": 4,
+      "exitCodes": [
+        0,
+        0
+      ],
+      "outputDirectory": "D:\\GitHub_Project\\Timelens\\.scratch\\timelens-v1\\performance-validation\\evidence\\20260823-111353\\observer-window-storm"
+    },
+    {
+      "scenario": "core-suite",
+      "elapsedSeconds": 5.7539113,
+      "sampleCount": 24,
+      "averageCpuPercent": 5.32925533627882,
+      "peakWorkingSetBytes": 52883456,
+      "peakPrivateBytes": 25829376,
+      "maximumProcessCount": 3,
+      "exitCodes": [
+        0
+      ],
+      "outputDirectory": "D:\\GitHub_Project\\Timelens\\.scratch\\timelens-v1\\performance-validation\\evidence\\20260823-111353\\core-suite"
+    },
+    {
+      "scenario": "full-stack-peak",
+      "elapsedSeconds": 6.1267588,
+      "sampleCount": 22,
+      "averageCpuPercent": 6.3119630235810815,
+      "peakWorkingSetBytes": 116731904,
+      "peakPrivateBytes": 30949376,
+      "maximumProcessCount": 7,
+      "exitCodes": [
+        0,
+        -1,
+        0
+      ],
+      "outputDirectory": "D:\\GitHub_Project\\Timelens\\.scratch\\timelens-v1\\performance-validation\\evidence\\20260823-111353\\full-stack-peak"
+    }
+  ]
+}

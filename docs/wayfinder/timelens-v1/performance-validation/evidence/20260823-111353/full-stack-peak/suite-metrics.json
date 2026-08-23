@@ -1,0 +1,141 @@
+{
+  "datasetDays": 30,
+  "appCount": 100,
+  "appIntervalRows": 120000,
+  "windowIntervalRows": 240000,
+  "inputMinuteRows": 43200,
+  "dailyKeyRows": 7680,
+  "snapshotMetadataRows": 8640,
+  "databaseBytes": 19742720,
+  "walBytesAfterCheckpoint": 0,
+  "shmBytesAfterCheckpoint": 0,
+  "phases": [
+    {
+      "name": "create_30_day_database",
+      "elapsedMs": 625.4558999999999
+    },
+    {
+      "name": "history_queries",
+      "elapsedMs": 4901.7420999999995
+    },
+    {
+      "name": "input_burst",
+      "elapsedMs": 6.6969
+    },
+    {
+      "name": "snapshot_capture_and_encode",
+      "elapsedMs": 74.2481
+    },
+    {
+      "name": "local_ai_stream",
+      "elapsedMs": 353.3667
+    }
+  ],
+  "queries": [
+    {
+      "name": "timeline",
+      "days": 1,
+      "repetitions": 20,
+      "rowsPerRepetition": 7994,
+      "p50Ms": 26.1453,
+      "p95Ms": 27.4522,
+      "maxMs": 27.4522
+    },
+    {
+      "name": "application_summary",
+      "days": 1,
+      "repetitions": 20,
+      "rowsPerRepetition": 300,
+      "p50Ms": 13.276299999999999,
+      "p95Ms": 14.1037,
+      "maxMs": 14.1037
+    },
+    {
+      "name": "input_summary",
+      "days": 1,
+      "repetitions": 20,
+      "rowsPerRepetition": 1,
+      "p50Ms": 0.1014,
+      "p95Ms": 0.1101,
+      "maxMs": 0.1101
+    },
+    {
+      "name": "timeline",
+      "days": 7,
+      "repetitions": 20,
+      "rowsPerRepetition": 50000,
+      "p50Ms": 34.382999999999996,
+      "p95Ms": 35.973699999999994,
+      "maxMs": 35.973699999999994
+    },
+    {
+      "name": "application_summary",
+      "days": 7,
+      "repetitions": 20,
+      "rowsPerRepetition": 300,
+      "p50Ms": 25.1853,
+      "p95Ms": 27.2377,
+      "maxMs": 27.2377
+    },
+    {
+      "name": "input_summary",
+      "days": 7,
+      "repetitions": 20,
+      "rowsPerRepetition": 1,
+      "p50Ms": 0.7529,
+      "p95Ms": 1.0871,
+      "maxMs": 1.0871
+    },
+    {
+      "name": "timeline",
+      "days": 30,
+      "repetitions": 20,
+      "rowsPerRepetition": 50000,
+      "p50Ms": 18.6235,
+      "p95Ms": 23.6863,
+      "maxMs": 23.6863
+    },
+    {
+      "name": "application_summary",
+      "days": 30,
+      "repetitions": 20,
+      "rowsPerRepetition": 300,
+      "p50Ms": 110.97959999999999,
+      "p95Ms": 132.4117,
+      "maxMs": 132.4117
+    },
+    {
+      "name": "input_summary",
+      "days": 30,
+      "repetitions": 20,
+      "rowsPerRepetition": 1,
+      "p50Ms": 3.4995,
+      "p95Ms": 4.462899999999999,
+      "maxMs": 4.462899999999999
+    }
+  ],
+  "snapshot": {
+    "sourceWidth": 1707,
+    "sourceHeight": 1067,
+    "encodedWidth": 1280,
+    "encodedHeight": 800,
+    "encodedBytes": 41108,
+    "captureAndEncodeMs": 73.8882,
+    "pixelsPersisted": false
+  },
+  "inputBurst": {
+    "eventCount": 5000000,
+    "elapsedMs": 6.6965,
+    "eventsPerSecond": 746658702.3071754,
+    "retainedCounterBytes": 2072
+  },
+  "aiStream": {
+    "protocol": "local_jsonl_stream_proxy",
+    "chunkCount": 512,
+    "stdoutBytes": 204178,
+    "elapsedMs": 353.3551,
+    "exitCode": 0,
+    "networkUsed": false
+  },
+  "totalElapsedMs": 5964.8182
+}

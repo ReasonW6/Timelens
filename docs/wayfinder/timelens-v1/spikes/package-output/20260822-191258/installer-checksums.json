@@ -1,0 +1,23 @@
+[
+  {
+    "candidate": "slint",
+    "bytes": 6422528,
+    "sha256": "1DBBD5A5E1BC447F5321D83A3E3856FA26D3069BD8B04984CA0BFD1FCF61E49F",
+    "signatureStatus": "NotSigned",
+    "path": "D:\\GitHub_Project\\Timelens\\.scratch\\timelens-v1\\spikes\\package-output\\20260822-191258\\slint\\Timelens-slint-spike-setup.exe"
+  },
+  {
+    "candidate": "tauri",
+    "bytes": 3149824,
+    "sha256": "33F63204B0B4E6514C1224FBAFDF62ABE12CC15158D8E0D904DD8281AFC9709F",
+    "signatureStatus": "NotSigned",
+    "path": "D:\\GitHub_Project\\Timelens\\.scratch\\timelens-v1\\spikes\\package-output\\20260822-191258\\tauri\\Timelens-tauri-spike-setup.exe"
+  },
+  {
+    "candidate": "winui",
+    "bytes": 69427200,
+    "sha256": "68444C8E0B0684EC9C249204D0BEE1A8C96CE5BF3CBCE726B2B27EEBD15D479D",
+    "signatureStatus": "NotSigned",
+    "path": "D:\\GitHub_Project\\Timelens\\.scratch\\timelens-v1\\spikes\\package-output\\20260822-191258\\winui\\Timelens-winui-spike-setup.exe"
+  }
+]

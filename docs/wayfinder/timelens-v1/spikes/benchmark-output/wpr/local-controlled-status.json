@@ -1,0 +1,17 @@
+[
+    {
+        "candidate":  "slint",
+        "status":  "completed",
+        "tracePath":  "D:\\GitHub_Project\\Timelens\\.scratch\\timelens-v1\\spikes\\benchmark-output\\wpr\\slint-20260822-193820.etl"
+    },
+    {
+        "candidate":  "tauri",
+        "status":  "completed",
+        "tracePath":  "D:\\GitHub_Project\\Timelens\\.scratch\\timelens-v1\\spikes\\benchmark-output\\wpr\\tauri-20260822-193929.etl"
+    },
+    {
+        "candidate":  "winui",
+        "status":  "completed",
+        "tracePath":  "D:\\GitHub_Project\\Timelens\\.scratch\\timelens-v1\\spikes\\benchmark-output\\wpr\\winui-20260822-194029.etl"
+    }
+]

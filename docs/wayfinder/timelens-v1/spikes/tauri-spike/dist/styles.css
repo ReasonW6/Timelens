@@ -1,0 +1,48 @@
+:root {
+  color: #f5f7fa;
+  background: #11151c;
+  font-family: "Segoe UI", system-ui, sans-serif;
+}
+
+* { box-sizing: border-box; }
+
+body { margin: 0; }
+
+main { padding: 18px; }
+
+h1 {
+  margin: 0 0 12px;
+  font-size: 24px;
+  font-weight: 600;
+}
+
+#status {
+  margin: 0 0 12px;
+  color: #98a2b3;
+  font-size: 14px;
+}
+
+#viewport {
+  position: relative;
+  height: 548px;
+  overflow: hidden;
+  border-radius: 8px;
+  background: #181e27;
+}
+
+#track {
+  position: absolute;
+  inset: 0;
+}
+
+.segment {
+  position: absolute;
+  display: none;
+  height: 28px;
+  min-width: 1px;
+  border-radius: 3px;
+}
+
+.displayed { background: #68a7ff; }
+.focused { background: #6ce5a1; }
+.background { background: #8a7cf6; }

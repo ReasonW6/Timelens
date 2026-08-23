@@ -1,0 +1,146 @@
+[
+  {
+    "candidate": "slint",
+    "firstWindowMilliseconds": {
+      "median": 542.1315,
+      "minimum": 509.5689,
+      "maximum": 603.6709
+    },
+    "totalCpuPercent": {
+      "median": 0.07454692347432498,
+      "minimum": 0.06117116228049354,
+      "maximum": 0.08052041934758179
+    },
+    "steadyCollectionCpuPercent": {
+      "median": 0.014146228655728841,
+      "minimum": 0.01222463537983815,
+      "maximum": 0.023135548151601036
+    },
+    "peakWorkingSetBytes": {
+      "median": 76976128.0,
+      "minimum": 76939264.0,
+      "maximum": 77012992.0
+    },
+    "peakPrivateBytes": {
+      "median": 18833408.0,
+      "minimum": 18800640.0,
+      "maximum": 18845696.0
+    },
+    "maximumProcessCount": {
+      "median": 4.0,
+      "minimum": 4.0,
+      "maximum": 4.0
+    },
+    "panElapsedMilliseconds": {
+      "median": 3897.063,
+      "minimum": 3892.894,
+      "maximum": 3903.219
+    },
+    "maximumStepGapMilliseconds": {
+      "median": 17.569,
+      "minimum": 17.357,
+      "maximum": 23.1
+    },
+    "lateStepCount": {
+      "median": 0.0,
+      "minimum": 0.0,
+      "maximum": 0.0
+    }
+  },
+  {
+    "candidate": "tauri",
+    "firstWindowMilliseconds": {
+      "median": 513.4152,
+      "minimum": 495.4987,
+      "maximum": 529.1727
+    },
+    "totalCpuPercent": {
+      "median": 0.23213592787804058,
+      "minimum": 0.22098784836969512,
+      "maximum": 0.23936201995219628
+    },
+    "steadyCollectionCpuPercent": {
+      "median": 0.030578662094125693,
+      "minimum": 0.030518776547986428,
+      "maximum": 0.03735341321928361
+    },
+    "peakWorkingSetBytes": {
+      "median": 476930048.0,
+      "minimum": 467927040.0,
+      "maximum": 477831168.0
+    },
+    "peakPrivateBytes": {
+      "median": 283930624.0,
+      "minimum": 281214976.0,
+      "maximum": 288600064.0
+    },
+    "maximumProcessCount": {
+      "median": 10.0,
+      "minimum": 10.0,
+      "maximum": 10.0
+    },
+    "panElapsedMilliseconds": {
+      "median": 3841.0,
+      "minimum": 3840.900000005961,
+      "maximum": 3841.5
+    },
+    "maximumStepGapMilliseconds": {
+      "median": 24.30000000447035,
+      "minimum": 17.80000000447035,
+      "maximum": 25.200000002980232
+    },
+    "lateStepCount": {
+      "median": 0.0,
+      "minimum": 0.0,
+      "maximum": 1.0
+    }
+  },
+  {
+    "candidate": "winui",
+    "firstWindowMilliseconds": {
+      "median": 324.3967,
+      "minimum": 295.0088,
+      "maximum": 387.1875
+    },
+    "totalCpuPercent": {
+      "median": 0.5700211435695829,
+      "minimum": 0.5685130118307857,
+      "maximum": 0.575085797249197
+    },
+    "steadyCollectionCpuPercent": {
+      "median": 0.028097926797848966,
+      "minimum": 0.020609984139338035,
+      "maximum": 0.029704476503391225
+    },
+    "peakWorkingSetBytes": {
+      "median": 187514880.0,
+      "minimum": 187195392.0,
+      "maximum": 190615552.0
+    },
+    "peakPrivateBytes": {
+      "median": 117166080.0,
+      "minimum": 116899840.0,
+      "maximum": 118870016.0
+    },
+    "maximumProcessCount": {
+      "median": 3.0,
+      "minimum": 3.0,
+      "maximum": 3.0
+    },
+    "panElapsedMilliseconds": {
+      "median": 6882.9551,
+      "minimum": 6839.3192,
+      "maximum": 6975.6935
+    },
+    "maximumStepGapMilliseconds": {
+      "median": 39.63920000000053,
+      "minimum": 34.37819999999999,
+      "maximum": 40.426399999999376
+    },
+    "lateStepCount": {
+      "median": 199.0,
+      "minimum": 196.0,
+      "maximum": 202.0
+    }
+  }
+]

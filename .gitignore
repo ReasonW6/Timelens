@@ -30,6 +30,8 @@ logs/
 
 # Generated packages and symbols
 dist/
+!docs/wayfinder/timelens-v1/spikes/tauri-spike/dist/
+!docs/wayfinder/timelens-v1/spikes/tauri-spike/dist/**
 out/
 *.pdb
 *.ilk

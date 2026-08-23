@@ -1,0 +1,5 @@
+{
+  "cycles": 500,
+  "expectedStateOperations": 2500,
+  "elapsedMs": 27780.407199999998
+}

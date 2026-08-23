@@ -1,0 +1,29 @@
+[
+  {
+    "candidate": "slint",
+    "payloadFileCount": 4,
+    "installedPayloadBytes": 11550464,
+    "compressedPayloadBytes": 6248175,
+    "installerBytes": 6422528,
+    "installer": "D:\\GitHub_Project\\Timelens\\.scratch\\timelens-v1\\spikes\\package-output\\20260822-191258\\slint\\Timelens-slint-spike-setup.exe",
+    "runtimeTreatment": "Visual C++ runtime is deployed app-local and counted; no external UI runtime."
+  },
+  {
+    "candidate": "tauri",
+    "payloadFileCount": 4,
+    "installedPayloadBytes": 6624000,
+    "compressedPayloadBytes": 2975489,
+    "installerBytes": 3149824,
+    "installer": "D:\\GitHub_Project\\Timelens\\.scratch\\timelens-v1\\spikes\\package-output\\20260822-191258\\tauri\\Timelens-tauri-spike-setup.exe",
+    "runtimeTreatment": "Uses the Windows-provided WebView2 runtime; runtime bytes excluded."
+  },
+  {
+    "candidate": "winui",
+    "payloadFileCount": 451,
+    "installedPayloadBytes": 177841868,
+    "compressedPayloadBytes": 70746131,
+    "installerBytes": 69427200,
+    "installer": "D:\\GitHub_Project\\Timelens\\.scratch\\timelens-v1\\spikes\\package-output\\20260822-191258\\winui\\Timelens-winui-spike-setup.exe",
+    "runtimeTreatment": "Both .NET and Windows App SDK are self-contained and counted; no external .NET runtime prerequisite."
+  }
+]

@@ -1,0 +1,15 @@
+{
+  "slintUiBytes": 9146368,
+  "coreAndAiWorkerProxyBytes": 2354176,
+  "elevatedCollectorProxyBytes": 288256,
+  "appLocalVcRuntimeBytes": 173824,
+  "installedProxyBytes": 11962624,
+  "installedProxyMiB": 11.408447265625,
+  "existingIExpressInstallerBytes": 6422528,
+  "conservativeInstallerUpperBoundBytes": 6834688,
+  "conservativeInstallerUpperBoundMiB": 6.51806640625,
+  "budgetBytes": 20971520,
+  "headroomBytes": 14136832,
+  "innoCompilerAvailable": false,
+  "method": "Existing verified IExpress bytes plus uncompressed core growth and the complete collector proxy. This is a conservative decision proxy, not a final Inno Setup artifact."
+}

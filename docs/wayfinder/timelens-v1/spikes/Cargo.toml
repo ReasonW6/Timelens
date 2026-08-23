@@ -1,0 +1,13 @@
+[workspace]
+members = [
+    "workload-driver",
+    "slint-spike",
+    "tauri-spike/src-tauri",
+]
+resolver = "2"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+panic = "abort"
+strip = "symbols"

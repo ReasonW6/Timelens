@@ -1,0 +1,23 @@
+[
+  {
+    "candidate": "slint",
+    "bytes": 907018240,
+    "mebibytes": 865.0,
+    "sha256": "DD7CD3911C08B37CF1BC711C42FE9A5179CFD5AA47AB74DA596E5D519B1EE4D9",
+    "path": "D:\\GitHub_Project\\Timelens\\.scratch\\timelens-v1\\spikes\\benchmark-output\\wpr\\slint-20260822-193820.etl"
+  },
+  {
+    "candidate": "tauri",
+    "bytes": 916455424,
+    "mebibytes": 874.0,
+    "sha256": "9BACB2CBF9BF37E34A5EF6EA5E6497A375B9D484D67311BF107E9796E1869E50",
+    "path": "D:\\GitHub_Project\\Timelens\\.scratch\\timelens-v1\\spikes\\benchmark-output\\wpr\\tauri-20260822-193929.etl"
+  },
+  {
+    "candidate": "winui",
+    "bytes": 856686592,
+    "mebibytes": 817.0,
+    "sha256": "C9C361AB5FE5ED75188BFDC6207DDF3AFA88506F1A3489F59BC93F50EBCEAB30",
+    "path": "D:\\GitHub_Project\\Timelens\\.scratch\\timelens-v1\\spikes\\benchmark-output\\wpr\\winui-20260822-194029.etl"
+  }
+]

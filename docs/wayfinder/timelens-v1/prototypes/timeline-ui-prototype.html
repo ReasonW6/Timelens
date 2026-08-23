@@ -1,0 +1,924 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Timelens 时间轴交互原型</title>
+  <!-- Three variants of the Timelens timeline, switchable via ?variant=, on one throwaway page. -->
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0a0c12;
+      --panel: #11151e;
+      --panel-2: #171c27;
+      --line: #2a3140;
+      --line-soft: #202634;
+      --text: #f2f5fb;
+      --muted: #929caf;
+      --blue: #7397ff;
+      --cyan: #54d4cf;
+      --amber: #f3b75f;
+      --violet: #a889ff;
+      --green: #68d391;
+      --danger: #ff7d8b;
+      --focus: #789dff;
+      --displayed: #4bc8b6;
+      --background: #626b7b;
+      --selection: rgba(242, 183, 95, .24);
+      --selection-line: #ffc96e;
+      --shadow: 0 18px 60px rgba(0, 0, 0, .35);
+      font-family: "Segoe UI Variable", "Segoe UI", system-ui, sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+
+    html, body { margin: 0; min-height: 100%; background: var(--bg); color: var(--text); }
+
+    body {
+      min-width: 1120px;
+      overflow-x: auto;
+      background:
+        radial-gradient(circle at 15% -20%, rgba(87, 111, 202, .20), transparent 35%),
+        radial-gradient(circle at 88% 0%, rgba(36, 148, 146, .12), transparent 28%),
+        var(--bg);
+    }
+
+    button { font: inherit; }
+    button:focus-visible, [tabindex]:focus-visible { outline: 2px solid #9ab4ff; outline-offset: 2px; }
+
+    .app-shell { min-height: 100vh; padding-bottom: 92px; }
+
+    .topbar {
+      height: 64px;
+      display: flex;
+      align-items: center;
+      gap: 24px;
+      padding: 0 28px;
+      border-bottom: 1px solid rgba(255,255,255,.07);
+      background: rgba(10, 12, 18, .88);
+      backdrop-filter: blur(20px);
+      position: sticky;
+      top: 0;
+      z-index: 20;
+    }
+
+    .brand { display: flex; align-items: center; gap: 11px; min-width: 180px; }
+    .brand-mark {
+      width: 30px; height: 30px; border-radius: 10px;
+      background: conic-gradient(from 210deg, #6f93ff, #72e6d8, #6f93ff);
+      box-shadow: inset 0 0 0 5px rgba(10,12,18,.68), 0 0 22px rgba(111,147,255,.28);
+    }
+    .brand-name { font-size: 17px; font-weight: 680; letter-spacing: .2px; }
+    .prototype-tag { color: #aab4c7; font-size: 11px; border: 1px solid #394255; border-radius: 999px; padding: 3px 7px; }
+
+    .nav { display: flex; align-items: center; gap: 4px; }
+    .nav span { padding: 8px 12px; color: #8e98aa; font-size: 13px; border-radius: 8px; }
+    .nav .active { color: #f8faff; background: #1d2330; }
+
+    .top-actions { margin-left: auto; display: flex; align-items: center; gap: 10px; }
+    .date-pill, .ghost-button {
+      height: 34px; border: 1px solid #30394a; color: #cbd3e2; background: #151a24;
+      border-radius: 10px; padding: 0 12px; display: inline-flex; align-items: center; gap: 8px;
+    }
+    .ghost-button { cursor: pointer; }
+    .ghost-button:hover { background: #1d2431; border-color: #465069; }
+
+    .prototype-intro {
+      display: flex; align-items: flex-start; justify-content: space-between; gap: 24px;
+      padding: 22px 28px 18px;
+    }
+    .prototype-intro h1 { font-size: 22px; line-height: 1.2; margin: 0 0 7px; letter-spacing: -.3px; }
+    .prototype-intro p { margin: 0; color: var(--muted); font-size: 13px; }
+    .instruction {
+      padding: 9px 12px; border: 1px solid #31394a; border-radius: 10px;
+      background: rgba(19,24,34,.72); color: #b7c0d2; font-size: 12px; white-space: nowrap;
+    }
+    .mouse-dot { display: inline-block; width: 7px; height: 11px; border: 1px solid currentColor; border-radius: 5px; margin: 0 4px -2px 2px; }
+
+    .variant-root { padding: 0 28px 30px; }
+
+    .panel {
+      background: linear-gradient(180deg, rgba(23,28,39,.96), rgba(15,19,27,.96));
+      border: 1px solid rgba(255,255,255,.08);
+      box-shadow: var(--shadow);
+      border-radius: 16px;
+    }
+
+    .history-overview {
+      position: relative; height: 56px; overflow: hidden; cursor: ew-resize;
+      border: 1px solid #2d3545; border-radius: 12px; background: #0c1018;
+      user-select: none;
+    }
+    .history-overview.vertical { height: 100%; min-height: 610px; cursor: ns-resize; border-radius: 14px; }
+    .overview-hours { position: absolute; inset: 0; display: flex; }
+    .vertical .overview-hours { flex-direction: column; }
+    .overview-hour { flex: 1; border-right: 1px solid rgba(255,255,255,.06); position: relative; }
+    .vertical .overview-hour { border-right: 0; border-bottom: 1px solid rgba(255,255,255,.06); }
+    .overview-hour span { position: absolute; left: 6px; top: 5px; color: #687286; font-size: 9px; }
+    .vertical .overview-hour span { top: 4px; }
+    .overview-density { position: absolute; bottom: 6px; left: 0; right: 0; height: 17px; display: flex; gap: 2px; padding: 0 5px; align-items: flex-end; }
+    .vertical .overview-density { inset: 0 5px 0 auto; width: 16px; height: auto; padding: 5px 0; flex-direction: column; align-items: flex-end; }
+    .overview-density i { flex: 1; display: block; min-height: 3px; border-radius: 2px; background: linear-gradient(#5d83ed, #3155b4); opacity: .75; }
+    .vertical .overview-density i { width: 100%; min-height: 0; min-width: 3px; }
+    .view-window {
+      position: absolute; top: 3px; bottom: 3px; border: 1px solid #8ca9ff; border-radius: 9px;
+      background: rgba(111,147,255,.10); box-shadow: inset 0 0 0 1px rgba(255,255,255,.06);
+      pointer-events: none;
+    }
+    .vertical .view-window { left: 3px; right: 3px; top: auto; bottom: auto; }
+    .view-window::before, .view-window::after { content: ""; position: absolute; top: 50%; width: 2px; height: 15px; transform: translateY(-50%); background: #9fb6ff; border-radius: 3px; }
+    .view-window::before { left: 4px; } .view-window::after { right: 4px; }
+    .vertical .view-window::before, .vertical .view-window::after { top: auto; left: 50%; width: 15px; height: 2px; transform: translateX(-50%); }
+    .vertical .view-window::before { top: 4px; } .vertical .view-window::after { bottom: 4px; right: auto; }
+
+    .app-icon {
+      width: 34px; height: 34px; border-radius: 9px; display: grid; place-items: center;
+      font-size: 14px; font-weight: 760; color: white; flex: 0 0 auto;
+      box-shadow: inset 0 0 0 1px rgba(255,255,255,.17);
+    }
+    .icon-code { background: linear-gradient(145deg,#2877d4,#164488); }
+    .icon-browser { background: linear-gradient(145deg,#39b68d,#176f76); }
+    .icon-files { background: linear-gradient(145deg,#edb847,#a96b20); }
+    .icon-music { background: linear-gradient(145deg,#b971e6,#7137a6); }
+    .icon-design { background: linear-gradient(145deg,#ff7a85,#a94bba); }
+
+    .status-key { display: flex; align-items: center; gap: 13px; color: #8f99ab; font-size: 11px; }
+    .status-key span { display: inline-flex; align-items: center; gap: 6px; }
+    .status-key i { width: 14px; height: 5px; border-radius: 4px; }
+    .status-key .focus { background: var(--focus); }
+    .status-key .displayed { background: var(--displayed); }
+    .status-key .background { background: var(--background); }
+
+    .stack-card {
+      position: relative; width: 100%; border: 1px solid #2f3748; border-radius: 12px;
+      background: #171c27; color: var(--text); padding: 10px 12px; text-align: left; cursor: pointer;
+      display: flex; gap: 10px; align-items: center; z-index: 2;
+    }
+    .stack-card.multi::before, .stack-card.multi::after {
+      content: ""; position: absolute; left: 7px; right: 7px; height: 100%; border-radius: 12px;
+      border: 1px solid #293142; background: #111620; z-index: -1;
+    }
+    .stack-card.multi::before { top: 5px; } .stack-card.multi::after { top: 9px; left: 12px; right: 12px; z-index: -2; opacity: .8; }
+    .stack-card:hover { border-color: #52617c; background: #1b2230; }
+    .stack-card .meta { min-width: 0; flex: 1; }
+    .stack-card strong { display: block; font-size: 13px; font-weight: 630; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .stack-card small { display: block; margin-top: 3px; color: #8c96a9; font-size: 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .window-count { font-size: 10px; color: #b7c4e8; background: #293552; border-radius: 999px; padding: 4px 7px; white-space: nowrap; }
+    .chevron { color: #8c98b1; transform: rotate(0); transition: transform .15s; }
+    .expanded .chevron { transform: rotate(90deg); }
+
+    .window-child { display: flex; align-items: center; gap: 9px; min-height: 45px; padding: 7px 9px; color: #adb6c7; font-size: 11px; border-left: 1px dashed #394254; margin-left: 18px; }
+    .window-num { width: 24px; height: 24px; border-radius: 7px; background: #242c3b; display: grid; place-items: center; color: #d4daea; }
+    .window-state { margin-left: auto; border-radius: 999px; padding: 3px 7px; font-size: 9px; background: #273548; color: #9fbaff; }
+
+    .timeline-header { position: relative; height: 40px; border-bottom: 1px solid var(--line-soft); }
+    .tick { position: absolute; top: 0; bottom: 0; border-left: 1px solid #28303f; color: #788397; font-size: 10px; padding: 8px 0 0 6px; }
+    .now-line { position: absolute; top: 0; bottom: 0; width: 1px; background: #ff7e89; opacity: .8; z-index: 4; }
+    .now-line::before { content: "现在"; position: absolute; top: -17px; left: -14px; color: #ff96a0; font-size: 9px; }
+    .variant-a .timeline-header .tick:nth-child(7), .variant-c .film-ruler .tick:nth-child(7) { transform: translateX(-100%); padding-left: 0; }
+
+    .timeline-row { position: relative; min-height: 62px; border-bottom: 1px solid rgba(255,255,255,.055); background-image: linear-gradient(90deg, transparent 49.7%, rgba(255,255,255,.026) 50%, transparent 50.3%); background-size: 16.666% 100%; }
+    .timeline-row.window-row { min-height: 45px; background-color: rgba(8,11,17,.35); }
+    .segment { position: absolute; height: 10px; border-radius: 5px; min-width: 2px; }
+    .segment.focus { background: var(--focus); box-shadow: 0 0 12px rgba(115,151,255,.25); }
+    .segment.displayed { background: var(--displayed); }
+    .segment.background { background: var(--background); }
+    .segment-label { position: absolute; top: -17px; left: 2px; color: #c7d0e1; font-size: 9px; white-space: nowrap; opacity: .78; pointer-events: none; }
+    .lane-focus { top: 13px; } .lane-displayed { top: 29px; } .lane-background { top: 45px; }
+    .window-row .segment { top: 17px; }
+
+    .select-surface { position: relative; user-select: none; cursor: crosshair; }
+    .selection-overlay { display: none; position: absolute; top: 0; bottom: 0; background: var(--selection); border-left: 1px solid var(--selection-line); border-right: 1px solid var(--selection-line); z-index: 8; pointer-events: none; }
+    .selection-overlay.vertical-selection { left: 0; right: 0; top: auto; bottom: auto; border-left: 0; border-right: 0; border-top: 1px solid var(--selection-line); border-bottom: 1px solid var(--selection-line); }
+    .selection-overlay.active { display: block; }
+    .selection-label { position: absolute; top: 7px; left: 7px; background: #2f281d; color: #ffd790; border: 1px solid #755b32; border-radius: 6px; font-size: 10px; padding: 4px 6px; white-space: nowrap; }
+
+    .identity-card { border: 1px solid #3e3b55; background: linear-gradient(145deg, rgba(54,43,72,.68), rgba(22,25,35,.88)); border-radius: 14px; padding: 14px; }
+    .identity-card.merged { border-color: #315446; background: rgba(27,56,46,.52); }
+    .identity-card h3 { margin: 0 0 7px; font-size: 13px; }
+    .identity-card p { color: #9ba5b8; margin: 0 0 10px; font-size: 10px; line-height: 1.55; overflow-wrap: anywhere; }
+    .path-pair { display: grid; gap: 5px; margin: 8px 0 11px; }
+    .path-pair code { display: block; background: rgba(8,10,15,.45); color: #aeb8ca; border-radius: 6px; padding: 5px 7px; font-size: 9px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .primary-button { border: 0; border-radius: 8px; background: #6f91ee; color: #fff; padding: 7px 10px; font-size: 11px; cursor: pointer; }
+    .primary-button:hover { background: #82a0f4; }
+    .primary-button:disabled { background: #355443; color: #9cceb6; cursor: default; }
+
+    /* Variant A: horizontal application swimlanes */
+    .variant-a .overview-wrap { display: grid; grid-template-columns: 230px 1fr 235px; gap: 14px; margin-bottom: 12px; align-items: stretch; }
+    .variant-a .overview-caption { padding: 10px 12px; display: flex; flex-direction: column; justify-content: center; }
+    .variant-a .overview-caption strong { font-size: 12px; }
+    .variant-a .overview-caption span { color: #808b9f; font-size: 10px; margin-top: 4px; }
+    .variant-a .lane-layout { display: grid; grid-template-columns: 230px minmax(600px, 1fr) 235px; gap: 14px; }
+    .app-column, .timeline-column, .side-column { min-width: 0; }
+    .column-title { height: 40px; display: flex; align-items: center; color: #7f8a9e; font-size: 10px; text-transform: uppercase; letter-spacing: .9px; padding: 0 10px; }
+    .app-cell { min-height: 62px; padding: 7px 0 12px; border-bottom: 1px solid rgba(255,255,255,.04); }
+    .window-cell { min-height: 45px; }
+    .side-column { display: grid; align-content: start; gap: 12px; }
+    .side-stat { padding: 14px; }
+    .side-stat strong { font-size: 22px; display: block; }
+    .side-stat span { color: #838ea2; font-size: 10px; }
+
+    /* Refined A: one top selector, one selected-app sidebar, one detail surface */
+    .variant-a-refined { max-width: 1540px; margin: 0 auto; }
+    .a-top-timeline { padding: 16px 18px 18px; margin-bottom: 14px; }
+    .a-timeline-heading { display: flex; align-items: center; justify-content: space-between; gap: 18px; margin-bottom: 12px; }
+    .a-timeline-heading h2 { margin: 0; font-size: 13px; font-weight: 650; }
+    .a-timeline-heading p { margin: 3px 0 0; color: #7f8a9d; font-size: 10px; }
+    .a-day-ruler { position: relative; height: 28px; margin-left: 72px; }
+    .a-day-ruler span { position: absolute; top: 3px; color: #738096; font-size: 9px; transform: translateX(-50%); }
+    .a-day-ruler span:first-child { transform: none; }
+    .a-day-ruler span:last-child { transform: translateX(-100%); }
+    .a-activity-line { display: grid; grid-template-columns: 60px 1fr; gap: 12px; align-items: center; }
+    .a-activity-label { color: #a6b0c2; font-size: 10px; font-weight: 620; }
+    .a-activity-track {
+      position: relative; height: 56px; overflow: hidden; border: 1px solid #30394b; border-radius: 11px;
+      background: repeating-linear-gradient(90deg, #0c1119 0 calc(11.111% - 1px), #242c39 calc(11.111% - 1px) 11.111%);
+      cursor: crosshair;
+    }
+    .a-activity-block { position: absolute; top: 13px; height: 30px; min-width: 5px; border-radius: 7px; display: flex; align-items: center; justify-content: center; color: white; font-size: 9px; font-weight: 670; box-shadow: inset 0 0 0 1px rgba(255,255,255,.15); overflow: hidden; }
+    .a-activity-block.code { background: linear-gradient(90deg,#2757ac,#497ee2); }
+    .a-activity-block.browser { background: linear-gradient(90deg,#197165,#35a88e); }
+    .a-activity-block.files { background: linear-gradient(90deg,#95631d,#d69c37); }
+    .a-activity-block.music { background: linear-gradient(90deg,#60318d,#9d5dca); }
+    .a-activity-block em { font-style: normal; width: 20px; height: 20px; border-radius: 6px; display: grid; place-items: center; background: rgba(0,0,0,.24); }
+    .a-selection-layout { display: grid; grid-template-columns: 244px minmax(0, 1fr); gap: 14px; align-items: start; }
+    .a-selected-apps { overflow: hidden; }
+    .a-sidebar-head { padding: 15px 15px 12px; border-bottom: 1px solid #293141; }
+    .a-sidebar-head h2 { margin: 0; font-size: 13px; }
+    .a-sidebar-head p { margin: 4px 0 0; color: #8590a3; font-size: 10px; }
+    .a-app-list { padding: 6px; }
+    .a-app-item { width: 100%; border: 0; border-radius: 10px; padding: 10px; background: transparent; color: var(--text); display: grid; grid-template-columns: 34px minmax(0,1fr) auto; gap: 9px; align-items: center; text-align: left; cursor: pointer; }
+    .a-app-item:hover { background: #1b2230; }
+    .a-app-item.selected { background: linear-gradient(90deg,rgba(80,112,190,.28),rgba(31,40,59,.7)); box-shadow: inset 2px 0 #7e9fff; }
+    .a-app-item .app-icon { width: 32px; height: 32px; }
+    .a-app-copy { min-width: 0; }
+    .a-app-copy strong { display: block; font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .a-app-copy small { display: block; color: #7e899d; font-size: 9px; margin-top: 3px; }
+    .a-app-share { color: #aeb9cc; font-size: 10px; text-align: right; }
+    .a-app-share b { display: block; color: #dbe2ee; font-size: 11px; }
+    .a-app-progress { grid-column: 2 / 4; height: 3px; border-radius: 3px; background: #2a3140; overflow: hidden; }
+    .a-app-progress i { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg,#6288ec,#76a0ff); }
+    .a-sidebar-total { display: flex; justify-content: space-between; align-items: center; margin: 2px 12px 12px; padding-top: 11px; border-top: 1px solid #28303f; color: #8e99ab; font-size: 10px; }
+    .a-sidebar-total b { color: #e1e6ef; font-size: 12px; }
+    .a-detail { overflow: hidden; min-height: 560px; }
+    .a-detail-head { display: flex; align-items: center; gap: 13px; padding: 17px 18px 15px; border-bottom: 1px solid #293141; }
+    .a-detail-head .app-icon { width: 38px; height: 38px; }
+    .a-detail-title { min-width: 0; flex: 1; }
+    .a-detail-title h2 { margin: 0; font-size: 15px; }
+    .a-detail-title p { margin: 4px 0 0; color: #7f8a9d; font-size: 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .a-report-link { border: 1px solid #39445a; background: #1b2230; color: #cbd5e8; border-radius: 9px; padding: 7px 10px; font-size: 10px; cursor: pointer; }
+    .a-report-link:hover { border-color: #61749a; }
+    .a-metric-line { display: flex; align-items: center; gap: 0; margin: 14px 18px 0; padding: 11px 0; border-top: 1px solid #252d3b; border-bottom: 1px solid #252d3b; }
+    .a-metric { flex: 1; min-width: 0; padding: 0 14px; border-right: 1px solid #2a3241; }
+    .a-metric:first-child { padding-left: 0; }
+    .a-metric:last-child { border: 0; }
+    .a-metric span { display: block; color: #7d899d; font-size: 9px; }
+    .a-metric b { display: block; margin-top: 3px; font-size: 15px; font-weight: 650; }
+    .a-detail-section { padding: 16px 18px 4px; }
+    .a-section-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 11px; }
+    .a-section-head h3 { margin: 0; font-size: 11px; }
+    .a-section-head span { color: #7b879a; font-size: 9px; }
+    .a-detail-ruler { margin-left: 112px; height: 24px; position: relative; border-bottom: 1px solid #2c3443; }
+    .a-detail-ruler span { position: absolute; top: 1px; color: #718096; font-size: 8px; transform: translateX(-50%); }
+    .a-detail-ruler span:first-child { transform: none; }
+    .a-detail-ruler span:last-child { transform: translateX(-100%); }
+    .a-detail-row { display: grid; grid-template-columns: 100px 1fr; gap: 12px; min-height: 45px; align-items: center; border-bottom: 1px solid rgba(255,255,255,.045); }
+    .a-detail-row-label { min-width: 0; }
+    .a-detail-row-label strong { display: block; font-size: 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .a-detail-row-label small { display: block; margin-top: 3px; color: #758195; font-size: 8px; }
+    .a-row-track { height: 32px; position: relative; background: repeating-linear-gradient(90deg,transparent 0 24.7%,rgba(255,255,255,.04) 25%); }
+    .a-row-track .segment { height: 7px; }
+    .a-row-track .lane-focus { top: 2px; }
+    .a-row-track .lane-displayed { top: 12px; }
+    .a-row-track .lane-background { top: 22px; }
+    .a-window-toggle { width: 100%; border: 0; background: transparent; color: #aebbe0; padding: 10px; font-size: 9px; cursor: pointer; }
+    .a-window-toggle:hover { color: white; }
+    .a-identity-slim { margin: 12px 18px 17px; display: flex; align-items: center; gap: 10px; padding: 10px 11px; border: 1px solid #37364c; border-radius: 10px; background: rgba(43,37,58,.5); }
+    .a-identity-slim.merged { border-color: #315446; background: rgba(27,56,46,.42); }
+    .a-identity-slim .identity-copy { min-width: 0; flex: 1; }
+    .a-identity-slim strong { display: block; font-size: 10px; }
+    .a-identity-slim span { display: block; color: #858fa2; font-size: 8px; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+    /* Variant B: vertical reality stream */
+    .variant-b .b-layout { display: grid; grid-template-columns: 86px minmax(520px, 1fr) 330px; gap: 16px; min-height: 650px; }
+    .variant-b .stream-shell { position: relative; padding: 18px 20px 22px 78px; overflow: hidden; }
+    .vertical-stream { position: relative; min-height: 610px; }
+    .vertical-stream::before { content: ""; position: absolute; left: 31px; top: 0; bottom: 0; width: 1px; background: #3b4558; }
+    .stream-tick { position: absolute; left: -65px; width: 76px; color: #7f8a9d; font-size: 10px; transform: translateY(-6px); }
+    .stream-tick::after { content: ""; position: absolute; top: 6px; left: 70px; width: 14px; border-top: 1px solid #465168; }
+    .reality-block { position: absolute; left: 62px; right: 14px; min-height: 56px; border-radius: 12px; border: 1px solid #30394a; background: rgba(22,27,38,.90); padding: 10px 12px; overflow: hidden; }
+    .reality-block:hover { border-color: #4a5870; }
+    .block-time { color: #8691a4; font-size: 9px; margin-bottom: 7px; }
+    .app-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+    .app-chip { border: 0; border-radius: 999px; padding: 5px 8px; color: #e6ebf4; background: #263042; cursor: pointer; font-size: 10px; }
+    .app-chip.focused { background: #314d92; box-shadow: inset 0 0 0 1px #5479d7; }
+    .app-chip.displayed { background: #214f4d; box-shadow: inset 0 0 0 1px #3d8d85; }
+    .app-chip.backgrounded { background: #303541; color: #a9b1bf; }
+    .b-inspector { display: grid; align-content: start; gap: 10px; }
+    .inspector-title { color: #8d98aa; font-size: 11px; padding: 0 4px 4px; }
+    .compact-app { padding-bottom: 9px; }
+    .compact-app .window-child { margin-left: 15px; }
+    .variant-b .selection-overlay .selection-label { top: 6px; left: 44px; }
+
+    /* Variant C: filmstrip + scene deck */
+    .variant-c .film-shell { padding: 18px; }
+    .film-top { display: grid; grid-template-columns: 1fr 280px; gap: 15px; margin-bottom: 16px; }
+    .filmstrip { height: 230px; border: 1px solid #30394b; border-radius: 14px; background: #0c1017; overflow: hidden; position: relative; }
+    .film-ruler { height: 36px; position: relative; border-bottom: 1px solid #262e3e; }
+    .scene-row { display: grid; grid-template-columns: repeat(6, 1fr); gap: 8px; padding: 13px; height: 192px; }
+    .scene { position: relative; border: 1px solid #293243; border-radius: 11px; padding: 10px 8px; background: linear-gradient(155deg,#171d29,#11151e); overflow: hidden; }
+    .scene::before, .scene::after { content:""; position:absolute; left:5px; right:5px; height:4px; background: repeating-linear-gradient(90deg,#445069 0 7px,transparent 7px 12px); opacity:.35; }
+    .scene::before { top: 4px; } .scene::after { bottom: 4px; }
+    .scene-time { font-size: 9px; color: #7f8ba0; margin: 5px 0 10px; }
+    .scene-app { display: flex; align-items: center; gap: 5px; margin: 5px 0; font-size: 9px; color: #c4ccda; }
+    .scene-app i { width: 6px; height: 6px; border-radius: 50%; }
+    .scene-app .f { background: var(--focus); } .scene-app .d { background: var(--displayed); } .scene-app .b { background: var(--background); }
+    .film-selection { top: 36px; bottom: 0; }
+    .film-insight { padding: 15px; }
+    .film-insight h3 { font-size: 12px; margin: 0 0 12px; }
+    .metric-ring { width: 105px; height: 105px; margin: 4px auto 12px; border-radius: 50%; display: grid; place-items: center; background: conic-gradient(var(--blue) 0 46%, var(--cyan) 46% 70%, #3c4350 70%); position: relative; }
+    .metric-ring::before { content:""; position:absolute; inset:12px; background:#151a24; border-radius:50%; }
+    .metric-ring span { position: relative; text-align:center; font-size:11px; color:#aeb8ca; }
+    .metric-ring b { display:block; font-size:20px; color:#fff; }
+    .deck-title { display:flex; justify-content:space-between; align-items:center; margin: 0 2px 11px; }
+    .deck-title h2 { font-size:14px; margin:0; }
+    .app-deck { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+    .deck-card { padding: 13px; min-height: 175px; }
+    .deck-head { display:flex; gap:9px; align-items:center; margin-bottom:12px; }
+    .deck-head .meta { min-width:0; }
+    .deck-head strong { font-size:12px; display:block; }
+    .deck-head small { color:#7e899d; font-size:9px; }
+    .mini-lanes { height: 45px; position:relative; background: repeating-linear-gradient(90deg, transparent 0 24%, rgba(255,255,255,.05) 25%); border-top:1px solid #28303f; border-bottom:1px solid #28303f; margin-bottom:10px; }
+    .mini-lanes .segment { height:7px; }
+    .mini-lanes .lane-focus { top:6px; } .mini-lanes .lane-displayed { top:18px; } .mini-lanes .lane-background { top:30px; }
+    .deck-window-list { border-top: 1px solid #242c3a; padding-top: 7px; }
+    .deck-window { display:flex; justify-content:space-between; color:#a9b3c4; font-size:9px; padding:4px 1px; }
+    .deck-toggle { width:100%; border:0; background:transparent; color:#aebbe0; font-size:10px; padding:7px; cursor:pointer; }
+    .deck-toggle:hover { color:#fff; }
+    .variant-c .identity-card { margin-top: 12px; display:grid; grid-template-columns: 1.1fr 2fr auto; gap:14px; align-items:center; }
+    .variant-c .identity-card h3, .variant-c .identity-card p, .variant-c .identity-card .path-pair { margin:0; }
+
+    .report-drawer {
+      position: fixed; z-index: 60; top: 0; right: 0; bottom: 0; width: 390px;
+      background: #111620; border-left: 1px solid #394255; box-shadow: -24px 0 70px rgba(0,0,0,.45);
+      padding: 22px; overflow-y: auto; animation: slide-in .18s ease-out;
+    }
+    @keyframes slide-in { from { transform: translateX(24px); opacity:0; } to { transform:none; opacity:1; } }
+    .report-head { display:flex; justify-content:space-between; gap:14px; align-items:flex-start; border-bottom:1px solid #2b3342; padding-bottom:16px; }
+    .report-head h2 { font-size:18px; margin:0 0 5px; }
+    .report-head p { margin:0; color:#929caf; font-size:11px; }
+    .close-button { width:30px; height:30px; border:1px solid #354055; background:#1b2230; color:#ccd4e3; border-radius:8px; cursor:pointer; }
+    .report-range { margin:17px 0; padding:13px; border:1px solid #3a3f48; background:#17191e; border-radius:12px; }
+    .report-range strong { display:block; font-size:22px; color:#ffd485; }
+    .report-range span { color:#919baa; font-size:10px; }
+    .report-section { margin-top:20px; }
+    .report-section h3 { margin:0 0 9px; font-size:11px; color:#9ca8bc; text-transform:uppercase; letter-spacing:.8px; }
+    .report-app { border:1px solid #2c3545; border-radius:11px; padding:10px; margin-bottom:8px; }
+    .report-app-head { display:flex; justify-content:space-between; font-size:11px; margin-bottom:8px; }
+    .report-bars { display:grid; grid-template-columns:68px 1fr 32px; gap:6px; align-items:center; font-size:9px; color:#8f9aae; margin:4px 0; }
+    .bar-track { height:5px; border-radius:3px; background:#262d3a; overflow:hidden; }
+    .bar-fill { height:100%; border-radius:3px; }
+    .report-note { color:#858fa1; font-size:10px; line-height:1.55; padding:11px; border-radius:10px; background:#151a23; border:1px solid #28303e; }
+
+    .state-panel {
+      position: fixed; right: 16px; bottom: 16px; z-index: 80; width: 265px;
+      background: rgba(16,20,28,.95); border: 1px solid #3c465b; border-radius: 13px;
+      box-shadow: 0 12px 38px rgba(0,0,0,.36); padding: 10px 12px; pointer-events:none;
+    }
+    .state-panel strong { display:block; color:#d7deeb; font-size:10px; margin-bottom:5px; text-transform:uppercase; letter-spacing:.8px; }
+    .state-grid { display:grid; grid-template-columns:54px 1fr; gap:3px 7px; font-size:9px; line-height:1.35; }
+    .state-grid span:nth-child(odd) { color:#6f7b90; }
+    .state-grid span:nth-child(even) { color:#aeb8ca; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+
+    .switcher {
+      position: fixed; z-index: 90; left: 50%; bottom: 18px; transform: translateX(-50%);
+      display: flex; align-items: center; gap: 4px; padding: 5px;
+      background: #f2f5fa; color: #10141c; border-radius: 999px; box-shadow: 0 14px 46px rgba(0,0,0,.45);
+    }
+    .switcher button { border:0; width:34px; height:32px; border-radius:999px; background:transparent; color:#171b23; cursor:pointer; font-size:18px; }
+    .switcher button:hover { background:#dce3ee; }
+    .variant-label { min-width: 176px; text-align:center; font-size:11px; font-weight:650; padding:0 10px; }
+    .prototype-only { font-size:9px; color:#6b7380; font-weight:500; display:block; margin-top:1px; }
+
+    .toast { position:fixed; z-index:100; left:50%; top:78px; transform:translateX(-50%); background:#e6f5ed; color:#183d2b; border-radius:10px; padding:9px 13px; font-size:11px; box-shadow:0 12px 40px rgba(0,0,0,.3); animation:toast .2s ease-out; }
+    @keyframes toast { from { transform:translate(-50%,-8px); opacity:0; } }
+
+    @media (max-width: 980px) {
+      body { min-width: 700px; }
+      .topbar { padding: 0 18px; gap: 14px; }
+      .brand { min-width: 150px; }
+      .prototype-tag, .nav span:not(.active) { display: none; }
+      .prototype-intro { padding: 20px 18px 16px; }
+      .prototype-intro .instruction { max-width: 315px; white-space: normal; text-align: right; }
+      .variant-root { padding-left: 18px; padding-right: 18px; }
+      .variant-a .overview-wrap { grid-template-columns: 175px 1fr; }
+      .variant-a .overview-wrap > :last-child { display: none; }
+      .variant-a .lane-layout { grid-template-columns: 175px minmax(460px, 1fr); }
+      .variant-a .side-column { grid-column: 1 / -1; grid-template-columns: repeat(2, 1fr) 2fr; }
+      .variant-a .side-column .column-title { display: none; }
+      .a-selection-layout { grid-template-columns: 205px minmax(0, 1fr); }
+      .a-app-item { grid-template-columns: 30px minmax(0,1fr) auto; padding-left: 8px; padding-right: 8px; }
+      .a-app-item .app-icon { width: 29px; height: 29px; }
+      .a-detail-head, .a-detail-section { padding-left: 14px; padding-right: 14px; }
+      .a-metric-line { margin-left: 14px; margin-right: 14px; }
+      .a-identity-slim { margin-left: 14px; margin-right: 14px; }
+      .stack-card { padding-left: 9px; padding-right: 9px; }
+      .window-count { display: none; }
+      .variant-b .b-layout { grid-template-columns: 70px minmax(500px, 1fr); }
+      .variant-b .b-inspector { grid-column: 1 / -1; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .variant-b .b-inspector .inspector-title { grid-column: 1 / -1; }
+      .variant-c .film-top { grid-template-columns: 1fr; }
+      .variant-c .film-insight { display: none; }
+      .variant-c .app-deck { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .variant-c .identity-card { grid-template-columns: 1fr auto; }
+      .variant-c .identity-card .path-pair { display: none; }
+      .report-drawer { width: min(390px, 92vw); }
+      .state-panel { width: 225px; right: 10px; bottom: 72px; }
+    }
+  </style>
+</head>
+<body>
+  <div id="app"></div>
+  <script>
+    const TOTAL_START = 8 * 60;
+    const TOTAL_END = 17 * 60;
+    const VIEW_SPAN = 180;
+
+    const apps = [
+      {
+        id: 'code', name: 'Visual Studio Code', short: 'Code', icon: 'C', iconClass: 'icon-code', path: 'C:\\Users\\WangXuan\\AppData\\Local\\Programs\\Microsoft VS Code\\Code.exe',
+        windows: ['窗口 1', '窗口 2', '窗口 3'],
+        segments: [
+          { start: 525, end: 540, state: 'background' }, { start: 672, end: 690, state: 'background' }, { start: 540, end: 672, state: 'displayed' },
+          { start: 548, end: 586, state: 'focus' }, { start: 622, end: 653, state: 'focus' }
+        ]
+      },
+      {
+        id: 'browser', name: 'Zen Browser', short: 'Zen', icon: 'Z', iconClass: 'icon-browser', path: 'D:\\Apps\\Zen Browser\\zen.exe',
+        windows: ['窗口 1', '窗口 2'],
+        segments: [
+          { start: 550, end: 563, state: 'background' }, { start: 650, end: 654, state: 'background' }, { start: 675, end: 682, state: 'background' },
+          { start: 563, end: 650, state: 'displayed' }, { start: 654, end: 675, state: 'displayed' },
+          { start: 587, end: 621, state: 'focus' }, { start: 654, end: 675, state: 'focus' }
+        ]
+      },
+      {
+        id: 'files', name: '文件资源管理器', short: '文件', icon: 'F', iconClass: 'icon-files', path: 'C:\\Windows\\explorer.exe',
+        windows: ['窗口 1', '窗口 2'],
+        segments: [
+          { start: 505, end: 516, state: 'background' }, { start: 558, end: 604, state: 'background' }, { start: 618, end: 620, state: 'background' }, { start: 516, end: 558, state: 'displayed' },
+          { start: 516, end: 531, state: 'focus' }, { start: 604, end: 618, state: 'displayed' }
+        ]
+      },
+      {
+        id: 'music', name: 'Spotify', short: '音乐', icon: 'S', iconClass: 'icon-music', path: 'C:\\Users\\WangXuan\\AppData\\Roaming\\Spotify\\Spotify.exe',
+        windows: ['窗口 1'],
+        segments: [
+          { start: 495, end: 497, state: 'background' }, { start: 514, end: 710, state: 'background' }, { start: 497, end: 514, state: 'displayed' },
+          { start: 497, end: 505, state: 'focus' }
+        ]
+      }
+    ];
+
+    const variantNames = {
+      A: '应用泳道',
+      B: '现实时间流',
+      C: '区段胶片'
+    };
+
+    const params = new URLSearchParams(location.search);
+    let initialVariant = (params.get('variant') || 'A').toUpperCase();
+    if (!variantNames[initialVariant]) initialVariant = 'A';
+
+    const state = {
+      variant: initialVariant,
+      viewStart: 510,
+      expanded: new Set(['code']),
+      selectedApp: 'code',
+      merged: false,
+      selection: {start: 540, end: 630},
+      reportOpen: false,
+      toast: ''
+    };
+
+    let pointerDrag = null;
+    let toastTimer = null;
+
+    function clamp(value, min, max) { return Math.max(min, Math.min(max, value)); }
+    function formatTime(minutes) {
+      const normalized = ((Math.round(minutes) % 1440) + 1440) % 1440;
+      return `${String(Math.floor(normalized / 60)).padStart(2, '0')}:${String(normalized % 60).padStart(2, '0')}`;
+    }
+    function durationText(minutes) {
+      const rounded = Math.max(0, Math.round(minutes));
+      const h = Math.floor(rounded / 60); const m = rounded % 60;
+      return h ? `${h} 小时 ${m} 分` : `${m} 分钟`;
+    }
+    function pct(minute) { return ((minute - state.viewStart) / VIEW_SPAN) * 100; }
+    function overlap(a0, a1, b0, b1) { return Math.max(0, Math.min(a1, b1) - Math.max(a0, b0)); }
+    function unionDuration(segments, range) {
+      const intervals = segments
+        .map(seg => [Math.max(seg.start, range.start), Math.min(seg.end, range.end)])
+        .filter(([start,end]) => end > start)
+        .sort((a,b) => a[0] - b[0]);
+      if (!intervals.length) return 0;
+      let total = 0; let [start,end] = intervals[0];
+      intervals.slice(1).forEach(([nextStart,nextEnd]) => {
+        if (nextStart <= end) end = Math.max(end,nextEnd);
+        else { total += end-start; start=nextStart; end=nextEnd; }
+      });
+      return total + end-start;
+    }
+    function isVisibleSegment(seg) { return seg.end > state.viewStart && seg.start < state.viewStart + VIEW_SPAN; }
+    function segStyle(seg) {
+      const start = clamp(seg.start, state.viewStart, state.viewStart + VIEW_SPAN);
+      const end = clamp(seg.end, state.viewStart, state.viewStart + VIEW_SPAN);
+      return `left:${pct(start)}%;width:${Math.max(.3, pct(end)-pct(start))}%`;
+    }
+    function appAtMinute(app, minute) {
+      if (app.segments.some(s => s.state === 'focus' && minute >= s.start && minute < s.end)) return 'focus';
+      if (app.segments.some(s => s.state === 'displayed' && minute >= s.start && minute < s.end)) return 'displayed';
+      if (app.segments.some(s => s.state === 'background' && minute >= s.start && minute < s.end)) return 'background';
+      return null;
+    }
+    function currentViewLabel() { return `${formatTime(state.viewStart)}–${formatTime(state.viewStart + VIEW_SPAN)}`; }
+    function selectionLabel() { return state.selection ? `${formatTime(state.selection.start)}–${formatTime(state.selection.end)}` : '未选择'; }
+
+    function headerHtml() {
+      if (state.variant === 'A') return `
+        <header class="topbar">
+          <div class="brand"><span class="brand-mark"></span><span class="brand-name">Timelens</span><span class="prototype-tag">交互原型</span></div>
+          <nav class="nav"><span class="active">时间轴</span></nav>
+          <div class="top-actions"><span class="date-pill">‹　2026年8月22日　›</span></div>
+        </header>`;
+      return `
+        <header class="topbar">
+          <div class="brand"><span class="brand-mark"></span><span class="brand-name">Timelens</span><span class="prototype-tag">交互原型</span></div>
+          <nav class="nav"><span class="active">时间轴</span><span>输入统计</span><span>快照</span><span>总结</span></nav>
+          <div class="top-actions">
+            <span class="date-pill">‹　2026年8月22日　›</span>
+            <button class="ghost-button" data-open-sample-report>生成报告</button>
+          </div>
+        </header>
+        <section class="prototype-intro">
+          <div><h1>${variantNames[state.variant]}</h1><p>同一现实时间可同时显示多个应用状态；每个应用自身按区间并集计算。</p></div>
+          <div class="instruction">左键拖动总览回溯　·　<span class="mouse-dot"></span>中键拖拽时间轴截取　·　点击堆叠卡片展开</div>
+        </section>`;
+    }
+
+    function statusKeyHtml() {
+      return `<div class="status-key"><span><i class="focus"></i>聚焦中</span><span><i class="displayed"></i>显示中</span><span><i class="background"></i>后台</span></div>`;
+    }
+
+    function overviewHtml(vertical = false) {
+      const total = TOTAL_END - TOTAL_START;
+      const startPct = ((state.viewStart - TOTAL_START) / total) * 100;
+      const spanPct = (VIEW_SPAN / total) * 100;
+      const densities = [4,9,12,8,16,13,7,11,15,12,6,9,14,17,10,8,13,11,7,5,9,12,16,10,6,8,11,15,14,7,5,9];
+      const hours = Array.from({length: 9}, (_, i) => `<div class="overview-hour"><span>${String(8+i).padStart(2,'0')}:00</span></div>`).join('');
+      const density = densities.map(v => `<i style="${vertical ? `width:${v}px` : `height:${v}px`}"></i>`).join('');
+      const windowStyle = vertical
+        ? `top:${startPct}%;height:${spanPct}%`
+        : `left:${startPct}%;width:${spanPct}%`;
+      return `<div class="history-overview ${vertical ? 'vertical' : ''}" data-history-surface data-axis="${vertical ? 'y' : 'x'}">
+        <div class="overview-hours">${hours}</div><div class="overview-density">${density}</div><div class="view-window" style="${windowStyle}"></div>
+      </div>`;
+    }
+
+    function appCardHtml(app, compact = false) {
+      const expanded = state.expanded.has(app.id);
+      return `<button class="stack-card ${app.windows.length > 1 ? 'multi' : ''} ${expanded ? 'expanded' : ''}" data-app-toggle="${app.id}">
+        <span class="app-icon ${app.iconClass}">${app.icon}</span>
+        <span class="meta"><strong>${app.name}</strong><small>${compact ? app.path : `${app.windows.length} 个窗口实例 · ${app.path}`}</small></span>
+        ${app.windows.length > 1 ? `<span class="window-count">${app.windows.length} 窗口</span>` : ''}<span class="chevron">›</span>
+      </button>`;
+    }
+
+    function windowChildrenHtml(app, compact = false) {
+      if (!state.expanded.has(app.id)) return '';
+      return app.windows.map((name, i) => `<div class="window-child ${compact ? 'compact' : ''}">
+        <span class="window-num">${i+1}</span><span>${name}</span><span class="window-state">${i === 0 ? '显示中' : i === 1 ? '后台' : '聚焦中'}</span>
+      </div>`).join('');
+    }
+
+    function identityHtml() {
+      if (state.merged) return `<section class="identity-card merged"><div><h3>✓ 历史身份已合并</h3><p>Figma 更新前后的路径现在显示为同一个应用和一段连续历史。</p></div><div class="path-pair"><code>…\\Figma\\app-124.7\\Figma.exe</code><code>…\\Figma\\app-125.2\\Figma.exe</code></div><button class="primary-button" disabled>已合并</button></section>`;
+      return `<section class="identity-card"><div><h3>发现可能的应用更新</h3><p>名称与图标相同，但路径已经变化。Timelens 不会静默合并，请你确认。</p></div><div class="path-pair"><code>…\\Figma\\app-124.7\\Figma.exe</code><code>…\\Figma\\app-125.2\\Figma.exe</code></div><button class="primary-button" data-merge-identity>合并历史</button></section>`;
+    }
+
+    function ticksHtml(vertical = false) {
+      return Array.from({length: 7}, (_, i) => {
+        const pos = (i / 6) * 100;
+        return `<span class="tick" style="${vertical ? `top:${pos}%` : `left:${pos}%`}">${formatTime(state.viewStart + (VIEW_SPAN * i / 6))}</span>`;
+      }).join('');
+    }
+
+    function segmentHtml(seg, index, windowRow = false) {
+      if (!isVisibleSegment(seg)) return '';
+      const lane = windowRow ? '' : `lane-${seg.state}`;
+      const label = !windowRow && seg.state === 'focus' && index === 0 ? `<span class="segment-label">${formatTime(seg.start)}–${formatTime(seg.end)}</span>` : '';
+      return `<span class="segment ${seg.state} ${lane}" style="${segStyle(seg)}">${label}</span>`;
+    }
+
+    function selectionOverlayHtml(vertical = false, extra = '', rangeStart = state.viewStart, rangeSpan = VIEW_SPAN) {
+      if (!state.selection) return `<div class="selection-overlay ${vertical ? 'vertical-selection' : ''} ${extra}" data-selection-overlay><span class="selection-label"></span></div>`;
+      const start = clamp(state.selection.start, rangeStart, rangeStart + rangeSpan);
+      const end = clamp(state.selection.end, rangeStart, rangeStart + rangeSpan);
+      if (end <= start) return `<div class="selection-overlay ${vertical ? 'vertical-selection' : ''} ${extra}" data-selection-overlay><span class="selection-label"></span></div>`;
+      const startP = ((start-rangeStart)/rangeSpan)*100; const sizeP = ((end-start)/rangeSpan)*100;
+      const style = vertical ? `top:${startP}%;height:${sizeP}%` : `left:${startP}%;width:${sizeP}%`;
+      return `<div class="selection-overlay active ${vertical ? 'vertical-selection' : ''} ${extra}" style="${style}" data-selection-overlay><span class="selection-label">${formatTime(start)}–${formatTime(end)} · ${durationText(end-start)}</span></div>`;
+    }
+
+    function selectedRange() { return state.selection || {start:540,end:630}; }
+
+    function metricsForApp(app, range) {
+      const focus = unionDuration(app.segments.filter(seg => seg.state === 'focus'), range);
+      const displayed = unionDuration(app.segments.filter(seg => seg.state === 'displayed'), range);
+      const background = unionDuration(app.segments.filter(seg => seg.state === 'background'), range);
+      const open = unionDuration(app.segments, range);
+      return {focus, displayed, background, open, share: Math.round(open / Math.max(1,range.end-range.start) * 100)};
+    }
+
+    function detailSegmentHtml(seg, range, aggregate = true) {
+      const start = Math.max(seg.start,range.start); const end = Math.min(seg.end,range.end);
+      if (end <= start) return '';
+      const span = Math.max(1,range.end-range.start);
+      const left = ((start-range.start)/span)*100; const width = ((end-start)/span)*100;
+      return `<span class="segment ${seg.state} ${aggregate ? `lane-${seg.state}` : ''}" style="left:${left}%;width:${Math.max(.3,width)}%"></span>`;
+    }
+
+    function detailRulerHtml(range) {
+      return Array.from({length:5}, (_,i) => `<span style="left:${i*25}%">${formatTime(range.start + (range.end-range.start)*i/4)}</span>`).join('');
+    }
+
+    function identitySlimHtml() {
+      if (state.merged) return `<div class="a-identity-slim merged"><div class="identity-copy"><strong>✓ Figma 更新前后的历史已合并</strong><span>路径变化不会把同一个应用拆成两份记录</span></div><button class="primary-button" disabled>已合并</button></div>`;
+      return `<div class="a-identity-slim"><div class="identity-copy"><strong>发现一个应用路径发生变化</strong><span>名称和图标相同，确认后可把 Figma 的两段历史合并</span></div><button class="primary-button" data-merge-identity>确认合并</button></div>`;
+    }
+
+    function variantAHtml() {
+      const range = selectedRange(); const span = Math.max(1,range.end-range.start);
+      const selectedRows = apps.map(app => ({app, metrics:metricsForApp(app,range)})).filter(row => row.metrics.open > 0).sort((a,b) => b.metrics.open-a.metrics.open);
+      if (!selectedRows.some(row => row.app.id === state.selectedApp)) state.selectedApp = selectedRows[0]?.app.id || apps[0].id;
+      const selected = apps.find(app => app.id === state.selectedApp) || apps[0]; const metrics = metricsForApp(selected,range);
+      const totalSpan = TOTAL_END-TOTAL_START;
+      const dayRuler = Array.from({length:10},(_,i)=>`<span style="left:${i/9*100}%">${formatTime(TOTAL_START + totalSpan*i/9)}</span>`).join('');
+      const activity = [
+        ['music',497,505],['files',505,531],['code',531,587],['browser',587,622],['code',622,654],['browser',654,675],['code',675,690]
+      ].map(([id,start,end]) => {
+        const app=apps.find(item=>item.id===id); const left=(start-TOTAL_START)/totalSpan*100; const width=(end-start)/totalSpan*100;
+        return `<span class="a-activity-block ${id}" style="left:${left}%;width:${width}%" title="${app.name} · ${formatTime(start)}–${formatTime(end)}"><em>${app.icon}</em></span>`;
+      }).join('');
+      const appList = selectedRows.map(({app,metrics}) => `<button class="a-app-item ${app.id===selected.id?'selected':''}" data-select-app="${app.id}">
+        <span class="app-icon ${app.iconClass}">${app.icon}</span><span class="a-app-copy"><strong>${app.name}</strong><small>${app.windows.length} 个窗口实例</small></span>
+        <span class="a-app-share"><b>${durationText(metrics.open)}</b>${metrics.share}%</span><span class="a-app-progress"><i style="width:${Math.min(100,metrics.share)}%"></i></span>
+      </button>`).join('');
+      const aggregate = selected.segments.map(seg=>detailSegmentHtml(seg,range,true)).join('');
+      const windowRows = state.expanded.has(selected.id) ? selected.windows.map((name,wi) => {
+        const sample = selected.segments.filter((_,si)=>si % selected.windows.length === wi);
+        const lastState = sample.find(seg=>overlap(seg.start,seg.end,range.start,range.end)>0)?.state;
+        const stateName = lastState==='focus'?'聚焦记录':lastState==='displayed'?'前台记录':lastState==='background'?'后台记录':'无活动';
+        return `<div class="a-detail-row"><div class="a-detail-row-label"><strong>${name}</strong><small>${stateName}</small></div><div class="a-row-track">${sample.map(seg=>detailSegmentHtml(seg,range,false)).join('')}</div></div>`;
+      }).join('') : '';
+      return `<main class="variant-root variant-a-refined">
+        <section class="a-top-timeline panel">
+          <div class="a-timeline-heading"><div><h2>全天时间轴</h2><p>在这里按住鼠标中键拖拽，截取任意时间段</p></div><strong>${formatTime(range.start)}–${formatTime(range.end)}　${durationText(span)}</strong></div>
+          <div class="a-day-ruler">${dayRuler}</div>
+          <div class="a-activity-line"><span class="a-activity-label">应用活动</span><div class="a-activity-track select-surface" data-select-surface data-axis="x" data-range-start="${TOTAL_START}" data-range-span="${totalSpan}">${activity}${selectionOverlayHtml(false,'',TOTAL_START,totalSpan)}</div></div>
+        </section>
+        <div class="a-selection-layout">
+          <aside class="a-selected-apps panel"><div class="a-sidebar-head"><h2>选中时段应用</h2><p>${formatTime(range.start)}–${formatTime(range.end)} · ${selectedRows.length} 个应用</p></div><div class="a-app-list">${appList}</div><div class="a-sidebar-total"><span>现实时间范围</span><b>${durationText(span)}</b></div></aside>
+          <section class="a-detail panel">
+            <div class="a-detail-head"><span class="app-icon ${selected.iconClass}">${selected.icon}</span><div class="a-detail-title"><h2>${selected.name}</h2><p>${selected.path}</p></div><button class="a-report-link" data-open-sample-report>查看时段报告</button></div>
+            <div class="a-metric-line"><div class="a-metric"><span>打开时长</span><b>${durationText(metrics.open)}</b></div><div class="a-metric"><span>前台显示</span><b>${durationText(metrics.displayed)}</b></div><div class="a-metric"><span>获得焦点</span><b>${durationText(metrics.focus)}</b></div><div class="a-metric"><span>后台运行</span><b>${durationText(metrics.background)}</b></div></div>
+            <div class="a-detail-section"><div class="a-section-head"><h3>使用状态</h3>${statusKeyHtml()}</div><div class="a-detail-ruler">${detailRulerHtml(range)}</div>
+              <div class="a-detail-row"><div class="a-detail-row-label"><strong>全部窗口</strong><small>${selected.windows.length} 个实例的区间并集</small></div><div class="a-row-track">${aggregate}</div></div>
+              ${windowRows}<button class="a-window-toggle" data-app-toggle="${selected.id}">${state.expanded.has(selected.id)?'收起窗口实例':`展开 ${selected.windows.length} 个窗口实例`}　⌄</button>
+            </div>
+            ${identitySlimHtml()}
+          </section>
+        </div>
+      </main>`;
+    }
+
+    function realityBlocksHtml() {
+      const blockMinutes = 30;
+      const blocks = [];
+      for (let start = state.viewStart; start < state.viewStart + VIEW_SPAN; start += blockMinutes) {
+        const mid = start + blockMinutes / 2;
+        const active = apps.map(app => ({ app, state: appAtMinute(app, mid) })).filter(x => x.state);
+        if (!active.length) continue;
+        const top = ((start - state.viewStart) / VIEW_SPAN) * 100;
+        const height = (blockMinutes / VIEW_SPAN) * 100 - 1;
+        blocks.push(`<article class="reality-block" style="top:${top}%;height:${height}%">
+          <div class="block-time">${formatTime(start)}–${formatTime(start + blockMinutes)} · ${active.length} 个应用同时存在</div>
+          <div class="app-chips">${active.map(x => `<button class="app-chip ${x.state === 'focus' ? 'focused' : x.state === 'displayed' ? 'displayed' : 'backgrounded'}" data-app-toggle="${x.app.id}">${x.app.name} · ${x.state === 'focus' ? '聚焦' : x.state === 'displayed' ? '显示' : '后台'}</button>`).join('')}</div>
+        </article>`);
+      }
+      return blocks.join('');
+    }
+
+    function variantBHtml() {
+      const inspector = apps.map(app => `<div class="compact-app">${appCardHtml(app,true)}${windowChildrenHtml(app,true)}</div>`).join('');
+      return `<main class="variant-root variant-b">
+        <div class="b-layout">
+          ${overviewHtml(true)}
+          <section class="stream-shell panel select-surface" data-select-surface data-axis="y">
+            <div class="vertical-stream">${ticksHtml(true)}${realityBlocksHtml()}${selectionOverlayHtml(true)}</div>
+          </section>
+          <aside class="b-inspector">
+            <div class="inspector-title">应用检查器 · 点击卡片展开无标题窗口</div>
+            ${inspector}
+            ${identityHtml()}
+            <div class="panel side-stat">${statusKeyHtml()}</div>
+          </aside>
+        </div>
+      </main>`;
+    }
+
+    function scenesHtml() {
+      return Array.from({length:6}, (_, i) => {
+        const start = state.viewStart + i * 30; const mid = start + 15;
+        const active = apps.map(app => ({app, state: appAtMinute(app, mid)})).filter(x => x.state).slice(0,4);
+        return `<article class="scene"><div class="scene-time">${formatTime(start)}–${formatTime(start+30)}</div>${active.map(x => `<div class="scene-app"><i class="${x.state === 'focus' ? 'f' : x.state === 'displayed' ? 'd' : 'b'}"></i><span>${x.app.short}</span></div>`).join('')}</article>`;
+      }).join('');
+    }
+
+    function deckCardHtml(app) {
+      const expanded = state.expanded.has(app.id);
+      return `<article class="deck-card panel">
+        <div class="deck-head"><span class="app-icon ${app.iconClass}">${app.icon}</span><span class="meta"><strong>${app.name}</strong><small>${app.windows.length} 个窗口 · ${app.path}</small></span></div>
+        <div class="mini-lanes">${app.segments.map((s,i)=>segmentHtml(s,i)).join('')}</div>
+        <button class="deck-toggle" data-app-toggle="${app.id}">${expanded ? '收起窗口实例' : `展开 ${app.windows.length} 个窗口实例`}　⌄</button>
+        ${expanded ? `<div class="deck-window-list">${app.windows.map((w,i)=>`<div class="deck-window"><span>${w}</span><span>${i===0?'显示中':i===1?'后台':'聚焦中'}</span></div>`).join('')}</div>` : ''}
+      </article>`;
+    }
+
+    function variantCHtml() {
+      return `<main class="variant-root variant-c">
+        <section class="film-shell panel">
+          <div class="film-top">
+            <div>
+              ${overviewHtml(false)}
+              <div class="filmstrip select-surface" data-select-surface data-axis="x">
+                <div class="film-ruler">${ticksHtml()}</div><div class="scene-row">${scenesHtml()}</div>${selectionOverlayHtml(false,'film-selection')}
+              </div>
+            </div>
+            <aside class="film-insight panel"><h3>当前视口</h3><div class="metric-ring"><span><b>68%</b>聚焦覆盖</span></div>${statusKeyHtml()}<p style="font-size:10px;color:#7f8a9d;line-height:1.5;margin-top:14px">拖动上方全天总览改变胶片区间，中键在胶片上框选后立即生成报告。</p></aside>
+          </div>
+          <div class="deck-title"><h2>这个区间内的应用卡片</h2><span style="color:#7f8a9d;font-size:10px">堆叠数量代表无标题窗口实例</span></div>
+          <div class="app-deck">${apps.map(deckCardHtml).join('')}</div>
+          ${identityHtml()}
+        </section>
+      </main>`;
+    }
+
+    function reportData() {
+      const range = state.selection || {start: state.viewStart + 45, end: state.viewStart + 105};
+      const rows = apps.map(app => {
+        const sums = {focus:0, displayed:0, background:0};
+        app.segments.forEach(seg => { sums[seg.state] += overlap(seg.start, seg.end, range.start, range.end); });
+        return {app, sums, total: Math.max(sums.focus, sums.displayed, sums.background)};
+      }).filter(row => Object.values(row.sums).some(v => v > 0));
+      return {range, rows};
+    }
+
+    function reportHtml() {
+      if (!state.reportOpen) return '';
+      const {range, rows} = reportData(); const span = Math.max(1, range.end-range.start);
+      return `<aside class="report-drawer">
+        <div class="report-head"><div><h2>详细使用报告</h2><p>本地确定性计算 · 不调用 AI</p></div><button class="close-button" data-close-report>×</button></div>
+        <div class="report-range"><strong>${formatTime(range.start)}–${formatTime(range.end)}</strong><span>截取时长 ${durationText(span)} · 现实时间只计算一次</span></div>
+        <section class="report-section"><h3>应用状态区间</h3>${rows.map(row=>`<article class="report-app"><div class="report-app-head"><span>${row.app.name}</span><span>${row.app.windows.length} 窗口</span></div>
+          ${[['focus','聚焦中','#789dff'],['displayed','显示中','#4bc8b6'],['background','后台','#687183']].map(([key,label,color])=>`<div class="report-bars"><span>${label}</span><div class="bar-track"><div class="bar-fill" style="width:${Math.min(100,row.sums[key]/span*100)}%;background:${color}"></div></div><span>${Math.round(row.sums[key])}分</span></div>`).join('')}</article>`).join('')}</section>
+        <section class="report-section"><h3>输入设备</h3><div class="report-app"><div class="report-app-head"><span>键盘敲击</span><b>${Math.round(span*38)}</b></div><div class="report-app-head"><span>鼠标点击</span><b>${Math.round(span*6.4)}</b></div></div></section>
+        <p class="report-note">多个应用可在同一现实区间同时显示或后台运行，因此应用状态时长可以重叠；报告不会把它们相加成超过所选范围的“总时间”。</p>
+      </aside>`;
+    }
+
+    function switcherHtml() {
+      if (state.variant === 'A') return '';
+      return `<div class="switcher" data-prototype-switcher><button data-variant-step="-1" aria-label="上一种">‹</button><div class="variant-label">${state.variant} · ${variantNames[state.variant]}<span class="prototype-only">仅用于选择交互方向</span></div><button data-variant-step="1" aria-label="下一种">›</button></div>`;
+    }
+
+    function stateHtml() {
+      if (state.variant === 'A') return '';
+      return `<aside class="state-panel"><strong>原型状态</strong><div class="state-grid">
+        <span>变体</span><span>${state.variant} · ${variantNames[state.variant]}</span>
+        <span>视图</span><span>${currentViewLabel()}</span>
+        <span>展开</span><span>${[...state.expanded].map(id=>apps.find(a=>a.id===id)?.name).filter(Boolean).join('、') || '无'}</span>
+        <span>身份</span><span>${state.merged ? 'Figma 历史已人工合并' : '等待人工确认'}</span>
+        <span>选区</span><span>${selectionLabel()}</span>
+        <span>报告</span><span>${state.reportOpen ? '已打开' : '关闭'}</span>
+      </div></aside>`;
+    }
+
+    function render() {
+      const variant = state.variant === 'A' ? variantAHtml() : state.variant === 'B' ? variantBHtml() : variantCHtml();
+      document.getElementById('app').innerHTML = `<div class="app-shell">${headerHtml()}${variant}</div>${reportHtml()}${stateHtml()}${switcherHtml()}${state.toast ? `<div class="toast">${state.toast}</div>` : ''}`;
+    }
+
+    function setVariant(next) {
+      const keys = Object.keys(variantNames); let index = keys.indexOf(state.variant);
+      if (typeof next === 'number') index = (index + next + keys.length) % keys.length;
+      else index = keys.indexOf(next);
+      state.variant = keys[index < 0 ? 0 : index];
+      const url = new URL(location.href); url.searchParams.set('variant', state.variant); history.replaceState({}, '', url);
+      render();
+    }
+
+    function toast(message) {
+      state.toast = message; render(); clearTimeout(toastTimer);
+      toastTimer = setTimeout(() => { state.toast = ''; render(); }, 1900);
+    }
+
+    function selectionSurfaceRange(surface) {
+      const start = Number(surface.dataset.rangeStart ?? state.viewStart);
+      const span = Number(surface.dataset.rangeSpan ?? VIEW_SPAN);
+      return {start,span};
+    }
+
+    function minuteFromPointer(surface, event, axis) {
+      const rect = surface.getBoundingClientRect();
+      const ratio = axis === 'y' ? (event.clientY - rect.top) / rect.height : (event.clientX - rect.left) / rect.width;
+      const range = selectionSurfaceRange(surface);
+      return clamp(range.start + clamp(ratio, 0, 1) * range.span, range.start, range.start + range.span);
+    }
+
+    function updateSelectionOverlay() {
+      if (!pointerDrag || pointerDrag.type !== 'select') return;
+      const surface = pointerDrag.surface; const overlay = surface.querySelector('[data-selection-overlay]');
+      if (!overlay) return;
+      const start = Math.min(pointerDrag.startMinute, pointerDrag.currentMinute); const end = Math.max(pointerDrag.startMinute, pointerDrag.currentMinute);
+      const startP = ((start-pointerDrag.rangeStart)/pointerDrag.rangeSpan)*100; const sizeP = Math.max(.4, ((end-start)/pointerDrag.rangeSpan)*100);
+      overlay.classList.add('active');
+      if (pointerDrag.axis === 'y') { overlay.style.top = `${startP}%`; overlay.style.height = `${sizeP}%`; }
+      else { overlay.style.left = `${startP}%`; overlay.style.width = `${sizeP}%`; }
+      const label = overlay.querySelector('.selection-label'); if (label) label.textContent = `${formatTime(start)}–${formatTime(end)} · ${durationText(end-start)}`;
+    }
+
+    document.addEventListener('pointerdown', event => {
+      const selectSurface = event.target.closest('[data-select-surface]');
+      if (selectSurface && event.button === 1) {
+        event.preventDefault();
+        const axis = selectSurface.dataset.axis || 'x'; const minute = minuteFromPointer(selectSurface, event, axis);
+        const range = selectionSurfaceRange(selectSurface);
+        pointerDrag = {type:'select', surface:selectSurface, axis, rangeStart:range.start, rangeSpan:range.span, startMinute:minute, currentMinute:minute};
+        updateSelectionOverlay(); return;
+      }
+      const historySurface = event.target.closest('[data-history-surface]');
+      if (historySurface && event.button === 0) {
+        event.preventDefault();
+        pointerDrag = {type:'history', surface:historySurface, axis:historySurface.dataset.axis || 'x'};
+      }
+    });
+
+    window.addEventListener('pointermove', event => {
+      if (!pointerDrag) return;
+      if (pointerDrag.type === 'select') {
+        pointerDrag.currentMinute = minuteFromPointer(pointerDrag.surface,event,pointerDrag.axis); updateSelectionOverlay();
+      } else {
+        const rect = pointerDrag.surface.getBoundingClientRect();
+        const ratio = pointerDrag.axis === 'y' ? (event.clientY-rect.top)/rect.height : (event.clientX-rect.left)/rect.width;
+        state.viewStart = Math.round(clamp(TOTAL_START + clamp(ratio,0,1)*(TOTAL_END-TOTAL_START) - VIEW_SPAN/2, TOTAL_START, TOTAL_END-VIEW_SPAN));
+        render();
+      }
+    });
+
+    window.addEventListener('pointerup', () => {
+      if (!pointerDrag) return;
+      if (pointerDrag.type === 'select') {
+        const start = Math.round(Math.min(pointerDrag.startMinute,pointerDrag.currentMinute));
+        const end = Math.round(Math.max(pointerDrag.startMinute,pointerDrag.currentMinute));
+        if (end-start >= 2) { state.selection={start,end}; state.reportOpen=state.variant !== 'A'; }
+      }
+      pointerDrag = null; render();
+    });
+
+    document.addEventListener('auxclick', event => { if (event.target.closest('[data-select-surface]')) event.preventDefault(); });
+    document.addEventListener('click', event => {
+      const selectApp = event.target.closest('[data-select-app]');
+      if (selectApp) { state.selectedApp=selectApp.dataset.selectApp; render(); return; }
+      const toggle = event.target.closest('[data-app-toggle]');
+      if (toggle) { const id=toggle.dataset.appToggle; state.expanded.has(id)?state.expanded.delete(id):state.expanded.add(id); render(); return; }
+      const merge = event.target.closest('[data-merge-identity]');
+      if (merge) { state.merged=true; toast('Figma 更新前后的历史已合并，可随时在设置中撤销'); return; }
+      const step = event.target.closest('[data-variant-step]');
+      if (step) { setVariant(Number(step.dataset.variantStep)); return; }
+      if (event.target.closest('[data-close-report]')) { state.reportOpen=false; render(); return; }
+      if (event.target.closest('[data-open-sample-report]')) { if (!state.selection) state.selection={start:state.viewStart+45,end:state.viewStart+105}; state.reportOpen=true; render(); }
+    });
+
+    window.addEventListener('keydown', event => {
+      const active = document.activeElement; const editing = active && (['INPUT','TEXTAREA'].includes(active.tagName) || active.isContentEditable);
+      if (editing) return;
+      if (event.key === 'ArrowLeft') setVariant(-1);
+      if (event.key === 'ArrowRight') setVariant(1);
+      if (event.key === 'Escape' && state.reportOpen) { state.reportOpen=false; render(); }
+    });
+
+    render();
+  </script>
+</body>
+</html>

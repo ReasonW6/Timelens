@@ -1,0 +1,12 @@
+[package]
+name = "timelens-tauri-spike"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[build-dependencies]
+tauri-build = { version = "2.4", features = [] }
+
+[dependencies]
+serde_json = "1"
+tauri = { version = "2.11.3", features = [] }

@@ -24,8 +24,10 @@ Timelens 是一款面向 Windows 11 的轻量级、本地优先活动观察应�
 ## 文档
 
 - [领域术语与产品边界](CONTEXT.md)
+- [V1 Wayfinder 决策地图](docs/wayfinder/timelens-v1/map.md)
+- [Wayfinder 归档入口与实施顺序](docs/wayfinder/README.md)
 - [架构决策记录](docs/adr)
 
 ## 开发状态
 
-仓库目前保存已经锁定的领域模型和架构决策。首个实施里程碑将建立 Rust workspace、Slint 应用外壳、安装与权限边界、进程间通信以及加密本地存储基础。
+仓库目前保存已经锁定的领域模型、完整 Wayfinder 决策链和架构决策。正式开发从决策地图的 Implementation milestones 开始；首个里程碑将建立 Rust workspace、Slint 应用外壳、安装与权限边界、进程间通信以及加密本地存储基础。
