@@ -1,0 +1,15 @@
+{
+  "datasetDays": 30,
+  "applicationCount": 100,
+  "windowStateUpdates": 240000,
+  "inputMinuteRows": 43200,
+  "databaseBytes": 42131456,
+  "walBytesAfterCheckpoint": 0,
+  "shmBytesAfterCheckpoint": 0,
+  "storageDataBytes": 42131776,
+  "collectorArtifactReserveBytes": 34603008,
+  "projectedProductNonImageDataBytes": 76734784,
+  "budgetBytes": 104857600,
+  "elapsedSeconds": 10.290,
+  "passed": true
+}

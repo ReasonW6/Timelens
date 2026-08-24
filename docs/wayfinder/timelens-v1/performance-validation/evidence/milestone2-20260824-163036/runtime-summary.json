@@ -1,0 +1,23 @@
+{
+  "spoolBytes": 33554432,
+  "pendingBatchesBeforeCore": 4,
+  "pendingBatchesAfterCollectorRestart": 5,
+  "pendingBatchesAfterCoreAck": 0,
+  "spoolKeyStableAcrossRestart": true,
+  "collectorPausedForClear": true,
+  "collectorSpoolKeyRotatedForClear": true,
+  "collectorResumedAfterClear": true,
+  "uiReview": {
+    "dataBackedApplications": 5,
+    "explicitGaps": 2,
+    "timeRanges": ["6h", "24h", "7d"],
+    "numberedWindows": ["Window 1", "Window 2", "Window 3"],
+    "viewportWidth": 1120,
+    "viewportHeight": 720,
+    "clipped": false,
+    "destructiveActionsTriggeredFromUi": false,
+    "destructiveBehaviorVerifiedSeparately": true,
+    "passed": true
+  },
+  "passed": true
+}

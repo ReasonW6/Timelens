@@ -2,7 +2,7 @@
 
 Timelens 是一款面向 Windows 11 的轻量级、本地优先活动观察应用，用时间轴记录应用窗口状态、输入设备统计和定时快照，并支持由用户自备 API 密钥的 AI 总结。
 
-> 当前状态：里程碑 1 已完成，并在 Windows 11 宿主机通过全新默认路径与自选固定磁盘路径的安装、权限、握手和卸载验收；虚拟机验收不作为当前门禁。里程碑 2 已开始接入窗口观测。
+> 当前状态：里程碑 1 与里程碑 2 均已完成。里程碑 2 已在 Windows 11 宿主机通过实时采集、UI、隐私、30 天容量及三轮完整进程组性能验收；按当前项目决定跳过虚拟机验收，产物保持未签名。
 
 ## V1 原则
 
@@ -42,6 +42,9 @@ cargo test --workspace
 cargo build --workspace --release
 cargo run -p timelens-collector -- --observe-windows-once
 cargo run -p timelens-collector -- --observe-window-events-seconds 10
+cargo run --release -p timelens-storage --example milestone2_capacity -- --data-dir C:\path\to\empty-data-dir
+& '.\docs\wayfinder\timelens-v1\performance-validation\verify-milestone2-privacy.ps1' -DataDirectory C:\path\to\capacity-data
+& '.\docs\wayfinder\timelens-v1\performance-validation\measure-milestone2.ps1'
 ```
 
 安装包使用 Inno Setup 7 编译：
@@ -58,7 +61,8 @@ Core 与 Collector 只在校验同一用户、同一会话、Windows 返回的�
 - [V1 Wayfinder 决策地图](docs/wayfinder/timelens-v1/map.md)
 - [Wayfinder 归档入口与实施顺序](docs/wayfinder/README.md)
 - [架构决策记录](docs/adr)
+- [里程碑 2 实现与验收报告](docs/wayfinder/timelens-v1/performance-validation/milestone-2-report.md)
 
 ## 开发状态
 
-仓库保存已经锁定的领域模型、完整 Wayfinder 决策链和架构决策。里程碑 1 已发布；里程碑 2 已实现 `EnumWindows` 对账、三层用户窗口分类、AUMID/包身份/路径降级、WinEvent 增量触发，以及经认证命名管道 ACK 后写入 SQLCipher 的幂等窗口实例与状态区间。32 MiB 持久断线缓冲、托盘连续性、输入统计与时间轴仍按后续切片接入。
+仓库保存已经锁定的领域模型、完整 Wayfinder 决策链和架构决策。里程碑 2 已完成 32 MiB 加密持久断线缓冲、精确托盘连续性、分钟输入聚合、应用泳道与编号窗口详情、保留策略和协调式一键清空。协议为 v3，SQLCipher schema 为 v8；正式 30 天完整非图片产品负载投影为 73.18 MiB，三轮正常采集 CPU 最大 0.231%，进程组峰值工作集最大 53.22 MiB，Release 双二进制合计 15.92 MiB。

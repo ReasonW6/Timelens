@@ -1,0 +1,98 @@
+{
+  "environment": {
+    "capturedAt": "2026-08-24T16:33:53.3621937+08:00",
+    "os": {
+      "Caption": "Microsoft Windows 11 专业版",
+      "Version": "10.0.26200",
+      "BuildNumber": "26200",
+      "OSArchitecture": "64 位"
+    },
+    "cpu": {
+      "Name": "AMD Ryzen 7 7840H w/Radeon 780M Graphics",
+      "NumberOfCores": 8,
+      "NumberOfLogicalProcessors": 16
+    },
+    "physicalMemoryBytes": 14731603968,
+    "powerPlan": "电源方案 GUID: 381b4222-f694-41f0-9685-ff5bb260df2e  (平衡)",
+    "rustc": "rustc 1.94.1 (e408947bf 2026-03-25)",
+    "cargo": "cargo 1.94.1 (29ea6fb6a 2026-03-24)"
+  },
+  "scenario": "Timelens Release UI core plus collector, normal collection",
+  "measurementSecondsPerRun": 60,
+  "runs": [
+    {
+      "run": 1,
+      "measuredSeconds": 60.3517612,
+      "sampleCount": 117,
+      "logicalProcessorCount": 16,
+      "cpuSeconds": 2.234375,
+      "averageCpuPercent": 0.23139082393506027,
+      "peakWorkingSetBytes": 55808000,
+      "peakPrivateBytes": 15425536,
+      "minimumProcessCount": 2,
+      "maximumProcessCount": 2,
+      "appResponsiveForEverySample": true,
+      "dataDirectory": "D:\\GitHub_Project\\Timelens\\.scratch\\milestone2-performance-20260824-163036\\run-1"
+    },
+    {
+      "run": 2,
+      "measuredSeconds": 60.3350876,
+      "sampleCount": 117,
+      "logicalProcessorCount": 16,
+      "cpuSeconds": 0.53125,
+      "averageCpuPercent": 0.05503120376674484,
+      "peakWorkingSetBytes": 55291904,
+      "peakPrivateBytes": 15196160,
+      "minimumProcessCount": 2,
+      "maximumProcessCount": 2,
+      "appResponsiveForEverySample": true,
+      "dataDirectory": "D:\\GitHub_Project\\Timelens\\.scratch\\milestone2-performance-20260824-163036\\run-2"
+    },
+    {
+      "run": 3,
+      "measuredSeconds": 60.4675497,
+      "sampleCount": 117,
+      "logicalProcessorCount": 16,
+      "cpuSeconds": 0.515625,
+      "averageCpuPercent": 0.05329563155756583,
+      "peakWorkingSetBytes": 55255040,
+      "peakPrivateBytes": 15196160,
+      "minimumProcessCount": 2,
+      "maximumProcessCount": 2,
+      "appResponsiveForEverySample": true,
+      "dataDirectory": "D:\\GitHub_Project\\Timelens\\.scratch\\milestone2-performance-20260824-163036\\run-3"
+    }
+  ],
+  "budgets": {
+    "averageCpuPercent": 1.0,
+    "peakWorkingSetBytes": 104857600,
+    "packageProxyBytes": 20971520
+  },
+  "packageProxy": {
+    "files": [
+      "D:\\GitHub_Project\\Timelens\\target\\release\\timelens.exe",
+      "D:\\GitHub_Project\\Timelens\\target\\release\\timelens-collector.exe"
+    ],
+    "bytes": 16698368,
+    "passed": true
+  },
+  "authenticode": [
+    {
+      "path": "D:\\GitHub_Project\\Timelens\\target\\release\\timelens.exe",
+      "status": "NotSigned",
+      "statusMessage": "The file D:\\GitHub_Project\\Timelens\\target\\release\\timelens.exe is not digitally signed. You cannot run this script on the current system. For more information about running scripts and setting execution policy, see about_Execution_Policies at https://go.microsoft.com/fwlink/?LinkID=135170"
+    },
+    {
+      "path": "D:\\GitHub_Project\\Timelens\\target\\release\\timelens-collector.exe",
+      "status": "NotSigned",
+      "statusMessage": "The file D:\\GitHub_Project\\Timelens\\target\\release\\timelens-collector.exe is not digitally signed. You cannot run this script on the current system. For more information about running scripts and setting execution policy, see about_Execution_Policies at https://go.microsoft.com/fwlink/?LinkID=135170"
+    }
+  ],
+  "checks": {
+    "cpuPassed": true,
+    "memoryPassed": true,
+    "responsivePassed": true,
+    "packagePassed": true
+  },
+  "passed": true
+}

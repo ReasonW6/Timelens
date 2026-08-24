@@ -2,6 +2,8 @@
 
 Timelens 使用 Wayfinder 的 local-markdown tracker。V1 地图、票据及决策证据已从临时工作区迁入 Git；这里是正式开发唯一应依赖的规划入口。
 
+当前实施进度：里程碑 1 与里程碑 2 已完成；里程碑 2 的实现范围、问题修复和可复现证据见[验收报告](timelens-v1/performance-validation/milestone-2-report.md)。
+
 ## 从这里开始
 
 1. 打开 [Timelens V1 决策地图](timelens-v1/map.md)。地图状态为 `complete`，15 张决策票均已解决，没有待认领 frontier。

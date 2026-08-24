@@ -3972,9 +3972,14 @@ name = "timelens-collector"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "crc32fast",
  "embed-resource",
+ "prost",
+ "tempfile",
  "timelens-ipc",
  "timelens-observer",
+ "windows-sys 0.61.2",
+ "zeroize",
 ]
 
 [[package]]

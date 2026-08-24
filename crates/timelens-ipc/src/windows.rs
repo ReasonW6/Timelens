@@ -67,15 +67,24 @@ pub struct SingleInstanceGuard {
 
 impl SingleInstanceGuard {
     pub fn acquire_core() -> Result<Self> {
+        Self::acquire("Core")
+    }
+
+    pub fn acquire_collector() -> Result<Self> {
+        Self::acquire("Collector")
+    }
+
+    fn acquire(component: &str) -> Result<Self> {
         let sid = current_user_sid()?;
         let session = current_session_id()?;
-        let name = wide(format!("Local\\Timelens.Core.{sid}.{session}.v1"));
+        let name = wide(format!("Local\\Timelens.{component}.{sid}.{session}.v1"));
         let handle = unsafe { CreateMutexW(null(), 0, name.as_ptr()) };
         let handle = OwnedHandle::new(handle)?;
         if unsafe { GetLastError() } == ERROR_ALREADY_EXISTS {
-            return Err(IpcError::PeerAuthentication(
-                "another Timelens core already owns this user session".to_owned(),
-            ));
+            return Err(IpcError::PeerAuthentication(format!(
+                "another Timelens {} already owns this user session",
+                component.to_ascii_lowercase()
+            )));
         }
         Ok(Self { handle })
     }
@@ -88,7 +97,7 @@ impl SingleInstanceGuard {
 pub fn current_pipe_name() -> Result<String> {
     let sid = current_user_sid()?;
     let session = current_session_id()?;
-    Ok(format!(r"\\.\pipe\Timelens.{sid}.{session}.collector.v2"))
+    Ok(format!(r"\\.\pipe\Timelens.{sid}.{session}.collector.v3"))
 }
 
 pub fn run_server_probe(pipe_name: &str, expected_peer_names: &[&str]) -> Result<HandshakeReport> {

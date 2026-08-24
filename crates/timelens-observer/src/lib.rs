@@ -1,5 +1,9 @@
 #![cfg(windows)]
 
+mod input;
+
+pub use input::{InputDrain, InputMonitor, InputSample, InputSampleKind, MouseButton};
+
 use std::{
     collections::{HashMap, HashSet},
     marker::PhantomData,
@@ -95,6 +99,30 @@ pub struct WindowTransition {
 pub struct ReconcileResult {
     pub current: Vec<WindowObservation>,
     pub transitions: Vec<WindowTransition>,
+    pub tray_transitions: Vec<TrayTransition>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TrayTransitionKind {
+    Started,
+    Ended,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TrayTransition {
+    pub kind: TrayTransitionKind,
+    pub observed_at_utc_ms: i64,
+    pub monotonic_ms: u64,
+    pub application_identity: String,
+    pub process_id: u32,
+    pub process_started_at_100ns: u64,
+}
+
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub struct TrayPresence {
+    pub application_identity: String,
+    pub process_id: u32,
+    pub process_started_at_100ns: u64,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -108,6 +136,7 @@ pub type Result<T> = std::result::Result<T, ObserverError>;
 pub struct WindowObserver {
     virtual_desktop: Option<IVirtualDesktopManager>,
     tracked: HashMap<usize, TrackedWindow>,
+    tray_candidates: HashMap<TrayKey, TrayCandidate>,
     started: Instant,
     // COM interfaces above must be released before this apartment guard.
     _com: ComApartment,
@@ -121,6 +150,7 @@ impl WindowObserver {
         Ok(Self {
             virtual_desktop,
             tracked: HashMap::new(),
+            tray_candidates: HashMap::new(),
             started: Instant::now(),
             _com: ComApartment(PhantomData),
         })
@@ -128,6 +158,42 @@ impl WindowObserver {
 
     pub fn reconcile(&mut self) -> Result<Vec<WindowObservation>> {
         Ok(self.reconcile_transitions()?.current)
+    }
+
+    pub fn timestamp(&self) -> (i64, u64) {
+        (
+            unix_time_ms(),
+            self.started.elapsed().as_millis().min(u64::MAX as u128) as u64,
+        )
+    }
+
+    pub fn seed_tray_presence(&mut self, seeds: impl IntoIterator<Item = TrayPresence>) {
+        for seed in seeds {
+            if process_matches(seed.process_id, seed.process_started_at_100ns) {
+                self.tray_candidates.insert(
+                    TrayKey {
+                        process_id: seed.process_id,
+                        process_started_at_100ns: seed.process_started_at_100ns,
+                        application_identity: seed.application_identity,
+                    },
+                    TrayCandidate,
+                );
+            }
+        }
+    }
+
+    pub fn current_tray_presence(&self) -> Vec<TrayPresence> {
+        let mut presence = self
+            .tray_candidates
+            .keys()
+            .map(|key| TrayPresence {
+                application_identity: key.application_identity.clone(),
+                process_id: key.process_id,
+                process_started_at_100ns: key.process_started_at_100ns,
+            })
+            .collect::<Vec<_>>();
+        presence.sort();
+        presence
     }
 
     pub fn reconcile_transitions(&mut self) -> Result<ReconcileResult> {
@@ -227,10 +293,104 @@ impl WindowObserver {
             );
         }
         observations.sort_unstable_by_key(|observation| observation.window_id);
+        let tray_transitions = update_tray_candidates(
+            &mut self.tray_candidates,
+            &observations,
+            &transitions,
+            observed_at_utc_ms,
+            monotonic_ms,
+            process_matches,
+        );
         Ok(ReconcileResult {
             current: observations,
             transitions,
+            tray_transitions,
         })
+    }
+}
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+struct TrayKey {
+    process_id: u32,
+    process_started_at_100ns: u64,
+    application_identity: String,
+}
+
+#[derive(Clone, Debug)]
+struct TrayCandidate;
+
+fn update_tray_candidates(
+    candidates: &mut HashMap<TrayKey, TrayCandidate>,
+    current: &[WindowObservation],
+    window_transitions: &[WindowTransition],
+    observed_at_utc_ms: i64,
+    monotonic_ms: u64,
+    process_is_alive: impl Fn(u32, u64) -> bool,
+) -> Vec<TrayTransition> {
+    let current_keys = current.iter().map(tray_key).collect::<HashSet<_>>();
+    let mut transitions = Vec::new();
+
+    let ended = candidates
+        .keys()
+        .filter(|key| {
+            current_keys.contains(*key)
+                || !process_is_alive(key.process_id, key.process_started_at_100ns)
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    for key in ended {
+        candidates.remove(&key);
+        transitions.push(tray_transition(
+            TrayTransitionKind::Ended,
+            key,
+            observed_at_utc_ms,
+            monotonic_ms,
+        ));
+    }
+
+    let closed_keys = window_transitions
+        .iter()
+        .filter(|transition| transition.kind == WindowTransitionKind::Closed)
+        .map(|transition| tray_key(&transition.window))
+        .collect::<HashSet<_>>();
+    for key in closed_keys {
+        if !current_keys.contains(&key)
+            && !candidates.contains_key(&key)
+            && process_is_alive(key.process_id, key.process_started_at_100ns)
+        {
+            candidates.insert(key.clone(), TrayCandidate);
+            transitions.push(tray_transition(
+                TrayTransitionKind::Started,
+                key,
+                observed_at_utc_ms,
+                monotonic_ms,
+            ));
+        }
+    }
+    transitions
+}
+
+fn tray_key(window: &WindowObservation) -> TrayKey {
+    TrayKey {
+        process_id: window.process_id,
+        process_started_at_100ns: window.process_started_at_100ns,
+        application_identity: window.application_identity.clone(),
+    }
+}
+
+fn tray_transition(
+    kind: TrayTransitionKind,
+    key: TrayKey,
+    observed_at_utc_ms: i64,
+    monotonic_ms: u64,
+) -> TrayTransition {
+    TrayTransition {
+        kind,
+        observed_at_utc_ms,
+        monotonic_ms,
+        application_identity: key.application_identity,
+        process_id: key.process_id,
+        process_started_at_100ns: key.process_started_at_100ns,
     }
 }
 
@@ -573,6 +733,16 @@ fn process_info(process_id: u32) -> Option<ProcessInfo> {
     })
 }
 
+fn process_matches(process_id: u32, expected_started_at_100ns: u64) -> bool {
+    unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, process_id) }
+        .ok()
+        .and_then(|handle| {
+            let handle = ProcessHandle(handle);
+            process_start_time(handle.0)
+        })
+        == Some(expected_started_at_100ns)
+}
+
 fn process_start_time(handle: HANDLE) -> Option<u64> {
     let mut creation = FILETIME::default();
     let mut exit = FILETIME::default();
@@ -815,6 +985,76 @@ mod tests {
         .unwrap();
         assert_eq!(fallback.source, IdentitySource::ExecutablePath);
         assert_eq!(fallback.key, "path:c:\\apps\\sample.exe");
+    }
+
+    #[test]
+    fn tray_background_starts_after_the_last_window_and_ends_on_process_exit() {
+        let window = observation(false, false);
+        let closed = WindowTransition {
+            kind: WindowTransitionKind::Closed,
+            observed_at_utc_ms: 100,
+            monotonic_ms: 10,
+            window: window.clone(),
+        };
+        let mut candidates = HashMap::new();
+        let started = update_tray_candidates(
+            &mut candidates,
+            &[],
+            &[closed],
+            100,
+            10,
+            |process_id, started_at| process_id == 20 && started_at == 30,
+        );
+        assert_eq!(started.len(), 1);
+        assert_eq!(started[0].kind, TrayTransitionKind::Started);
+
+        let ended = update_tray_candidates(&mut candidates, &[], &[], 200, 110, |_, _| false);
+        assert_eq!(ended.len(), 1);
+        assert_eq!(ended[0].kind, TrayTransitionKind::Ended);
+        assert!(candidates.is_empty());
+    }
+
+    #[test]
+    fn another_window_for_the_same_application_prevents_or_ends_tray_inference() {
+        let mut first = observation(false, false);
+        let second = WindowObservation {
+            window_id: 11,
+            ..first.clone()
+        };
+        let closed = WindowTransition {
+            kind: WindowTransitionKind::Closed,
+            observed_at_utc_ms: 100,
+            monotonic_ms: 10,
+            window: first.clone(),
+        };
+        let mut candidates = HashMap::new();
+        assert!(
+            update_tray_candidates(
+                &mut candidates,
+                std::slice::from_ref(&second),
+                std::slice::from_ref(&closed),
+                100,
+                10,
+                |_, _| true,
+            )
+            .is_empty()
+        );
+
+        first.window_id = 12;
+        let started = update_tray_candidates(
+            &mut candidates,
+            &[],
+            &[WindowTransition {
+                window: first,
+                ..closed
+            }],
+            200,
+            110,
+            |_, _| true,
+        );
+        assert_eq!(started[0].kind, TrayTransitionKind::Started);
+        let ended = update_tray_candidates(&mut candidates, &[second], &[], 300, 210, |_, _| true);
+        assert_eq!(ended[0].kind, TrayTransitionKind::Ended);
     }
 
     #[test]

@@ -12,8 +12,15 @@ path = "src/main.rs"
 
 [dependencies]
 anyhow.workspace = true
+crc32fast.workspace = true
+prost.workspace = true
 timelens-ipc = { path = "../timelens-ipc" }
 timelens-observer = { path = "../timelens-observer" }
+windows-sys.workspace = true
+zeroize.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
 
 [build-dependencies]
 embed-resource.workspace = true

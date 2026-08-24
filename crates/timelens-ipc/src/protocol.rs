@@ -4,8 +4,9 @@ use prost::{Enumeration, Message, Oneof};
 
 use crate::{
     COLLECTOR_RUN_ID_BYTES, IpcError, MAX_APP_USER_MODEL_ID_BYTES, MAX_BATCH_EVENTS,
-    MAX_EXECUTABLE_PATH_BYTES, MAX_FRAME_BYTES, MAX_IDENTITY_BYTES, MAX_PACKAGE_IDENTITY_BYTES,
-    MAX_VIRTUAL_DESKTOP_ID_BYTES, NONCE_BYTES, PROTOCOL_VERSION, Result,
+    MAX_EXECUTABLE_PATH_BYTES, MAX_FRAME_BYTES, MAX_IDENTITY_BYTES, MAX_INPUT_KEYS_PER_MINUTE,
+    MAX_PACKAGE_IDENTITY_BYTES, MAX_VIRTUAL_DESKTOP_ID_BYTES, NONCE_BYTES, PROTOCOL_VERSION,
+    Result,
 };
 
 #[derive(Clone, PartialEq, Message)]
@@ -88,7 +89,7 @@ pub struct CollectorEvent {
     pub observed_at_utc_ms: i64,
     #[prost(uint64, tag = "3")]
     pub monotonic_ms: u64,
-    #[prost(oneof = "collector_event::Body", tags = "4")]
+    #[prost(oneof = "collector_event::Body", tags = "4, 5, 6, 7")]
     pub body: Option<collector_event::Body>,
 }
 
@@ -99,7 +100,73 @@ pub mod collector_event {
     pub enum Body {
         #[prost(message, tag = "4")]
         WindowTransition(WindowTransition),
+        #[prost(message, tag = "5")]
+        MonitoringGap(MonitoringGap),
+        #[prost(message, tag = "6")]
+        InputMinute(InputMinute),
+        #[prost(message, tag = "7")]
+        TrayTransition(TrayTransition),
     }
+}
+
+#[derive(Clone, PartialEq, Message)]
+pub struct InputMinute {
+    #[prost(int64, tag = "1")]
+    pub minute_started_at_utc_ms: i64,
+    #[prost(sint32, tag = "2")]
+    pub timezone_offset_minutes: i32,
+    #[prost(string, tag = "3")]
+    pub local_date: String,
+    #[prost(string, optional, tag = "4")]
+    pub focused_application_identity: Option<String>,
+    #[prost(uint32, tag = "5")]
+    pub keyboard_count: u32,
+    #[prost(uint32, tag = "6")]
+    pub left_click_count: u32,
+    #[prost(uint32, tag = "7")]
+    pub middle_click_count: u32,
+    #[prost(uint32, tag = "8")]
+    pub right_click_count: u32,
+    #[prost(message, repeated, tag = "9")]
+    pub key_counts: Vec<PhysicalKeyCount>,
+}
+
+#[derive(Clone, PartialEq, Message)]
+pub struct PhysicalKeyCount {
+    #[prost(uint32, tag = "1")]
+    pub scan_code: u32,
+    #[prost(uint64, tag = "2")]
+    pub keyboard_layout: u64,
+    #[prost(uint32, tag = "3")]
+    pub count: u32,
+}
+
+#[derive(Clone, PartialEq, Message)]
+pub struct TrayTransition {
+    #[prost(enumeration = "TrayTransitionKind", tag = "1")]
+    pub kind: i32,
+    #[prost(string, tag = "2")]
+    pub application_identity: String,
+    #[prost(uint32, tag = "3")]
+    pub process_id: u32,
+    #[prost(uint64, tag = "4")]
+    pub process_started_at_100ns: u64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Enumeration)]
+#[repr(i32)]
+pub enum TrayTransitionKind {
+    Unspecified = 0,
+    Started = 1,
+    Ended = 2,
+}
+
+#[derive(Clone, PartialEq, Message)]
+pub struct MonitoringGap {
+    #[prost(int64, tag = "1")]
+    pub started_at_utc_ms: i64,
+    #[prost(enumeration = "MonitoringGapReason", tag = "2")]
+    pub reason: i32,
 }
 
 #[derive(Clone, PartialEq, Message)]
@@ -155,6 +222,14 @@ pub enum IdentitySource {
     Package = 2,
     ProcessAppUserModelId = 3,
     WindowAppUserModelId = 4,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Enumeration)]
+#[repr(i32)]
+pub enum MonitoringGapReason {
+    Unspecified = 0,
+    BufferOverflow = 1,
+    InputOverflow = 2,
 }
 
 #[derive(Clone, PartialEq, Message)]
@@ -239,26 +314,139 @@ fn validate_event_batch(batch: &EventBatch) -> Result<()> {
                 "event timestamp is outside the supported range".to_owned(),
             ));
         }
-        let transition = match event.body.as_ref() {
-            Some(collector_event::Body::WindowTransition(transition)) => transition,
+        match event.body.as_ref() {
+            Some(collector_event::Body::WindowTransition(transition)) => {
+                validate_window_transition(transition)?;
+            }
+            Some(collector_event::Body::MonitoringGap(gap)) => {
+                validate_monitoring_gap(gap, event.observed_at_utc_ms)?;
+            }
+            Some(collector_event::Body::InputMinute(minute)) => {
+                validate_input_minute(minute, event.observed_at_utc_ms)?;
+            }
+            Some(collector_event::Body::TrayTransition(transition)) => {
+                validate_tray_transition(transition)?;
+            }
             None => {
                 return Err(IpcError::InvalidMessage(
                     "collector event body is missing".to_owned(),
                 ));
             }
-        };
-        let kind = WindowTransitionKind::try_from(transition.kind).map_err(|_| {
-            IpcError::InvalidMessage("window transition kind is invalid".to_owned())
-        })?;
-        if kind == WindowTransitionKind::Unspecified {
+        }
+    }
+    Ok(())
+}
+
+fn validate_tray_transition(transition: &TrayTransition) -> Result<()> {
+    let kind = TrayTransitionKind::try_from(transition.kind)
+        .map_err(|_| IpcError::InvalidMessage("tray transition kind is invalid".to_owned()))?;
+    if kind == TrayTransitionKind::Unspecified
+        || transition.process_id == 0
+        || transition.process_started_at_100ns == 0
+        || transition.process_started_at_100ns > i64::MAX as u64
+    {
+        return Err(IpcError::InvalidMessage(
+            "tray transition facts are invalid".to_owned(),
+        ));
+    }
+    validate_required_string(
+        &transition.application_identity,
+        MAX_IDENTITY_BYTES,
+        "tray application identity",
+    )
+}
+
+fn validate_input_minute(minute: &InputMinute, observed_at_utc_ms: i64) -> Result<()> {
+    if minute.minute_started_at_utc_ms <= 0
+        || minute.minute_started_at_utc_ms % 60_000 != 0
+        || minute.minute_started_at_utc_ms >= observed_at_utc_ms
+    {
+        return Err(IpcError::InvalidMessage(
+            "input minute boundary is invalid".to_owned(),
+        ));
+    }
+    if !(-1_440..=1_440).contains(&minute.timezone_offset_minutes)
+        || !valid_local_date(&minute.local_date)
+    {
+        return Err(IpcError::InvalidMessage(
+            "input minute local-time facts are invalid".to_owned(),
+        ));
+    }
+    if let Some(identity) = &minute.focused_application_identity {
+        validate_required_string(identity, MAX_IDENTITY_BYTES, "focused application identity")?;
+    }
+    if minute.key_counts.len() > MAX_INPUT_KEYS_PER_MINUTE {
+        return Err(IpcError::InvalidMessage(
+            "input minute contains too many physical key counts".to_owned(),
+        ));
+    }
+    let mut seen = std::collections::HashSet::with_capacity(minute.key_counts.len());
+    let mut keyboard_total = 0_u64;
+    for key in &minute.key_counts {
+        if key.scan_code > 0x1ff
+            || key.count == 0
+            || !seen.insert((key.scan_code, key.keyboard_layout))
+        {
             return Err(IpcError::InvalidMessage(
-                "window transition kind is unspecified".to_owned(),
+                "input minute physical key counts are invalid".to_owned(),
             ));
         }
-        let window = transition.window.as_ref().ok_or_else(|| {
-            IpcError::InvalidMessage("window transition facts are missing".to_owned())
-        })?;
-        validate_window(window)?;
+        keyboard_total = keyboard_total
+            .checked_add(u64::from(key.count))
+            .ok_or_else(|| IpcError::InvalidMessage("input count overflow".to_owned()))?;
+    }
+    if keyboard_total != u64::from(minute.keyboard_count)
+        || minute
+            .keyboard_count
+            .saturating_add(minute.left_click_count)
+            .saturating_add(minute.middle_click_count)
+            .saturating_add(minute.right_click_count)
+            == 0
+    {
+        return Err(IpcError::InvalidMessage(
+            "input minute totals are inconsistent".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+fn valid_local_date(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    bytes.len() == 10
+        && bytes[4] == b'-'
+        && bytes[7] == b'-'
+        && bytes
+            .iter()
+            .enumerate()
+            .all(|(index, byte)| matches!(index, 4 | 7) || byte.is_ascii_digit())
+}
+
+fn validate_window_transition(transition: &WindowTransition) -> Result<()> {
+    let kind = WindowTransitionKind::try_from(transition.kind)
+        .map_err(|_| IpcError::InvalidMessage("window transition kind is invalid".to_owned()))?;
+    if kind == WindowTransitionKind::Unspecified {
+        return Err(IpcError::InvalidMessage(
+            "window transition kind is unspecified".to_owned(),
+        ));
+    }
+    let window = transition.window.as_ref().ok_or_else(|| {
+        IpcError::InvalidMessage("window transition facts are missing".to_owned())
+    })?;
+    validate_window(window)
+}
+
+fn validate_monitoring_gap(gap: &MonitoringGap, ended_at_utc_ms: i64) -> Result<()> {
+    if gap.started_at_utc_ms <= 0 || gap.started_at_utc_ms > ended_at_utc_ms {
+        return Err(IpcError::InvalidMessage(
+            "monitoring gap range is invalid".to_owned(),
+        ));
+    }
+    let reason = MonitoringGapReason::try_from(gap.reason)
+        .map_err(|_| IpcError::InvalidMessage("monitoring gap reason is invalid".to_owned()))?;
+    if reason == MonitoringGapReason::Unspecified {
+        return Err(IpcError::InvalidMessage(
+            "monitoring gap reason is unspecified".to_owned(),
+        ));
     }
     Ok(())
 }
@@ -473,6 +661,93 @@ mod tests {
         let decoded = read_frame(&mut bytes.as_slice()).unwrap();
 
         assert_eq!(decoded, message);
+    }
+
+    #[test]
+    fn round_trips_and_validates_a_monitoring_gap() {
+        let mut batch = valid_batch();
+        batch.events[0].body = Some(collector_event::Body::MonitoringGap(MonitoringGap {
+            started_at_utc_ms: 1_699_999_999_000,
+            reason: MonitoringGapReason::BufferOverflow as i32,
+        }));
+        let message = Envelope::new(envelope::Body::EventBatch(batch.clone()));
+        let mut bytes = Vec::new();
+        write_frame(&mut bytes, &message).unwrap();
+        assert_eq!(read_frame(&mut bytes.as_slice()).unwrap(), message);
+
+        let Some(collector_event::Body::MonitoringGap(gap)) = batch.events[0].body.as_mut() else {
+            unreachable!()
+        };
+        gap.started_at_utc_ms = 1_800_000_000_000;
+        let error = write_frame(
+            &mut Vec::new(),
+            &Envelope::new(envelope::Body::EventBatch(batch)),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("gap range"));
+    }
+
+    #[test]
+    fn round_trips_and_validates_an_input_minute() {
+        let mut batch = valid_batch();
+        batch.events[0].observed_at_utc_ms = 1_700_000_040_000;
+        batch.events[0].body = Some(collector_event::Body::InputMinute(InputMinute {
+            minute_started_at_utc_ms: 1_699_999_980_000,
+            timezone_offset_minutes: 480,
+            local_date: "2023-11-15".to_owned(),
+            focused_application_identity: Some("path:c:\\apps\\sample.exe".to_owned()),
+            keyboard_count: 2,
+            left_click_count: 1,
+            middle_click_count: 0,
+            right_click_count: 0,
+            key_counts: vec![PhysicalKeyCount {
+                scan_code: 0x1e,
+                keyboard_layout: 0x0804_0804,
+                count: 2,
+            }],
+        }));
+        let message = Envelope::new(envelope::Body::EventBatch(batch.clone()));
+        let mut bytes = Vec::new();
+        write_frame(&mut bytes, &message).unwrap();
+        assert_eq!(read_frame(&mut bytes.as_slice()).unwrap(), message);
+
+        let Some(collector_event::Body::InputMinute(minute)) = batch.events[0].body.as_mut() else {
+            unreachable!()
+        };
+        minute.keyboard_count = 3;
+        let error = write_frame(
+            &mut Vec::new(),
+            &Envelope::new(envelope::Body::EventBatch(batch)),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("totals"));
+    }
+
+    #[test]
+    fn round_trips_and_validates_a_tray_transition() {
+        let mut batch = valid_batch();
+        batch.events[0].body = Some(collector_event::Body::TrayTransition(TrayTransition {
+            kind: TrayTransitionKind::Started as i32,
+            application_identity: "path:c:\\apps\\sample.exe".to_owned(),
+            process_id: 200,
+            process_started_at_100ns: 300,
+        }));
+        let message = Envelope::new(envelope::Body::EventBatch(batch.clone()));
+        let mut bytes = Vec::new();
+        write_frame(&mut bytes, &message).unwrap();
+        assert_eq!(read_frame(&mut bytes.as_slice()).unwrap(), message);
+
+        let Some(collector_event::Body::TrayTransition(transition)) = batch.events[0].body.as_mut()
+        else {
+            unreachable!()
+        };
+        transition.process_id = 0;
+        let error = write_frame(
+            &mut Vec::new(),
+            &Envelope::new(envelope::Body::EventBatch(batch)),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("tray transition facts"));
     }
 
     #[test]
