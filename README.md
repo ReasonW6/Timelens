@@ -2,7 +2,7 @@
 
 Timelens 是一款面向 Windows 11 的轻量级、本地优先活动观察应用，用时间轴记录应用窗口状态、输入设备统计和定时快照，并支持由用户自备 API 密钥的 AI 总结。
 
-> 当前状态：里程碑 1 已完成，并在 Windows 11 宿主机通过全新默认路径与自选固定磁盘路径的安装、权限、握手和卸载验收；虚拟机验收不作为当前门禁。开发进入里程碑 2。
+> 当前状态：里程碑 1 已完成，并在 Windows 11 宿主机通过全新默认路径与自选固定磁盘路径的安装、权限、握手和卸载验收；虚拟机验收不作为当前门禁。里程碑 2 已开始接入窗口观测。
 
 ## V1 原则
 
@@ -26,6 +26,7 @@ Timelens 是一款面向 Windows 11 的轻量级、本地优先活动观察应�
 - `crates/timelens-app`：普通权限 Slint 核心、单写入者与本地数据目录。
 - `crates/timelens-collector`：窄职责采集器；不链接数据库、UI 或网络能力。
 - `crates/timelens-ipc`：版本化、限长的 Protobuf 协议和 Windows 命名管道认证。
+- `crates/timelens-observer`：不读取标题的用户窗口分类、应用身份解析和虚拟桌面事实查询。
 - `crates/timelens-storage`：DPAPI 封装的数据密钥、SQLCipher、WAL 与可恢复迁移。
 - `installer`：Inno Setup 安装脚本和 Limited/Highest 登录任务注册脚本。
 
@@ -39,6 +40,7 @@ cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 cargo build --workspace --release
+cargo run -p timelens-collector -- --observe-windows-once
 ```
 
 安装包使用 Inno Setup 7 编译：
@@ -58,4 +60,4 @@ Core 与 Collector 只在校验同一用户、同一会话、Windows 返回的�
 
 ## 开发状态
 
-仓库保存已经锁定的领域模型、完整 Wayfinder 决策链和架构决策。当前只实施决策地图中的里程碑 1；窗口枚举、输入统计、时间轴和快照属于后续里程碑，尚未提前引入。
+仓库保存已经锁定的领域模型、完整 Wayfinder 决策链和架构决策。里程碑 1 已发布；里程碑 2 的首个切片已经实现 `EnumWindows` 对账、三层用户窗口分类、AUMID/包身份/路径降级和一次性真实桌面验收。WinEvent 增量、断线缓冲、时间区间持久化、输入统计与时间轴仍按后续切片接入。

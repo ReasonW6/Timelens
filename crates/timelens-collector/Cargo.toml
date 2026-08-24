@@ -13,6 +13,7 @@ path = "src/main.rs"
 [dependencies]
 anyhow.workspace = true
 timelens-ipc = { path = "../timelens-ipc" }
+timelens-observer = { path = "../timelens-observer" }
 
 [build-dependencies]
 embed-resource.workspace = true
