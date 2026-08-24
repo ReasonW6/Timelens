@@ -1,0 +1,16 @@
+[package]
+name = "timelens-storage"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+hex.workspace = true
+rusqlite.workspace = true
+thiserror.workspace = true
+windows-sys.workspace = true
+zeroize.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

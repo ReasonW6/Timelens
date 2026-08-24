@@ -32,7 +32,7 @@ Canonical path: docs/wayfinder/timelens-v1/map.md
 - [定义应用归组与托盘会话连续性](issues/05-define-application-grouping-and-tray-continuity.md)：应用按明确 Windows 身份或路径保守归组，用户可合并历史；窗口实例仅含可独立切换的顶层窗口，托盘延续只跟随原主应用而不猜跨进程移交。
 - [定义快照与窗口状态的边界](issues/11-define-snapshot-state-boundaries.md)：快照以固定时间槽静默截取活动屏或逐屏截取；系统状态与独立截图排除名单决定缺失，图片仅可经逐张预览后的单次授权进入手动 AI 总结。
 - [构建同功能架构样机并统一测量](issues/14-build-comparable-architecture-spikes.md)：V1 应用与 UI 基础确定为 Rust + windows-rs + Slint；本机三次交错 60 秒运行中，它是唯一同时满足 100 MB 峰值工作集和 20 MB 安装包目标的候选。三项 WPR 跟踪的状态、字节数和 SHA-256 已保留，体积巨大的 ETL 原文件未进入 Git。
-- [选择采集器、界面与存储架构](issues/06-choose-collector-ui-storage-architecture.md)：普通 Slint 核心独占 SQLite 和 UI，提权采集器以有界缓冲经受限命名管道送入事实记录，离线提权更新代理在首次安装后实现无 UAC 的签名更新。
+- [选择采集器、界面与存储架构](issues/06-choose-collector-ui-storage-architecture.md)：普通 Slint 核心独占 SQLite 和 UI，提权采集器以有界缓冲经受限命名管道送入事实记录；无代码签名时不安装提权更新代理，每次升级由用户主动运行安装器并授权。
 - [原型验证堆叠卡片时间轴与中键截取](issues/07-prototype-stacked-timeline.md)：V1 锁定顶部区间时间轴、左侧时段应用和中间应用状态详情的信息架构；正式 Slint UI 另做视觉设计，不照搬原型外观。
 - [定义数据、清理与隐私合同](issues/08-define-data-retention-and-privacy-contract.md)：本地加密权威事实、持久化报告、独立排除名单、匿名永久总数、可见缺失、自动清理、便携备份及无静默丢失的迁移恢复边界均已锁定。
 - [定义 AI 总结任务合同](issues/09-define-ai-summary-job-contract.md)：多供应商与可选模型、每日/间隔/手动调度、本地分支对话、可编辑提示词、流式推理展示、重试版本和快照能力边界均已锁定。

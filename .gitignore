@@ -1,5 +1,6 @@
 # Local planning, prototypes, benchmarks, and captured evidence
 .scratch/
+.tools/
 
 # Rust build output
 target/

@@ -1,0 +1,11 @@
+[package]
+name = "timelens-ipc"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+prost.workspace = true
+thiserror.workspace = true
+windows-sys.workspace = true
