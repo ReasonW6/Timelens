@@ -6,9 +6,12 @@ rust-version.workspace = true
 publish.workspace = true
 
 [dependencies]
+crc32fast.workspace = true
 hex.workspace = true
+prost.workspace = true
 rusqlite.workspace = true
 thiserror.workspace = true
+timelens-ipc = { path = "../timelens-ipc" }
 windows-sys.workspace = true
 zeroize.workspace = true
 

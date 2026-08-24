@@ -42,8 +42,8 @@ use windows_sys::Win32::{
 };
 
 use crate::{
-    Ack, ClientHello, Envelope, HandshakeComplete, Heartbeat, IpcError, MAX_FRAME_BYTES,
-    NONCE_BYTES, Result, ServerHello, envelope, protocol,
+    Ack, COLLECTOR_RUN_ID_BYTES, ClientHello, Envelope, EventBatch, HandshakeComplete, Heartbeat,
+    IpcError, MAX_FRAME_BYTES, NONCE_BYTES, Result, ServerHello, envelope, protocol,
 };
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
@@ -88,10 +88,138 @@ impl SingleInstanceGuard {
 pub fn current_pipe_name() -> Result<String> {
     let sid = current_user_sid()?;
     let session = current_session_id()?;
-    Ok(format!(r"\\.\pipe\Timelens.{sid}.{session}.collector.v1"))
+    Ok(format!(r"\\.\pipe\Timelens.{sid}.{session}.collector.v2"))
 }
 
 pub fn run_server_probe(pipe_name: &str, expected_peer_names: &[&str]) -> Result<HandshakeReport> {
+    let (mut pipe, report) = accept_authenticated_server(pipe_name, expected_peer_names)?;
+    let heartbeat = protocol::read_frame(&mut pipe)?;
+    let sequence = match heartbeat.body {
+        Some(envelope::Body::Heartbeat(Heartbeat { sequence, .. })) => sequence,
+        _ => {
+            return Err(IpcError::InvalidMessage(
+                "the first post-handshake message must be Heartbeat".to_owned(),
+            ));
+        }
+    };
+    protocol::write_frame(
+        &mut pipe,
+        &Envelope::new(envelope::Body::Ack(Ack {
+            through_sequence: sequence,
+            accepted: true,
+        })),
+    )?;
+    Ok(report)
+}
+
+pub fn run_client_probe(pipe_name: &str, expected_peer_names: &[&str]) -> Result<HandshakeReport> {
+    let (mut pipe, report) = connect_authenticated_client(pipe_name, expected_peer_names)?;
+    protocol::write_frame(
+        &mut pipe,
+        &Envelope::new(envelope::Body::Heartbeat(Heartbeat {
+            sequence: 1,
+            sent_at_unix_ms: unix_time_ms(),
+        })),
+    )?;
+    let ack = protocol::read_frame(&mut pipe)?;
+    match ack.body {
+        Some(envelope::Body::Ack(Ack {
+            through_sequence: 1,
+            accepted: true,
+        })) => Ok(report),
+        _ => Err(IpcError::InvalidMessage(
+            "server did not acknowledge the heartbeat".to_owned(),
+        )),
+    }
+}
+
+pub fn run_server_collector_message<F, E>(
+    pipe_name: &str,
+    expected_peer_names: &[&str],
+    persist: F,
+) -> Result<HandshakeReport>
+where
+    F: FnOnce(&EventBatch) -> std::result::Result<(), E>,
+    E: std::fmt::Display,
+{
+    let (mut pipe, report) = accept_authenticated_server(pipe_name, expected_peer_names)?;
+    let message = protocol::read_frame(&mut pipe)?;
+    let batch = match message.body {
+        Some(envelope::Body::Heartbeat(Heartbeat { sequence, .. })) => {
+            protocol::write_frame(
+                &mut pipe,
+                &Envelope::new(envelope::Body::Ack(Ack {
+                    through_sequence: sequence,
+                    accepted: true,
+                })),
+            )?;
+            return Ok(report);
+        }
+        Some(envelope::Body::EventBatch(batch)) => batch,
+        _ => {
+            return Err(IpcError::InvalidMessage(
+                "the first post-handshake message must be Heartbeat or EventBatch".to_owned(),
+            ));
+        }
+    };
+    let through_sequence = batch.last_sequence()?;
+    if let Err(error) = persist(&batch) {
+        protocol::write_frame(
+            &mut pipe,
+            &Envelope::new(envelope::Body::Ack(Ack {
+                through_sequence,
+                accepted: false,
+            })),
+        )?;
+        return Err(IpcError::BatchRejected(error.to_string()));
+    }
+    protocol::write_frame(
+        &mut pipe,
+        &Envelope::new(envelope::Body::Ack(Ack {
+            through_sequence,
+            accepted: true,
+        })),
+    )?;
+    Ok(report)
+}
+
+pub fn run_client_event_batch(
+    pipe_name: &str,
+    expected_peer_names: &[&str],
+    batch: &EventBatch,
+) -> Result<HandshakeReport> {
+    let (mut pipe, report) = connect_authenticated_client(pipe_name, expected_peer_names)?;
+    let through_sequence = batch.last_sequence()?;
+    protocol::write_frame(
+        &mut pipe,
+        &Envelope::new(envelope::Body::EventBatch(batch.clone())),
+    )?;
+    let ack = protocol::read_frame(&mut pipe)?;
+    match ack.body {
+        Some(envelope::Body::Ack(Ack {
+            through_sequence: acknowledged,
+            accepted: true,
+        })) if acknowledged == through_sequence => Ok(report),
+        Some(envelope::Body::Ack(Ack {
+            through_sequence: acknowledged,
+            accepted: false,
+        })) if acknowledged == through_sequence => Err(IpcError::BatchRejected(
+            "the Timelens core did not persist the batch".to_owned(),
+        )),
+        _ => Err(IpcError::InvalidMessage(
+            "server did not acknowledge the event batch sequence".to_owned(),
+        )),
+    }
+}
+
+pub fn new_collector_run_id() -> Result<Vec<u8>> {
+    random_bytes(COLLECTOR_RUN_ID_BYTES)
+}
+
+fn accept_authenticated_server(
+    pipe_name: &str,
+    expected_peer_names: &[&str],
+) -> Result<(OwnedHandle, HandshakeReport)> {
     validate_pipe_name(pipe_name)?;
     let mut pipe = create_server_pipe(pipe_name)?;
     connect_server(&pipe)?;
@@ -115,46 +243,30 @@ pub fn run_server_probe(pipe_name: &str, expected_peer_names: &[&str]) -> Result
 
     let report = verify_peer(peer_process_id, client.session_id, expected_peer_names)?;
     let server_nonce = random_nonce()?;
-    let server_hello = Envelope::new(envelope::Body::ServerHello(ServerHello {
-        process_id: unsafe { GetCurrentProcessId() },
-        session_id: current_session_id()?,
-        client_nonce: client.nonce,
-        server_nonce: server_nonce.clone(),
-    }));
-    protocol::write_frame(&mut pipe, &server_hello)?;
-
+    protocol::write_frame(
+        &mut pipe,
+        &Envelope::new(envelope::Body::ServerHello(ServerHello {
+            process_id: unsafe { GetCurrentProcessId() },
+            session_id: current_session_id()?,
+            client_nonce: client.nonce,
+            server_nonce: server_nonce.clone(),
+        })),
+    )?;
     let completed = protocol::read_frame(&mut pipe)?;
     match completed.body {
         Some(envelope::Body::HandshakeComplete(HandshakeComplete {
             server_nonce: echoed_nonce,
-        })) if echoed_nonce == server_nonce => {}
-        _ => {
-            return Err(IpcError::PeerAuthentication(
-                "client did not return the server nonce".to_owned(),
-            ));
-        }
+        })) if echoed_nonce == server_nonce => Ok((pipe, report)),
+        _ => Err(IpcError::PeerAuthentication(
+            "client did not return the server nonce".to_owned(),
+        )),
     }
-
-    let heartbeat = protocol::read_frame(&mut pipe)?;
-    let sequence = match heartbeat.body {
-        Some(envelope::Body::Heartbeat(Heartbeat { sequence, .. })) => sequence,
-        _ => {
-            return Err(IpcError::InvalidMessage(
-                "the first post-handshake message must be Heartbeat".to_owned(),
-            ));
-        }
-    };
-    protocol::write_frame(
-        &mut pipe,
-        &Envelope::new(envelope::Body::Ack(Ack {
-            through_sequence: sequence,
-            accepted: true,
-        })),
-    )?;
-    Ok(report)
 }
 
-pub fn run_client_probe(pipe_name: &str, expected_peer_names: &[&str]) -> Result<HandshakeReport> {
+fn connect_authenticated_client(
+    pipe_name: &str,
+    expected_peer_names: &[&str],
+) -> Result<(OwnedHandle, HandshakeReport)> {
     validate_pipe_name(pipe_name)?;
     let mut pipe = connect_client(pipe_name)?;
     let peer_process_id = named_pipe_server_process_id(&pipe)?;
@@ -167,7 +279,6 @@ pub fn run_client_probe(pipe_name: &str, expected_peer_names: &[&str]) -> Result
             nonce: nonce.clone(),
         })),
     )?;
-
     let server = protocol::read_frame(&mut pipe)?;
     let server = match server.body {
         Some(envelope::Body::ServerHello(server)) => server,
@@ -188,7 +299,6 @@ pub fn run_client_probe(pipe_name: &str, expected_peer_names: &[&str]) -> Result
             "server did not return the client nonce".to_owned(),
         ));
     }
-
     let report = verify_peer(peer_process_id, server.session_id, expected_peer_names)?;
     protocol::write_frame(
         &mut pipe,
@@ -196,23 +306,7 @@ pub fn run_client_probe(pipe_name: &str, expected_peer_names: &[&str]) -> Result
             server_nonce: server.server_nonce,
         })),
     )?;
-    protocol::write_frame(
-        &mut pipe,
-        &Envelope::new(envelope::Body::Heartbeat(Heartbeat {
-            sequence: 1,
-            sent_at_unix_ms: unix_time_ms(),
-        })),
-    )?;
-    let ack = protocol::read_frame(&mut pipe)?;
-    match ack.body {
-        Some(envelope::Body::Ack(Ack {
-            through_sequence: 1,
-            accepted: true,
-        })) => Ok(report),
-        _ => Err(IpcError::InvalidMessage(
-            "server did not acknowledge the heartbeat".to_owned(),
-        )),
-    }
+    Ok((pipe, report))
 }
 
 fn create_server_pipe(pipe_name: &str) -> Result<OwnedHandle> {
@@ -447,19 +541,23 @@ fn open_process(process_id: u32) -> Result<OwnedHandle> {
 }
 
 fn random_nonce() -> Result<Vec<u8>> {
-    let mut nonce = vec![0_u8; NONCE_BYTES];
+    random_bytes(NONCE_BYTES)
+}
+
+fn random_bytes(length: usize) -> Result<Vec<u8>> {
+    let mut bytes = vec![0_u8; length];
     let status = unsafe {
         BCryptGenRandom(
             null_mut(),
-            nonce.as_mut_ptr(),
-            nonce.len() as u32,
+            bytes.as_mut_ptr(),
+            bytes.len() as u32,
             BCRYPT_USE_SYSTEM_PREFERRED_RNG,
         )
     };
     if status < 0 {
         return Err(IpcError::Io(io::Error::from_raw_os_error(status)));
     }
-    Ok(nonce)
+    Ok(bytes)
 }
 
 fn unix_time_ms() -> i64 {
@@ -563,23 +661,63 @@ mod tests {
     use std::sync::atomic::{AtomicU32, Ordering};
 
     use super::*;
+    use crate::{
+        CollectorEvent, IdentitySource, WindowObservation, WindowTransition, WindowTransitionKind,
+        collector_event,
+    };
 
     static PIPE_COUNTER: AtomicU32 = AtomicU32::new(1);
 
-    #[test]
-    fn named_pipe_probe_authenticates_and_acknowledges() {
-        let current_exe = std::env::current_exe().unwrap();
-        let current_name = current_exe
+    fn current_executable_name() -> String {
+        std::env::current_exe()
+            .unwrap()
             .file_name()
             .unwrap()
             .to_str()
             .unwrap()
-            .to_owned();
-        let pipe_name = format!(
+            .to_owned()
+    }
+
+    fn test_pipe_name() -> String {
+        format!(
             r"\\.\pipe\Timelens.test.{}.{}",
             unsafe { GetCurrentProcessId() },
             PIPE_COUNTER.fetch_add(1, Ordering::Relaxed)
-        );
+        )
+    }
+
+    fn test_batch() -> EventBatch {
+        EventBatch {
+            collector_run_id: vec![9; COLLECTOR_RUN_ID_BYTES],
+            first_sequence: 1,
+            events: vec![CollectorEvent {
+                observed_at_utc_ms: 1_700_000_000_000,
+                monotonic_ms: 10,
+                body: Some(collector_event::Body::WindowTransition(WindowTransition {
+                    kind: WindowTransitionKind::Opened as i32,
+                    window: Some(WindowObservation {
+                        window_id: 1,
+                        process_id: unsafe { GetCurrentProcessId() },
+                        process_started_at_100ns: 2,
+                        application_identity: "path:c:\\timelens-test.exe".to_owned(),
+                        identity_source: IdentitySource::ExecutablePath as i32,
+                        executable_path: Some(r"C:\timelens-test.exe".to_owned()),
+                        app_user_model_id: None,
+                        package_identity: None,
+                        displayed: true,
+                        focused: false,
+                        on_current_virtual_desktop: Some(true),
+                        virtual_desktop_id: Some("desktop".to_owned()),
+                    }),
+                })),
+            }],
+        }
+    }
+
+    #[test]
+    fn named_pipe_probe_authenticates_and_acknowledges() {
+        let current_name = current_executable_name();
+        let pipe_name = test_pipe_name();
         let server_pipe = pipe_name.clone();
         let server_name = current_name.clone();
         let server = thread::spawn(move || run_server_probe(&server_pipe, &[server_name.as_str()]));
@@ -590,6 +728,76 @@ mod tests {
         assert_eq!(client.peer_process_id, unsafe { GetCurrentProcessId() });
         assert_eq!(server.peer_process_id, unsafe { GetCurrentProcessId() });
         assert_eq!(client.verification, PeerVerification::ProtectedSiblingPath);
+    }
+
+    #[test]
+    fn collector_server_accepts_an_idle_heartbeat() {
+        let current_name = current_executable_name();
+        let pipe_name = test_pipe_name();
+        let server_pipe = pipe_name.clone();
+        let server_name = current_name.clone();
+        let server = thread::spawn(move || {
+            run_server_collector_message(
+                &server_pipe,
+                &[server_name.as_str()],
+                |_| -> std::result::Result<(), &'static str> {
+                    panic!("a heartbeat must not invoke event persistence")
+                },
+            )
+        });
+
+        run_client_probe(&pipe_name, &[current_name.as_str()]).unwrap();
+        server.join().unwrap().unwrap();
+    }
+
+    #[test]
+    fn authenticated_event_batch_is_acknowledged_after_persistence() {
+        let current_name = current_executable_name();
+        let pipe_name = test_pipe_name();
+        let server_pipe = pipe_name.clone();
+        let server_name = current_name.clone();
+        let server = thread::spawn(move || {
+            run_server_collector_message(&server_pipe, &[server_name.as_str()], |batch| {
+                assert_eq!(batch.first_sequence, 1);
+                Ok::<_, &'static str>(())
+            })
+        });
+
+        let client =
+            run_client_event_batch(&pipe_name, &[current_name.as_str()], &test_batch()).unwrap();
+        let server = server.join().unwrap().unwrap();
+
+        assert_eq!(client.peer_process_id, unsafe { GetCurrentProcessId() });
+        assert_eq!(server.peer_process_id, unsafe { GetCurrentProcessId() });
+    }
+
+    #[test]
+    fn rejected_event_batch_is_not_acknowledged_as_accepted() {
+        let current_name = current_executable_name();
+        let pipe_name = test_pipe_name();
+        let server_pipe = pipe_name.clone();
+        let server_name = current_name.clone();
+        let server = thread::spawn(move || {
+            run_server_collector_message(&server_pipe, &[server_name.as_str()], |_| {
+                Err::<(), _>("storage unavailable")
+            })
+        });
+
+        let client_error =
+            run_client_event_batch(&pipe_name, &[current_name.as_str()], &test_batch())
+                .unwrap_err();
+        let server_error = server.join().unwrap().unwrap_err();
+
+        assert!(client_error.to_string().contains("did not persist"));
+        assert!(server_error.to_string().contains("storage unavailable"));
+    }
+
+    #[test]
+    fn collector_run_ids_use_the_fixed_random_length() {
+        let first = new_collector_run_id().unwrap();
+        let second = new_collector_run_id().unwrap();
+        assert_eq!(first.len(), COLLECTOR_RUN_ID_BYTES);
+        assert_ne!(first, second);
     }
 
     #[test]

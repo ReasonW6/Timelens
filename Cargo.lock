@@ -3998,10 +3998,13 @@ dependencies = [
 name = "timelens-storage"
 version = "0.1.0"
 dependencies = [
+ "crc32fast",
  "hex",
+ "prost",
  "rusqlite",
  "tempfile",
  "thiserror 2.0.20",
+ "timelens-ipc",
  "windows-sys 0.61.2",
  "zeroize",
 ]

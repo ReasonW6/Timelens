@@ -1,11 +1,14 @@
 #![cfg(windows)]
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use std::{env, path::PathBuf, rc::Rc, sync::mpsc, thread, time::Duration};
+use std::{env, path::PathBuf, sync::mpsc, thread, time::Duration};
 
 use anyhow::{Context, Result, bail};
 use slint::{Timer, TimerMode};
-use timelens_ipc::{PROTOCOL_VERSION, SingleInstanceGuard, current_pipe_name, run_server_probe};
+use timelens_ipc::{
+    PROTOCOL_VERSION, SingleInstanceGuard, current_pipe_name, run_server_collector_message,
+    run_server_probe,
+};
 use timelens_storage::Storage;
 
 const COLLECTOR_NAMES: &[&str] = &["timelens-collector.exe", "Timelens.Collector.exe"];
@@ -32,7 +35,7 @@ slint::slint! {
                 font-weight: 700;
             }
             Text {
-                text: "里程碑 1 · 基础与权限边界";
+                text: "里程碑 2 · 首个可运行闭环";
                 color: #8fa4bd;
                 font-size: 15px;
             }
@@ -65,7 +68,7 @@ slint::slint! {
                 overflow: elide;
             }
             Text {
-                text: "窗口追踪与输入统计将在里程碑 2 接入。";
+                text: "窗口状态已写入加密存储；时间轴与输入统计继续开发中。";
                 color: #738399;
                 font-size: 12px;
             }
@@ -107,7 +110,9 @@ fn main() -> Result<()> {
 
 fn run_background(storage: Storage, pipe_name: String) -> Result<()> {
     loop {
-        match run_server_probe(&pipe_name, COLLECTOR_NAMES) {
+        match run_server_collector_message(&pipe_name, COLLECTOR_NAMES, |batch| {
+            storage.ingest_event_batch(batch).map(|_| ())
+        }) {
             Ok(report) => storage.record_component_health(
                 "collector",
                 PROTOCOL_VERSION,
@@ -123,33 +128,39 @@ fn run_background(storage: Storage, pipe_name: String) -> Result<()> {
 
 fn run_window(storage: Storage, data_directory: PathBuf, pipe_name: String) -> Result<()> {
     enum Status {
-        Connected(u32, String),
+        Connected(String),
         Failed(String),
     }
 
     let window = AppWindow::new()?;
-    window.set_storage_status(
-        format!(
-            "SQLCipher {} · schema v{}",
-            storage.cipher_version(),
-            storage.schema_version()?
-        )
-        .into(),
+    let storage_status = format!(
+        "SQLCipher {} · schema v{}",
+        storage.cipher_version(),
+        storage.schema_version()?
     );
-    window.set_collector_status("等待受信采集器握手…".into());
+    window.set_storage_status(storage_status.into());
+    window.set_collector_status("等待受信采集器事件…".into());
     window.set_data_path(data_directory.display().to_string().into());
 
     let (sender, receiver) = mpsc::channel();
     thread::spawn(move || {
         loop {
-            let status = match run_server_probe(&pipe_name, COLLECTOR_NAMES) {
-                Ok(report) => Status::Connected(
-                    report.peer_process_id,
-                    format!(
-                        "已验证采集器 · PID {} · {:?}",
-                        report.peer_process_id, report.verification
-                    ),
-                ),
+            let status = match run_server_collector_message(&pipe_name, COLLECTOR_NAMES, |batch| {
+                storage.ingest_event_batch(batch).map(|_| ())
+            }) {
+                Ok(report) => {
+                    match storage.record_component_health(
+                        "collector",
+                        PROTOCOL_VERSION,
+                        Some(report.peer_process_id),
+                    ) {
+                        Ok(()) => Status::Connected(format!(
+                            "已验证采集器 · PID {} · {:?}",
+                            report.peer_process_id, report.verification
+                        )),
+                        Err(error) => Status::Failed(format!("数据库状态写入失败：{error}")),
+                    }
+                }
                 Err(error) => Status::Failed(error.to_string()),
             };
             if sender.send(status).is_err() {
@@ -159,7 +170,6 @@ fn run_window(storage: Storage, data_directory: PathBuf, pipe_name: String) -> R
         }
     });
 
-    let storage = Rc::new(storage);
     let weak = window.as_weak();
     let timer = Timer::default();
     timer.start(TimerMode::Repeated, Duration::from_millis(200), move || {
@@ -168,17 +178,7 @@ fn run_window(storage: Storage, data_directory: PathBuf, pipe_name: String) -> R
         };
         while let Ok(status) = receiver.try_recv() {
             match status {
-                Status::Connected(process_id, message) => {
-                    if let Err(error) = storage.record_component_health(
-                        "collector",
-                        PROTOCOL_VERSION,
-                        Some(process_id),
-                    ) {
-                        window.set_collector_status(format!("数据库状态写入失败：{error}").into());
-                    } else {
-                        window.set_collector_status(message.into());
-                    }
-                }
+                Status::Connected(message) => window.set_collector_status(message.into()),
                 Status::Failed(error) => {
                     window.set_collector_status(format!("握手失败：{error}").into());
                 }

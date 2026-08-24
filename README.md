@@ -41,6 +41,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 cargo build --workspace --release
 cargo run -p timelens-collector -- --observe-windows-once
+cargo run -p timelens-collector -- --observe-window-events-seconds 10
 ```
 
 安装包使用 Inno Setup 7 编译：
@@ -60,4 +61,4 @@ Core 与 Collector 只在校验同一用户、同一会话、Windows 返回的�
 
 ## 开发状态
 
-仓库保存已经锁定的领域模型、完整 Wayfinder 决策链和架构决策。里程碑 1 已发布；里程碑 2 的首个切片已经实现 `EnumWindows` 对账、三层用户窗口分类、AUMID/包身份/路径降级和一次性真实桌面验收。WinEvent 增量、断线缓冲、时间区间持久化、输入统计与时间轴仍按后续切片接入。
+仓库保存已经锁定的领域模型、完整 Wayfinder 决策链和架构决策。里程碑 1 已发布；里程碑 2 已实现 `EnumWindows` 对账、三层用户窗口分类、AUMID/包身份/路径降级、WinEvent 增量触发，以及经认证命名管道 ACK 后写入 SQLCipher 的幂等窗口实例与状态区间。32 MiB 持久断线缓冲、托盘连续性、输入统计与时间轴仍按后续切片接入。

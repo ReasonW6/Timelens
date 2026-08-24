@@ -4,6 +4,8 @@ use std::{
     collections::{HashMap, HashSet},
     marker::PhantomData,
     rc::Rc,
+    sync::atomic::{AtomicBool, Ordering},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use windows::{
@@ -26,12 +28,18 @@ use windows::{
             },
         },
         UI::{
+            Accessibility::{HWINEVENTHOOK, SetWinEventHook, UnhookWinEvent},
             Shell::PropertiesSystem::{IPropertyStore, SHGetPropertyStoreForWindow},
             Shell::{IVirtualDesktopManager, VirtualDesktopManager},
             WindowsAndMessaging::{
-                EnumWindows, GA_ROOT, GW_OWNER, GWL_EXSTYLE, GetAncestor, GetForegroundWindow,
-                GetWindow, GetWindowLongPtrW, GetWindowRect, GetWindowThreadProcessId, IsIconic,
-                IsWindow, IsWindowVisible, WS_EX_APPWINDOW, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
+                CHILDID_SELF, DispatchMessageW, EVENT_OBJECT_CLOAKED, EVENT_OBJECT_CREATE,
+                EVENT_OBJECT_HIDE, EVENT_OBJECT_UNCLOAKED, EVENT_SYSTEM_FOREGROUND,
+                EVENT_SYSTEM_MINIMIZEEND, EVENT_SYSTEM_MINIMIZESTART, EnumWindows, GA_ROOT,
+                GW_OWNER, GWL_EXSTYLE, GetAncestor, GetForegroundWindow, GetWindow,
+                GetWindowLongPtrW, GetWindowRect, GetWindowThreadProcessId, IsIconic, IsWindow,
+                IsWindowVisible, MSG, MWMO_INPUTAVAILABLE, MsgWaitForMultipleObjectsEx,
+                OBJID_WINDOW, PM_REMOVE, PeekMessageW, QS_ALLINPUT, TranslateMessage,
+                WINEVENT_OUTOFCONTEXT, WS_EX_APPWINDOW, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
             },
         },
     },
@@ -42,6 +50,7 @@ const APP_USER_MODEL_ID: PROPERTYKEY = PROPERTYKEY {
     fmtid: GUID::from_u128(0x9f4c2855_9f79_4b39_a8d0_e1d42de1d5f3),
     pid: 5,
 };
+static WINDOW_EVENT_PENDING: AtomicBool = AtomicBool::new(false);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
 pub enum IdentitySource {
@@ -67,6 +76,27 @@ pub struct WindowObservation {
     pub virtual_desktop_id: Option<String>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum WindowTransitionKind {
+    Opened,
+    Updated,
+    Closed,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct WindowTransition {
+    pub kind: WindowTransitionKind,
+    pub observed_at_utc_ms: i64,
+    pub monotonic_ms: u64,
+    pub window: WindowObservation,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ReconcileResult {
+    pub current: Vec<WindowObservation>,
+    pub transitions: Vec<WindowTransition>,
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum ObserverError {
     #[error("Windows window observation failed: {0}")]
@@ -78,6 +108,7 @@ pub type Result<T> = std::result::Result<T, ObserverError>;
 pub struct WindowObserver {
     virtual_desktop: Option<IVirtualDesktopManager>,
     tracked: HashMap<usize, TrackedWindow>,
+    started: Instant,
     // COM interfaces above must be released before this apartment guard.
     _com: ComApartment,
 }
@@ -90,16 +121,24 @@ impl WindowObserver {
         Ok(Self {
             virtual_desktop,
             tracked: HashMap::new(),
+            started: Instant::now(),
             _com: ComApartment(PhantomData),
         })
     }
 
     pub fn reconcile(&mut self) -> Result<Vec<WindowObservation>> {
+        Ok(self.reconcile_transitions()?.current)
+    }
+
+    pub fn reconcile_transitions(&mut self) -> Result<ReconcileResult> {
         let windows = enumerate_windows()?;
         let foreground = unsafe { GetForegroundWindow() };
+        let observed_at_utc_ms = unix_time_ms();
+        let monotonic_ms = self.started.elapsed().as_millis().min(u64::MAX as u128) as u64;
         let mut observed_handles = HashSet::new();
         let mut process_cache = HashMap::<u32, Option<ProcessInfo>>::new();
         let mut observations = Vec::new();
+        let mut transitions = Vec::new();
 
         for hwnd in windows {
             let handle = window_id(hwnd) as usize;
@@ -114,7 +153,13 @@ impl WindowObserver {
                 .get(&handle)
                 .is_some_and(|tracked| tracked.process_id != facts.process_id)
             {
-                self.tracked.remove(&handle);
+                close_tracked(
+                    &mut self.tracked,
+                    handle,
+                    observed_at_utc_ms,
+                    monotonic_ms,
+                    &mut transitions,
+                );
             }
 
             if !facts.onboarding_candidate && !self.tracked.contains_key(&handle) {
@@ -130,32 +175,145 @@ impl WindowObserver {
                 if self.tracked.get(&handle).is_some_and(|tracked| {
                     tracked.process_started_at_100ns != process.started_at_100ns
                 }) {
-                    self.tracked.remove(&handle);
+                    close_tracked(
+                        &mut self.tracked,
+                        handle,
+                        observed_at_utc_ms,
+                        monotonic_ms,
+                        &mut transitions,
+                    );
                 }
 
-                if facts.onboarding_candidate && !self.tracked.contains_key(&handle) {
-                    if let Some(identity) = resolve_identity(hwnd, process) {
-                        self.tracked.insert(
-                            handle,
-                            TrackedWindow::new(facts.process_id, process, identity),
-                        );
-                    }
-                } else if let Some(tracked) = self.tracked.get_mut(&handle)
+                if facts.onboarding_candidate
+                    && !self.tracked.contains_key(&handle)
                     && let Some(identity) = resolve_identity(hwnd, process)
                 {
-                    tracked.update_identity(process, identity);
+                    self.tracked.insert(
+                        handle,
+                        TrackedWindow::new(facts.process_id, process, identity),
+                    );
                 }
             }
 
-            if let Some(tracked) = self.tracked.get(&handle) {
-                observations.push(tracked.observation(handle as u64, &facts));
+            if let Some(tracked) = self.tracked.get_mut(&handle) {
+                let observation = tracked.observation(handle as u64, &facts);
+                if let Some(kind) = transition_kind(tracked.last_observation.as_ref(), &observation)
+                {
+                    transitions.push(WindowTransition {
+                        kind,
+                        observed_at_utc_ms,
+                        monotonic_ms,
+                        window: observation.clone(),
+                    });
+                }
+                tracked.last_observation = Some(observation.clone());
+                observations.push(observation);
             }
         }
 
-        self.tracked
-            .retain(|handle, _| observed_handles.contains(handle));
+        let closed = self
+            .tracked
+            .keys()
+            .filter(|handle| !observed_handles.contains(handle))
+            .copied()
+            .collect::<Vec<_>>();
+        for handle in closed {
+            close_tracked(
+                &mut self.tracked,
+                handle,
+                observed_at_utc_ms,
+                monotonic_ms,
+                &mut transitions,
+            );
+        }
         observations.sort_unstable_by_key(|observation| observation.window_id);
-        Ok(observations)
+        Ok(ReconcileResult {
+            current: observations,
+            transitions,
+        })
+    }
+}
+
+pub struct WinEventMonitor {
+    hooks: Vec<HWINEVENTHOOK>,
+    _not_send: PhantomData<Rc<()>>,
+}
+
+impl WinEventMonitor {
+    pub fn new() -> Result<Self> {
+        WINDOW_EVENT_PENDING.store(false, Ordering::Release);
+        let ranges = [
+            (EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_FOREGROUND),
+            (EVENT_SYSTEM_MINIMIZESTART, EVENT_SYSTEM_MINIMIZEEND),
+            (EVENT_OBJECT_CREATE, EVENT_OBJECT_HIDE),
+            (EVENT_OBJECT_CLOAKED, EVENT_OBJECT_UNCLOAKED),
+        ];
+        let mut hooks = Vec::with_capacity(ranges.len());
+        for (start, end) in ranges {
+            let hook = unsafe {
+                SetWinEventHook(
+                    start,
+                    end,
+                    None,
+                    Some(win_event_callback),
+                    0,
+                    0,
+                    WINEVENT_OUTOFCONTEXT,
+                )
+            };
+            if hook.is_invalid() {
+                return Err(windows::core::Error::from_thread().into());
+            }
+            hooks.push(hook);
+        }
+        Ok(Self {
+            hooks,
+            _not_send: PhantomData,
+        })
+    }
+
+    pub fn wait_for_change(&self, timeout: Duration) -> bool {
+        let timeout_ms = timeout.as_millis().min(u32::MAX as u128) as u32;
+        unsafe {
+            MsgWaitForMultipleObjectsEx(None, timeout_ms, QS_ALLINPUT, MWMO_INPUTAVAILABLE);
+        }
+        pump_messages();
+        WINDOW_EVENT_PENDING.swap(false, Ordering::AcqRel)
+    }
+}
+
+impl Drop for WinEventMonitor {
+    fn drop(&mut self) {
+        for hook in self.hooks.drain(..) {
+            let _ = unsafe { UnhookWinEvent(hook) };
+        }
+    }
+}
+
+unsafe extern "system" fn win_event_callback(
+    _hook: HWINEVENTHOOK,
+    event: u32,
+    _hwnd: HWND,
+    object_id: i32,
+    child_id: i32,
+    _thread_id: u32,
+    _event_time_ms: u32,
+) {
+    let object_event = (EVENT_OBJECT_CREATE..=EVENT_OBJECT_HIDE).contains(&event)
+        || (EVENT_OBJECT_CLOAKED..=EVENT_OBJECT_UNCLOAKED).contains(&event);
+    if object_event && (object_id != OBJID_WINDOW.0 || child_id != CHILDID_SELF as i32) {
+        return;
+    }
+    WINDOW_EVENT_PENDING.store(true, Ordering::Release);
+}
+
+fn pump_messages() {
+    let mut message = MSG::default();
+    unsafe {
+        while PeekMessageW(&mut message, None, 0, 0, PM_REMOVE).as_bool() {
+            let _ = TranslateMessage(&message);
+            DispatchMessageW(&message);
+        }
     }
 }
 
@@ -191,6 +349,7 @@ struct TrackedWindow {
     executable_path: Option<String>,
     app_user_model_id: Option<String>,
     package_identity: Option<String>,
+    last_observation: Option<WindowObservation>,
 }
 
 impl TrackedWindow {
@@ -203,16 +362,7 @@ impl TrackedWindow {
             executable_path: process.path.clone(),
             app_user_model_id: identity.app_user_model_id,
             package_identity: identity.package_identity,
-        }
-    }
-
-    fn update_identity(&mut self, process: &ProcessInfo, identity: ResolvedIdentity) {
-        self.executable_path.clone_from(&process.path);
-        if identity.source >= self.identity_source {
-            self.application_identity = identity.key;
-            self.identity_source = identity.source;
-            self.app_user_model_id = identity.app_user_model_id;
-            self.package_identity = identity.package_identity;
+            last_observation: None,
         }
     }
 
@@ -231,6 +381,36 @@ impl TrackedWindow {
             on_current_virtual_desktop: facts.on_current_virtual_desktop,
             virtual_desktop_id: facts.virtual_desktop_id.clone(),
         }
+    }
+}
+
+fn transition_kind(
+    previous: Option<&WindowObservation>,
+    current: &WindowObservation,
+) -> Option<WindowTransitionKind> {
+    match previous {
+        None => Some(WindowTransitionKind::Opened),
+        Some(previous) if previous != current => Some(WindowTransitionKind::Updated),
+        Some(_) => None,
+    }
+}
+
+fn close_tracked(
+    tracked: &mut HashMap<usize, TrackedWindow>,
+    handle: usize,
+    observed_at_utc_ms: i64,
+    monotonic_ms: u64,
+    transitions: &mut Vec<WindowTransition>,
+) {
+    if let Some(tracked) = tracked.remove(&handle)
+        && let Some(window) = tracked.last_observation
+    {
+        transitions.push(WindowTransition {
+            kind: WindowTransitionKind::Closed,
+            observed_at_utc_ms,
+            monotonic_ms,
+            window,
+        });
     }
 }
 
@@ -504,6 +684,14 @@ fn window_id(hwnd: HWND) -> u64 {
     hwnd.0 as usize as u64
 }
 
+fn unix_time_ms() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis()
+        .min(i64::MAX as u128) as i64
+}
+
 struct ProcessHandle(HANDLE);
 
 impl Drop for ProcessHandle {
@@ -515,6 +703,23 @@ impl Drop for ProcessHandle {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn observation(displayed: bool, focused: bool) -> WindowObservation {
+        WindowObservation {
+            window_id: 10,
+            process_id: 20,
+            process_started_at_100ns: 30,
+            application_identity: "path:c:\\apps\\sample.exe".to_owned(),
+            identity_source: IdentitySource::ExecutablePath,
+            executable_path: Some(r"C:\Apps\Sample.exe".to_owned()),
+            app_user_model_id: None,
+            package_identity: None,
+            displayed,
+            focused,
+            on_current_virtual_desktop: Some(true),
+            virtual_desktop_id: Some("desktop".to_owned()),
+        }
+    }
 
     fn visible_window() -> ClassifierInput {
         ClassifierInput {
@@ -621,5 +826,21 @@ mod tests {
             r"C:\Windows\System32\RuntimeBroker.exe"
         ));
         assert!(!is_identityless_host(r"C:\Apps\Timelens.exe"));
+    }
+
+    #[test]
+    fn transition_diff_reports_only_semantic_changes() {
+        let displayed = observation(true, true);
+        assert_eq!(
+            transition_kind(None, &displayed),
+            Some(WindowTransitionKind::Opened)
+        );
+        assert_eq!(transition_kind(Some(&displayed), &displayed), None);
+
+        let background = observation(false, false);
+        assert_eq!(
+            transition_kind(Some(&displayed), &background),
+            Some(WindowTransitionKind::Updated)
+        );
     }
 }
