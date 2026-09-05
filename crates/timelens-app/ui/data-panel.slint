@@ -1,0 +1,68 @@
+import { Button, CheckBox, LineEdit, ScrollView } from "std-widgets.slint";
+export global DataState {
+    in-out property <bool> open:false;
+    in-out property <bool> busy:false;
+    in-out property <string> status:"外部备份与导出文件由你管理，不会随应用清理而删除。";
+    in-out property <string> archive;
+    in-out property <string> password;
+    in-out property <bool> snapshots:false;
+    in-out property <bool> sensitive-confirmed:false;
+    in-out property <bool> restore-ready:false;
+    in-out property <bool> replace-confirmed:false;
+    in-out property <string> restore-info;
+    in-out property <bool> export-paths:false;
+    in-out property <bool> clear-credentials:false;
+    in-out property <string> current-directory;
+    in-out property <string> destination;
+    in-out property <bool> recovery-needed:false;
+    callback action(int);
+}
+component Note inherits Text { color:#8498ad;font-size:12px;wrap:word-wrap; }
+component Title inherits Text { color:#eef4fa;font-size:18px;font-weight:600; }
+export component DataPanel inherits Rectangle {
+    background:#111d29;border-width:1px;border-color:#344c63;
+    VerticalLayout {padding:24px;spacing:14px;
+        HorizontalLayout {Title{text:"数据与备份";vertical-stretch:0;} Button{text:"关闭";enabled:!DataState.busy;clicked=>{DataState.open=false;}}}
+        ScrollView {VerticalLayout {spacing:14px;
+            Title{text:"数据位置";}
+            Note{text:DataState.current-directory;}
+            Note{text:"可迁移到本地固定磁盘的空目录。迁移时暂停采集并验证全部数据，成功后切换位置；外部导出文件留在原处。";}
+            LineEdit{text<=>DataState.destination;placeholder-text:"新的空数据目录，如 D:\\TimelensData";enabled:!DataState.busy;}
+            Button{text:"迁移到此目录";enabled:!DataState.busy && DataState.destination!="";clicked=>{DataState.action(9);}}
+            Title{text:"便携 ZIP";}
+            Note{text:"包含活动、输入、普通设置、排除规则、本地报告和 AI 总结。API 凭据、日志和登录任务不会进入备份。";}
+            LineEdit {text<=>DataState.archive;placeholder-text:"备份 ZIP 文件路径";enabled:!DataState.busy;edited=>{DataState.restore-ready=false;}}
+            HorizontalLayout {
+                Button{text:"选择保存位置";enabled:!DataState.busy;clicked=>{DataState.action(0);}}
+                Button{text:"打开现有备份";enabled:!DataState.busy;clicked=>{DataState.action(1);}}
+            }
+            LineEdit{text<=>DataState.password;input-type:password;placeholder-text:"独立密码（留空为无密码 ZIP）";enabled:!DataState.busy;edited=>{DataState.restore-ready=false;}}
+            Note{text:"无密码 ZIP 含可直接读取的敏感记录。独立密码无法找回，也不会随包保存。";}
+            CheckBox{text:"包含快照图片";checked<=>DataState.snapshots;enabled:!DataState.busy;}
+            CheckBox{text:"我已知晓文件包含敏感数据，并负责保管导出文件";checked<=>DataState.sensitive-confirmed;}
+            Button{text:"导出备份";enabled:!DataState.busy && DataState.sensitive-confirmed && DataState.archive!="";clicked=>{DataState.action(2);}}
+            Title{text:"恢复整个数据集";}
+            Note{text:"先校验格式、校验值、图片与数据库。恢复后需重新配置凭据并启用 AI 计划。不会合并两个数据集。";}
+            Button{text:"校验所选备份";enabled:!DataState.busy && DataState.archive!="";clicked=>{DataState.action(3);}}
+            Note{text:DataState.restore-info;}
+            CheckBox{text:"确认替换全部现有记录；需要保留时，我已主动导出备份";checked<=>DataState.replace-confirmed;enabled:DataState.restore-ready;}
+            Button{text:"执行恢复";enabled:!DataState.busy && DataState.restore-ready && DataState.replace-confirmed;clicked=>{DataState.action(4);}}
+            Title{text:"当前选中范围";}
+            CheckBox{text:"导出中包含可执行路径（默认关闭）";checked<=>DataState.export-paths;}
+            HorizontalLayout {
+                Button{text:"导出 JSON";enabled:!DataState.busy;clicked=>{DataState.action(5);}}
+                Button{text:"导出 CSV";enabled:!DataState.busy;clicked=>{DataState.action(6);}}
+                Button{text:"导出已选快照";enabled:!DataState.busy;clicked=>{DataState.action(7);}}
+            }
+            Title{text:"完整性与清空";}
+            Button{text:"运行完整性检查";enabled:!DataState.busy;clicked=>{DataState.action(8);}}
+            Button{text:"重新启动并进入恢复界面";enabled:!DataState.busy;clicked=>{DataState.action(10);}}
+            CheckBox{text:"一键清空时同时删除 AI 凭据";checked<=>DataState.clear-credentials;}
+            Note{text:"一键清空仍需在主界面的清空对话框确认。此处的选项决定凭据是否一起删除。";}
+            Title{text:"安装与更新";}
+            Note{text:"更新由你主动运行新版本安装器，升级保留本地数据。当前版本未签名，不安装提权自动更新程序。卸载时可以保留加密数据，也可以删除本地数据与凭据。";}
+            Rectangle {height:8px;}
+        }}
+        Note{text:DataState.busy?"正在处理，请稍候…":DataState.status;}
+    }
+}

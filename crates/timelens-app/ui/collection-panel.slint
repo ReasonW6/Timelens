@@ -1,0 +1,75 @@
+import { Button, CheckBox, ComboBox, LineEdit, ScrollView } from "std-widgets.slint";
+export struct KeyCell {label:string,count:string,strength:float,col:float,row:float,units:float}
+export global CollectionState {
+    in-out property <bool> open:false;
+    in-out property <int> page:0;
+    in-out property <bool> busy:false;
+    in-out property <bool> paused:false;
+    in-out property <[string]> apps;
+    in-out property <int> app-index:-1;
+    in-out property <int> merge-index:-1;
+    in-out property <[string]> links;
+    in-out property <int> link-index:-1;
+    in-out property <bool> activity:false;
+    in-out property <bool> input:false;
+    in-out property <bool> snapshots:false;
+    in-out property <string> rules;
+    in-out property <bool> merge-confirmed:false;
+    in-out property <bool> delete-confirmed:false;
+    in-out property <string> impact;
+    in-out property <string> status;
+    in-out property <string> date;
+    in-out property <string> totals;
+    in-out property <string> system;
+    in-out property <[KeyCell]> keys;
+    callback opened;
+    callback choose(int);
+    callback action(int);
+}
+component Note inherits Text {color:#829ab0;font-size:12px;wrap:word-wrap;}
+export component CollectionPanel inherits Rectangle {
+    background:#111d29;border-width:1px;border-color:#344c63;
+    VerticalLayout{padding:22px;spacing:14px;
+        HorizontalLayout{Text{text:"采集与统计";color:#eef4fa;font-size:21px;font-weight:600;}Button{text:"关闭";enabled:!CollectionState.busy;clicked=>{CollectionState.open=false;}}}
+        HorizontalLayout{Button{text:"排除与暂停";clicked=>{CollectionState.page=0;}}Button{text:"键位与系统";clicked=>{CollectionState.page=1;CollectionState.action(7);}}}
+        if CollectionState.page==0:ScrollView{VerticalLayout{spacing:13px;
+            CheckBox{text:"全局暂停记录";checked<=>CollectionState.paused;toggled=>{CollectionState.action(0);}}
+            Note{text:"暂停期间保留匿名暂停区间。应用和输入不记录；快照只记录暂停缺失，恢复后不会补录。";}
+            ComboBox{model:CollectionState.apps;current-index<=>CollectionState.app-index;selected(value)=>{CollectionState.choose(CollectionState.app-index);}}
+            Button{text:"选择 EXE 并添加未来排除规则";enabled:!CollectionState.busy;clicked=>{CollectionState.action(1);}}
+            CheckBox{text:"活动排除 · 不记录此应用身份和活动";checked<=>CollectionState.activity;}
+            CheckBox{text:"输入排除 · 只保留匿名每日总数";checked<=>CollectionState.input;}
+            CheckBox{text:"截图排除 · 该应用显示时跳过所在屏幕";checked<=>CollectionState.snapshots;}
+            Button{text:"保存三份独立规则";enabled:!CollectionState.busy;clicked=>{CollectionState.action(2);}}
+            Note{text:"只影响之后的采集。合并应用的规则在各份名单内同步。既有历史及图片保留。";}
+            Note{text:CollectionState.rules;}
+            Text{text:"人工合并";color:#edf4fa;font-size:17px;}
+            ComboBox{model:CollectionState.apps;current-index<=>CollectionState.merge-index;}
+            Note{text:"把当前应用与上面选中的另一个应用合并显示，原始记录不改写。确认前请查看各自的活动、输入、截图名单。";}
+            CheckBox{text:"确认在每一份名单内取并集，三份名单互不联动";checked<=>CollectionState.merge-confirmed;}
+            Button{text:"建立合并关联";enabled:!CollectionState.busy && CollectionState.merge-confirmed;clicked=>{CollectionState.action(3);}}
+            ComboBox{model:CollectionState.links;current-index<=>CollectionState.link-index;}
+            Button{text:"解除所选合并";enabled:!CollectionState.busy;clicked=>{CollectionState.action(4);}}
+            Note{text:"解除后恢复合并前规则；合并期间新增的排除默认保留给双方。";}
+            Text{text:"删除所选应用历史";color:#ffc1c8;font-size:17px;}
+            Note{text:CollectionState.impact;}
+            CheckBox{text:"确认删除该组历史及引用它的报告、AI 总结和对话";checked<=>CollectionState.delete-confirmed;}
+            Button{text:"删除历史";enabled:!CollectionState.busy && CollectionState.delete-confirmed;clicked=>{CollectionState.action(5);}}
+            Note{text:"匿名永久总数与无法归属应用的每日键位总数保留，快照图片和外部文件保留。";}
+        }}
+        if CollectionState.page==1:VerticalLayout{spacing:13px;
+            Note{text:CollectionState.totals;}
+            HorizontalLayout{LineEdit{text<=>CollectionState.date;placeholder-text:"本地日期 YYYY-MM-DD";}Button{text:"查看当天键位";clicked=>{CollectionState.action(7);}}}
+            Note{text:"物理位置热度 · 次数按抬起后再次按下计数。键帽只用于标记位置，不代表输入内容。";}
+            Rectangle{height:225px;
+                for key in CollectionState.keys:Rectangle{x:key.col * parent.width / 16;y:key.row * 37px;width:key.units * parent.width / 16 - 3px;height:33px;border-radius:4px;background:#1a3147.mix(#78c8f5,key.strength);
+                    VerticalLayout{padding:3px;spacing:1px;Text{text:key.label;color:key.strength>0.5?#102739:#e4eff7;font-size:10px;horizontal-alignment:center;}Text{text:key.count;color:key.strength>0.5?#102739:#91aec4;font-size:9px;horizontal-alignment:center;}}
+                }
+            }
+            Text{text:"所选范围的系统状态";color:#eef4fa;font-size:17px;}
+            Note{text:CollectionState.system;}
+            Rectangle{vertical-stretch:1;}
+        }
+        Note{text:CollectionState.busy?"正在处理…":CollectionState.status;}
+    }
+}

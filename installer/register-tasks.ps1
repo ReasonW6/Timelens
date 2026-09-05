@@ -3,15 +3,18 @@ param(
     [Parameter(Mandatory)]
     [string] $InstallDir,
 
-    [switch] $StartNow
+    [switch] $StartNow,
+    [ValidatePattern('^\\Timelens(?:-Acceptance-[a-fA-F0-9-]+)?\\$')][string] $TaskPath = '\Timelens\',
+    [string] $DataDirectory = ''
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'path-safety.ps1')
 
-$taskPath = '\Timelens\'
-$taskFolderComPath = '\Timelens'
+$taskFolderComPath = $TaskPath.TrimEnd('\')
 $resolvedInstallDir = (Resolve-Path -LiteralPath $InstallDir).Path
+$resolvedInstallDir = Assert-InstallDirectory $resolvedInstallDir
 $drive = [System.IO.DriveInfo]::new([System.IO.Path]::GetPathRoot($resolvedInstallDir))
 if ($drive.DriveType -ne [System.IO.DriveType]::Fixed) {
     throw 'Timelens tasks can only target an installation on a fixed local drive.'
@@ -19,7 +22,8 @@ if ($drive.DriveType -ne [System.IO.DriveType]::Fixed) {
 
 $corePath = Join-Path $resolvedInstallDir 'Timelens.exe'
 $collectorPath = Join-Path $resolvedInstallDir 'Timelens.Collector.exe'
-foreach ($path in @($corePath, $collectorPath)) {
+$workerPath = Join-Path $resolvedInstallDir 'Timelens.AI.exe'
+foreach ($path in @($corePath, $collectorPath, $workerPath)) {
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
         throw "Required Timelens executable is missing: $path"
     }
@@ -42,6 +46,12 @@ function Get-InteractiveUserName {
 
 function Set-InstallPathAcl {
     param([Parameter(Mandatory)][string] $Path)
+
+    $current = $Path
+    while ($current) {
+        if ((Get-Item -LiteralPath $current -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Installation paths cannot traverse reparse points.' }
+        $current = Split-Path -Parent $current
+    }
 
     $system = [System.Security.Principal.SecurityIdentifier]::new('S-1-5-18')
     $administrators = [System.Security.Principal.SecurityIdentifier]::new('S-1-5-32-544')
@@ -96,7 +106,7 @@ try {
     [void] $taskService.GetFolder($taskFolderComPath)
 } catch [System.IO.FileNotFoundException] {
     $rootTaskFolder = $taskService.GetFolder('\')
-    [void] $rootTaskFolder.CreateFolder('Timelens')
+    [void] $rootTaskFolder.CreateFolder($TaskPath.Trim('\'))
 }
 
 $trigger = New-ScheduledTaskTrigger -AtLogOn -User $interactiveUser
@@ -109,10 +119,16 @@ $settings = New-ScheduledTaskSettingsSet `
     -ExecutionTimeLimit ([TimeSpan]::Zero) `
     -MultipleInstances IgnoreNew
 
+$arguments = '--background'
+if ($DataDirectory) {
+    $data = [IO.Path]::GetFullPath($DataDirectory).TrimEnd('\')
+    if ($data.Contains('"') -or $data.Length -le 3) { throw 'Invalid isolated data directory.' }
+    $arguments += ' --data-dir "' + $data + '"'
+}
 $coreTask = New-ScheduledTask `
     -Action (New-ScheduledTaskAction `
         -Execute $corePath `
-        -Argument '--background' `
+        -Argument $arguments `
         -WorkingDirectory $resolvedInstallDir
     ) `
     -Trigger $trigger `
@@ -127,7 +143,7 @@ $coreTask = New-ScheduledTask `
 $collectorTask = New-ScheduledTask `
     -Action (New-ScheduledTaskAction `
         -Execute $collectorPath `
-        -Argument '--background' `
+        -Argument $arguments `
         -WorkingDirectory $resolvedInstallDir
     ) `
     -Trigger $trigger `

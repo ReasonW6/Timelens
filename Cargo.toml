@@ -1,5 +1,7 @@
 [workspace]
 members = [
+    "crates/timelens-ai",
+    "crates/timelens-ai-worker",
     "crates/timelens-app",
     "crates/timelens-collector",
     "crates/timelens-ipc",
@@ -16,12 +18,19 @@ publish = false
 
 [workspace.dependencies]
 anyhow = "1.0.104"
+base64 = "0.22.1"
+chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+url = "2.5"
 crc32fast = "1.5.0"
 embed-resource = "3"
 hex = "0.4.3"
+image = { version = "0.25.10", default-features = false, features = ["webp"] }
 prost = "0.14.4"
 rusqlite = { version = "0.40.2", default-features = false, features = [
     "bundled-sqlcipher-vendored-openssl",
+    "serialize",
 ] }
 slint = { version = "1.17.1", default-features = false, features = [
     "backend-winit",
@@ -34,12 +43,22 @@ thiserror = "2"
 windows = { version = "0.62.2", features = [
     "Win32_Foundation",
     "Win32_Graphics_Dwm",
+    "Win32_Graphics_Direct3D",
+    "Win32_Graphics_Direct3D11",
+    "Win32_Graphics_Dxgi",
+    "Win32_Graphics_Dxgi_Common",
     "Win32_Graphics_Gdi",
+    "Win32_Storage_FileSystem",
+    "Win32_Storage_CloudFilters",
     "Win32_Storage_Packaging_Appx",
     "Win32_System_Com",
     "Win32_System_Com_StructuredStorage",
+    "Win32_System_RemoteDesktop",
+    "Win32_System_StationsAndDesktops",
     "Win32_System_Threading",
     "Win32_System_Variant",
+    "Win32_System_WindowsProgramming",
+    "Win32_System_Registry",
     "Win32_UI_Accessibility",
     "Win32_UI_Input_KeyboardAndMouse",
     "Win32_UI_Shell",
@@ -51,15 +70,26 @@ windows-sys = { version = "0.61.2", features = [
     "Win32_Security",
     "Win32_Security_Authorization",
     "Win32_Security_Cryptography",
+    "Win32_Security_Credentials",
+    "Win32_Networking_WinHttp",
+    "Win32_Storage_CloudFilters",
     "Win32_Storage_FileSystem",
     "Win32_System_IO",
+    "Win32_System_JobObjects",
     "Win32_System_Memory",
     "Win32_System_Pipes",
     "Win32_System_RemoteDesktop",
     "Win32_System_Time",
     "Win32_System_Threading",
+    "Win32_System_LibraryLoader",
+    "Win32_System_WindowsProgramming",
+    "Win32_UI_Controls_Dialogs",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_UI_Shell",
+    "Win32_Graphics_Gdi",
 ] }
 zeroize = "1.8.2"
+zip = { version = "8.6.0", default-features = false, features = ["deflate-flate2-zlib-rs", "aes-crypto"] }
 
 [profile.release]
 lto = "thin"

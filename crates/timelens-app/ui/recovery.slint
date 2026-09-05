@@ -1,0 +1,44 @@
+import {Button,LineEdit,ScrollView} from "std-widgets.slint";
+component Note inherits Text {color:#a7b9c9; font-size:13px; wrap:word-wrap;}
+export component RecoveryWindow inherits Window {
+    title:"Timelens · 数据恢复"; preferred-width:720px; preferred-height:740px;
+    min-width:580px; min-height:540px; background:#0d1721;
+    in-out property<string> source;
+    in-out property<string> destination;
+    in-out property<string> archive;
+    in-out property<string> password;
+    in-out property<string> detail;
+    in-out property<string> status;
+    in-out property<bool> upgrade:false;
+    in-out property<bool> busy:false;
+    in-out property<bool> ready:false;
+    callback action(int);
+    VerticalLayout {padding:28px;spacing:16px;
+        Text{text:root.upgrade?"准备升级本地数据":"保留原件，恢复数据";color:#edf4fa;font-size:26px;font-weight:600;}
+        Note{text:root.detail;}
+        ScrollView {VerticalLayout {spacing:12px;
+            Note{text:"原数据位置";}
+            LineEdit{text<=>root.source;enabled:!root.busy;}
+            if root.upgrade: Button{text:"升级并打开";enabled:!root.busy;clicked=>{root.action(0);}}
+            if !root.upgrade: VerticalLayout {spacing:12px;
+                Note{text:"原数据库、密钥和快照不会被覆盖。恢复及新建都使用另一个空目录；先完成校验，再由你选择是否切换。";}
+                Note{text:"新数据目录";}
+                LineEdit{text<=>root.destination;placeholder-text:"选择本地固定磁盘上的空目录";enabled:!root.busy;}
+                Note{text:"从便携 ZIP 恢复";}
+                HorizontalLayout {
+                    LineEdit{text<=>root.archive;placeholder-text:"备份 ZIP 路径";enabled:!root.busy;}
+                    Button{text:"浏览";enabled:!root.busy;clicked=>{root.action(6);}}
+                }
+                LineEdit{text<=>root.password;input-type:InputType.password;placeholder-text:"备份独立密码（无密码时留空）";enabled:!root.busy;}
+                Button{text:"校验并恢复备份到新目录";enabled:!root.busy && root.archive!="";clicked=>{root.action(1);}}
+                Note{text:"没有备份时，可尝试从可读取的记录建立新数据集。无法恢复的记录将明确标记为缺失；采集、快照和 AI 计划保持暂停，供你先检查排除规则。";}
+                Button{text:"尝试恢复可读取的记录";enabled:!root.busy;clicked=>{root.action(3);}}
+                Button{text:"在新目录建立空数据集";enabled:!root.busy;clicked=>{root.action(2);}}
+                Button{text:"重新检查并打开原位置";enabled:!root.busy;clicked=>{root.action(5);}}
+            }
+        }}
+        Note{text:root.busy?"正在处理，请稍候…":root.status;}
+        Button{text:"使用已校验的新数据集";enabled:root.ready && !root.busy;clicked=>{root.action(4);}}
+        Note{text:"关闭此窗口即可退出；原始文件仍保留在原位置。";}
+    }
+}

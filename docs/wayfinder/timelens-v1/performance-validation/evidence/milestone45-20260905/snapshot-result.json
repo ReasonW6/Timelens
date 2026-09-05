@@ -1,0 +1,21 @@
+{
+  "capturedAt": "2026-09-05T19:14:34.5019684+08:00",
+  "snapshotTotals": "snapshots=total:2 success:2 missing:0",
+  "physicalDisplayCapture": {
+    "slotStartedUtcMs": 1788606664216,
+    "trigger": "Manual",
+    "display": "DISPLAY1",
+    "success": true,
+    "pixelWidth": 1280,
+    "pixelHeight": 720,
+    "plaintextBytes": 590412
+  },
+  "encryptedFileCount": 2,
+  "allContainerHeadersMatchedTLSNAP": true,
+  "containerHeadersCheckedBeforeCleanup": true,
+  "physicalImageWasPreviewed": false,
+  "fixtureDataRemoved": true,
+  "fixtureCredentialRemoved": true,
+  "residentProcessesStopped": true,
+  "passed": true
+}

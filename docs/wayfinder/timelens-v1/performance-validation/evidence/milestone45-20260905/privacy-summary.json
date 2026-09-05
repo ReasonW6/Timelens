@@ -1,0 +1,12 @@
+{
+  "sourceFilesChecked": 7,
+  "forbiddenSourceHits": 0,
+  "encryptedFilesChecked": 3,
+  "plaintextMarkers": [
+    "SQLite format 3",
+    "Synthetic",
+    "capacity-desktop"
+  ],
+  "plaintextHits": 0,
+  "passed": true
+}

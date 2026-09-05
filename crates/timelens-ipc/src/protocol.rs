@@ -89,7 +89,7 @@ pub struct CollectorEvent {
     pub observed_at_utc_ms: i64,
     #[prost(uint64, tag = "3")]
     pub monotonic_ms: u64,
-    #[prost(oneof = "collector_event::Body", tags = "4, 5, 6, 7")]
+    #[prost(oneof = "collector_event::Body", tags = "4, 5, 6, 7, 8")]
     pub body: Option<collector_event::Body>,
 }
 
@@ -106,11 +106,15 @@ pub mod collector_event {
         InputMinute(InputMinute),
         #[prost(message, tag = "7")]
         TrayTransition(TrayTransition),
+        #[prost(message, tag = "8")]
+        SystemInterval(SystemInterval),
     }
 }
 
 #[derive(Clone, PartialEq, Message)]
 pub struct InputMinute {
+    #[prost(bool, tag = "10")]
+    pub anonymous_only: bool,
     #[prost(int64, tag = "1")]
     pub minute_started_at_utc_ms: i64,
     #[prost(sint32, tag = "2")]
@@ -129,6 +133,18 @@ pub struct InputMinute {
     pub right_click_count: u32,
     #[prost(message, repeated, tag = "9")]
     pub key_counts: Vec<PhysicalKeyCount>,
+}
+
+#[derive(Clone, PartialEq, Message)]
+pub struct SystemInterval {
+    #[prost(string, tag = "1")]
+    pub kind: String,
+    #[prost(int64, tag = "2")]
+    pub started_utc_ms: i64,
+    #[prost(uint64, tag = "3")]
+    pub duration_ms: u64,
+    #[prost(sint32, tag = "4")]
+    pub timezone_offset_minutes: i32,
 }
 
 #[derive(Clone, PartialEq, Message)]
@@ -315,6 +331,16 @@ fn validate_event_batch(batch: &EventBatch) -> Result<()> {
             ));
         }
         match event.body.as_ref() {
+            Some(collector_event::Body::SystemInterval(interval)) => {
+                if !crate::privacy::SYSTEM_KINDS.contains(&interval.kind.as_str())
+                    || interval.started_utc_ms <= 0
+                    || interval.started_utc_ms > event.observed_at_utc_ms
+                    || interval.duration_ms > 31 * 86400000
+                    || !(-1440..=1440).contains(&interval.timezone_offset_minutes)
+                {
+                    return Err(IpcError::InvalidMessage("invalid system interval".into()));
+                }
+            }
             Some(collector_event::Body::WindowTransition(transition)) => {
                 validate_window_transition(transition)?;
             }
@@ -357,7 +383,14 @@ fn validate_tray_transition(transition: &TrayTransition) -> Result<()> {
 }
 
 fn validate_input_minute(minute: &InputMinute, observed_at_utc_ms: i64) -> Result<()> {
-    if minute.minute_started_at_utc_ms <= 0
+    if minute.anonymous_only
+        && (minute.focused_application_identity.is_some() || !minute.key_counts.is_empty())
+    {
+        return Err(IpcError::InvalidMessage(
+            "anonymous input contains detail".into(),
+        ));
+    }
+    if (!minute.anonymous_only && minute.minute_started_at_utc_ms <= 0)
         || minute.minute_started_at_utc_ms % 60_000 != 0
         || minute.minute_started_at_utc_ms >= observed_at_utc_ms
     {
@@ -395,7 +428,7 @@ fn validate_input_minute(minute: &InputMinute, observed_at_utc_ms: i64) -> Resul
             .checked_add(u64::from(key.count))
             .ok_or_else(|| IpcError::InvalidMessage("input count overflow".to_owned()))?;
     }
-    if keyboard_total != u64::from(minute.keyboard_count)
+    if (!minute.anonymous_only && keyboard_total != u64::from(minute.keyboard_count))
         || minute
             .keyboard_count
             .saturating_add(minute.left_click_count)
@@ -692,6 +725,7 @@ mod tests {
         let mut batch = valid_batch();
         batch.events[0].observed_at_utc_ms = 1_700_000_040_000;
         batch.events[0].body = Some(collector_event::Body::InputMinute(InputMinute {
+            anonymous_only: false,
             minute_started_at_utc_ms: 1_699_999_980_000,
             timezone_offset_minutes: 480,
             local_date: "2023-11-15".to_owned(),

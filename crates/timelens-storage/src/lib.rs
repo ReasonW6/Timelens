@@ -1,5 +1,25 @@
 #![cfg(windows)]
 
+mod ai;
+mod collection;
+mod milestone3;
+mod portable;
+mod recovery;
+mod relocation;
+pub use portable::{BackupInfo, BackupOptions, ExportFormat, PreparedRestore};
+pub use recovery::RecoveryReport;
+
+pub use ai::{
+    AiJob, AiJobKind, AiJobSpec, AiMessage, AiRetentionOutcome, AiSettings, AiVersion,
+    SnapshotConsent,
+};
+
+pub use milestone3::{
+    LocalReport, LocalReportApplication, LocalReportGap, LocalReportSnapshotReason,
+    SnapshotDisplay, SnapshotImage, SnapshotMissingReason, SnapshotPolicy, SnapshotSlot,
+    SnapshotStoreRequest, SnapshotTrigger,
+};
+
 use std::{
     collections::BTreeMap,
     ffi::OsStr,
@@ -40,10 +60,12 @@ const BACKUP_FILE: &str = "timelens.sqlite3.migration-backup";
 const KEY_MAGIC: &[u8; 8] = b"TLKEY\0\0\x01";
 const KEY_BYTES: usize = 32;
 const DPAPI_ENTROPY: &[u8] = b"Timelens local data key v1";
-const LATEST_SCHEMA_VERSION: i64 = 8;
+const LATEST_SCHEMA_VERSION: i64 = 12;
 
 #[derive(Debug, thiserror::Error)]
 pub enum StorageError {
+    #[error("portable archive error: {0}")]
+    Archive(#[from] zip::result::ZipError),
     #[error("storage I/O error: {0}")]
     Io(#[from] io::Error),
     #[error("encrypted SQLite error: {0}")]
@@ -66,9 +88,55 @@ pub enum StorageError {
 
 pub type Result<T> = std::result::Result<T, StorageError>;
 
+/// Before the next database access, latch corruption reported by any statement.
+/// All storage entrypoints use this connection, including UI and AI operations.
+struct GuardedConnection {
+    raw: Connection,
+    quarantined: std::cell::Cell<bool>,
+}
+impl From<Connection> for GuardedConnection {
+    fn from(raw: Connection) -> Self {
+        Self {
+            raw,
+            quarantined: std::cell::Cell::new(false),
+        }
+    }
+}
+impl GuardedConnection {
+    fn quarantine(&self) {
+        if !self.quarantined.replace(true) {
+            let _ = self.raw.execute_batch("PRAGMA query_only=ON;");
+        }
+    }
+    fn is_quarantined(&self) -> bool {
+        let code = unsafe { rusqlite::ffi::sqlite3_errcode(self.raw.handle()) };
+        if matches!(
+            code,
+            rusqlite::ffi::SQLITE_CORRUPT | rusqlite::ffi::SQLITE_NOTADB
+        ) {
+            self.quarantine();
+        }
+        self.quarantined.get()
+    }
+}
+impl std::ops::Deref for GuardedConnection {
+    type Target = Connection;
+    fn deref(&self) -> &Connection {
+        self.is_quarantined();
+        &self.raw
+    }
+}
+impl std::ops::DerefMut for GuardedConnection {
+    fn deref_mut(&mut self) -> &mut Connection {
+        self.is_quarantined();
+        &mut self.raw
+    }
+}
+
 pub struct Storage {
-    connection: Connection,
+    connection: GuardedConnection,
     data_directory: PathBuf,
+    control_directory: PathBuf,
     key_path: PathBuf,
     database_path: PathBuf,
     cipher_version: String,
@@ -135,6 +203,8 @@ pub struct TimelineGap {
 pub struct RetentionReport {
     pub activity_items: u64,
     pub input_items: u64,
+    pub snapshot_items: u64,
+    pub report_items: u64,
     pub released_bytes: u64,
 }
 
@@ -171,19 +241,31 @@ impl Storage {
         let key_path = data_directory.join(KEY_FILE);
         let database_path = data_directory.join(DATABASE_FILE);
         let backup_path = data_directory.join(BACKUP_FILE);
+        if database_path.exists() && !key_path.exists() {
+            return Err(StorageError::InvalidKeyFile);
+        }
         let key = load_or_create_key(&key_path)?;
 
         recover_interrupted_migration(&database_path, &backup_path, &key)?;
+        // Detect damaged existing data before opening a writable connection.
+        if database_path.metadata().is_ok_and(|m| m.len() > 0) {
+            inspect_database(&database_path, &key)?;
+        }
         let connection = migrate_database(&database_path, &backup_path, &key, MIGRATIONS)?;
         let cipher_version = cipher_version(&connection)?;
 
-        Ok(Self {
-            connection,
+        let storage = Self {
+            connection: connection.into(),
             data_directory: data_directory.to_owned(),
+            control_directory: data_directory.to_owned(),
             key_path,
             database_path,
             cipher_version,
-        })
+        };
+        storage.reconcile_snapshot_files()?;
+        storage.sync_collection_policy()?;
+        storage.initialize_ai()?;
+        Ok(storage)
     }
 
     pub fn schema_version(&self) -> Result<i64> {
@@ -523,7 +605,7 @@ impl Storage {
         }
 
         let mut timeline_applications = Vec::with_capacity(applications.len());
-        for (identity, mut working) in applications {
+        for (identity, mut working) in self.merge_working_applications(applications)? {
             working
                 .segments
                 .sort_unstable_by_key(|segment| (segment.started_utc_ms, segment.ended_utc_ms));
@@ -703,12 +785,26 @@ impl Storage {
         let policy = self.retention_policy()?;
         let before_bytes = database_files_bytes(&self.database_path);
         let mut outcome = CleanupOutcome::default();
-        if let Some(days) = policy.days {
-            let cutoff = now_utc_ms.saturating_sub(i64::from(days) * 86_400_000);
+        let activity_cutoff = policy
+            .days
+            .map(|days| now_utc_ms.saturating_sub(i64::from(days) * 86_400_000));
+        let milestone3 = self.apply_milestone3_retention(now_utc_ms, activity_cutoff)?;
+        outcome.report.snapshot_items = milestone3.snapshot_items;
+        outcome.report.report_items = milestone3.report_items;
+        outcome.report.released_bytes = milestone3.released_bytes;
+        if let Some(cutoff) = activity_cutoff {
             outcome.merge(self.cleanup_before(cutoff, "retention_time")?);
         }
 
-        if outcome.report.activity_items > 0 || outcome.report.input_items > 0 {
+        if outcome.has_database_cleanup() {
+            self.connection
+                .execute_batch("PRAGMA wal_checkpoint(TRUNCATE); VACUUM;")?;
+        }
+
+        while database_files_bytes(&self.database_path) > policy.max_bytes
+            && self.clean_oldest_local_report()?
+        {
+            outcome.report.report_items = outcome.report.report_items.saturating_add(1);
             self.connection
                 .execute_batch("PRAGMA wal_checkpoint(TRUNCATE); VACUUM;")?;
         }
@@ -727,9 +823,9 @@ impl Storage {
                 .execute_batch("PRAGMA wal_checkpoint(TRUNCATE); VACUUM;")?;
         }
 
-        if outcome.report.activity_items > 0 || outcome.report.input_items > 0 {
+        if outcome.has_any_cleanup() {
             let released = before_bytes.saturating_sub(database_files_bytes(&self.database_path));
-            outcome.report.released_bytes = released;
+            outcome.report.released_bytes = outcome.report.released_bytes.saturating_add(released);
             if let Some(availability_id) = outcome.availability_ids.last() {
                 self.connection.execute(
                     "UPDATE data_availability SET released_bytes = ?2
@@ -842,17 +938,32 @@ impl Storage {
                 activity_items,
                 input_items,
                 released_bytes: 0,
+                ..RetentionReport::default()
             },
             availability_ids,
         })
     }
 
     pub fn clear_all(&self) -> Result<ClearReport> {
+        self.ensure_writable()?;
         let old_key = load_key(&self.key_path)?;
         let new_key = random_key()?;
         let transaction =
             Transaction::new_unchecked(&self.connection, TransactionBehavior::Exclusive)?;
         let tables = [
+            "system_intervals",
+            "ai_image_authorizations",
+            "ai_version_sources",
+            "ai_compressions",
+            "ai_messages",
+            "ai_versions",
+            "ai_jobs",
+            "local_report_snapshot_reasons",
+            "local_report_gaps",
+            "local_report_applications",
+            "local_reports",
+            "snapshot_slots",
+            "snapshot_blobs",
             "window_state_intervals",
             "window_instances",
             "tray_background_intervals",
@@ -879,13 +990,15 @@ impl Storage {
             let _ = rekey(&self.connection, &old_key);
             return Err(error);
         }
+        self.remove_all_snapshot_files()?;
         check_integrity(&self.connection)?;
         Ok(ClearReport { deleted_rows })
     }
 
     pub fn clear_all_coordinated(&self, timeout: Duration) -> Result<ClearReport> {
-        let request_path = self.data_directory.join(COLLECTOR_RESET_REQUEST_FILE);
-        let paused_path = self.data_directory.join(COLLECTOR_RESET_PAUSED_FILE);
+        self.ensure_writable()?;
+        let request_path = self.control_directory.join(COLLECTOR_RESET_REQUEST_FILE);
+        let paused_path = self.control_directory.join(COLLECTOR_RESET_PAUSED_FILE);
         let mut request = OpenOptions::new()
             .write(true)
             .create(true)
@@ -901,9 +1014,12 @@ impl Storage {
         }
         if !paused_path.exists() {
             remove_file_if_present(&request_path)?;
-            remove_file_if_present(&self.data_directory.join(COLLECTOR_SPOOL_FILE))?;
-            remove_file_if_present(&self.data_directory.join(COLLECTOR_SPOOL_KEY_FILE))?;
-            remove_file_if_present(&self.data_directory.join(COLLECTOR_TRAY_STATE_FILE))?;
+            let _absent_collector = timelens_ipc::SingleInstanceGuard::acquire_collector()
+                .map_err(|_| StorageError::Integrity(
+                    "collector did not acknowledge pause; original data and offline buffer were preserved".into()))?;
+            remove_file_if_present(&self.control_directory.join(COLLECTOR_SPOOL_FILE))?;
+            remove_file_if_present(&self.control_directory.join(COLLECTOR_SPOOL_KEY_FILE))?;
+            remove_file_if_present(&self.control_directory.join(COLLECTOR_TRAY_STATE_FILE))?;
             return self.clear_all();
         }
 
@@ -965,7 +1081,29 @@ impl CleanupOutcome {
             .report
             .input_items
             .saturating_add(other.report.input_items);
+        self.report.snapshot_items = self
+            .report
+            .snapshot_items
+            .saturating_add(other.report.snapshot_items);
+        self.report.report_items = self
+            .report
+            .report_items
+            .saturating_add(other.report.report_items);
+        self.report.released_bytes = self
+            .report
+            .released_bytes
+            .saturating_add(other.report.released_bytes);
         self.availability_ids.extend(other.availability_ids);
+    }
+
+    fn has_database_cleanup(&self) -> bool {
+        self.report.activity_items > 0
+            || self.report.input_items > 0
+            || self.report.report_items > 0
+    }
+
+    fn has_any_cleanup(&self) -> bool {
+        self.has_database_cleanup() || self.report.snapshot_items > 0
     }
 }
 
@@ -1358,6 +1496,159 @@ const MIGRATIONS: &[Migration] = &[
             ON application_metadata_revisions(application_identity, revision_id DESC);
     ",
     },
+    Migration {
+        version: 9,
+        sql: "
+        CREATE TABLE snapshot_policy (
+            singleton_id INTEGER PRIMARY KEY CHECK (singleton_id = 1),
+            enabled INTEGER NOT NULL CHECK (enabled IN (0, 1)),
+            interval_minutes INTEGER NOT NULL CHECK (
+                interval_minutes IN (1, 3, 5, 10, 15, 30, 60)
+            ),
+            capture_all_displays INTEGER NOT NULL
+                CHECK (capture_all_displays IN (0, 1)),
+            cycle_started_utc_ms INTEGER NOT NULL,
+            retention_days INTEGER CHECK (
+                retention_days IS NULL OR retention_days BETWEEN 1 AND 36500
+            ),
+            max_snapshot_bytes INTEGER NOT NULL
+                CHECK (max_snapshot_bytes >= 1048576)
+        ) STRICT;
+
+        INSERT INTO snapshot_policy (
+            singleton_id, enabled, interval_minutes, capture_all_displays,
+            cycle_started_utc_ms, retention_days, max_snapshot_bytes
+        ) VALUES (1, 1, 5, 0, 0, 7, 1073741824);
+
+        CREATE TABLE snapshot_exclusions (
+            application_identity TEXT PRIMARY KEY,
+            added_utc_ms INTEGER NOT NULL
+        ) STRICT;
+
+        CREATE TABLE snapshot_blobs (
+            blob_id INTEGER PRIMARY KEY,
+            file_name TEXT NOT NULL UNIQUE,
+            content_sha256 BLOB NOT NULL UNIQUE CHECK (length(content_sha256) = 32),
+            plaintext_bytes INTEGER NOT NULL CHECK (plaintext_bytes > 0),
+            encrypted_bytes INTEGER NOT NULL CHECK (encrypted_bytes > 0),
+            pixel_width INTEGER NOT NULL CHECK (pixel_width > 0),
+            pixel_height INTEGER NOT NULL CHECK (pixel_height > 0),
+            created_utc_ms INTEGER NOT NULL
+        ) STRICT;
+
+        CREATE TABLE snapshot_slots (
+            slot_id INTEGER PRIMARY KEY,
+            slot_started_utc_ms INTEGER NOT NULL,
+            captured_at_utc_ms INTEGER,
+            display_key TEXT NOT NULL,
+            display_x INTEGER NOT NULL,
+            display_y INTEGER NOT NULL,
+            display_width INTEGER NOT NULL CHECK (display_width >= 0),
+            display_height INTEGER NOT NULL CHECK (display_height >= 0),
+            orientation_degrees INTEGER NOT NULL
+                CHECK (orientation_degrees IN (0, 90, 180, 270)),
+            pixel_width INTEGER NOT NULL CHECK (pixel_width >= 0),
+            pixel_height INTEGER NOT NULL CHECK (pixel_height >= 0),
+            blob_id INTEGER REFERENCES snapshot_blobs(blob_id),
+            trigger TEXT NOT NULL CHECK (trigger IN ('scheduled', 'manual')),
+            capture_method TEXT NOT NULL CHECK (
+                capture_method IN ('desktop_duplication', 'none')
+            ),
+            result TEXT NOT NULL CHECK (result IN ('success', 'missing', 'cleaned')),
+            missing_reason TEXT CHECK (missing_reason IN (
+                'desktop_idle', 'global_pause', 'locked', 'sleep',
+                'secure_desktop', 'session_disconnected', 'remote_session',
+                'privacy_exclusion', 'capture_failed', 'low_disk',
+                'retention_cleaned', 'user_deleted'
+            )),
+            timeline_started_utc_ms INTEGER NOT NULL,
+            timeline_ended_utc_ms INTEGER NOT NULL,
+            CHECK (timeline_ended_utc_ms >= timeline_started_utc_ms),
+            CHECK (
+                (result = 'success' AND blob_id IS NOT NULL
+                    AND captured_at_utc_ms IS NOT NULL
+                    AND pixel_width > 0 AND pixel_height > 0
+                    AND missing_reason IS NULL)
+                OR
+                (result IN ('missing', 'cleaned') AND blob_id IS NULL
+                    AND missing_reason IS NOT NULL)
+            ),
+            UNIQUE (slot_started_utc_ms, display_key, trigger)
+        ) STRICT;
+
+        CREATE INDEX snapshot_slots_range
+            ON snapshot_slots(slot_started_utc_ms, result);
+        CREATE INDEX snapshot_slots_blob
+            ON snapshot_slots(blob_id) WHERE blob_id IS NOT NULL;
+
+        CREATE TABLE local_reports (
+            report_id INTEGER PRIMARY KEY,
+            range_started_utc_ms INTEGER NOT NULL,
+            range_ended_utc_ms INTEGER NOT NULL,
+            generated_utc_ms INTEGER NOT NULL,
+            rules_version INTEGER NOT NULL CHECK (rules_version > 0),
+            covered_ms INTEGER NOT NULL CHECK (covered_ms >= 0),
+            gap_count INTEGER NOT NULL CHECK (gap_count >= 0),
+            application_count INTEGER NOT NULL CHECK (application_count >= 0),
+            keyboard_count INTEGER NOT NULL CHECK (keyboard_count >= 0),
+            left_click_count INTEGER NOT NULL CHECK (left_click_count >= 0),
+            middle_click_count INTEGER NOT NULL CHECK (middle_click_count >= 0),
+            right_click_count INTEGER NOT NULL CHECK (right_click_count >= 0),
+            snapshot_success_count INTEGER NOT NULL CHECK (snapshot_success_count >= 0),
+            snapshot_missing_count INTEGER NOT NULL CHECK (snapshot_missing_count >= 0),
+            CHECK (range_ended_utc_ms > range_started_utc_ms)
+        ) STRICT;
+
+        CREATE INDEX local_reports_generated
+            ON local_reports(generated_utc_ms);
+
+        CREATE TABLE local_report_applications (
+            report_id INTEGER NOT NULL REFERENCES local_reports(report_id) ON DELETE CASCADE,
+            ordinal INTEGER NOT NULL CHECK (ordinal >= 0),
+            application_identity TEXT NOT NULL,
+            display_name TEXT NOT NULL,
+            opened_ms INTEGER NOT NULL CHECK (opened_ms >= 0),
+            displayed_ms INTEGER NOT NULL CHECK (displayed_ms >= 0),
+            focused_ms INTEGER NOT NULL CHECK (focused_ms >= 0),
+            background_ms INTEGER NOT NULL CHECK (background_ms >= 0),
+            window_count INTEGER NOT NULL CHECK (window_count >= 0),
+            keyboard_count INTEGER NOT NULL CHECK (keyboard_count >= 0),
+            left_click_count INTEGER NOT NULL CHECK (left_click_count >= 0),
+            middle_click_count INTEGER NOT NULL CHECK (middle_click_count >= 0),
+            right_click_count INTEGER NOT NULL CHECK (right_click_count >= 0),
+            PRIMARY KEY (report_id, ordinal)
+        ) STRICT;
+
+        CREATE TABLE local_report_gaps (
+            report_id INTEGER NOT NULL REFERENCES local_reports(report_id) ON DELETE CASCADE,
+            ordinal INTEGER NOT NULL CHECK (ordinal >= 0),
+            data_class TEXT NOT NULL,
+            started_utc_ms INTEGER NOT NULL,
+            ended_utc_ms INTEGER NOT NULL,
+            reason TEXT NOT NULL,
+            PRIMARY KEY (report_id, ordinal)
+        ) STRICT;
+
+        CREATE TABLE local_report_snapshot_reasons (
+            report_id INTEGER NOT NULL REFERENCES local_reports(report_id) ON DELETE CASCADE,
+            reason TEXT NOT NULL,
+            slot_count INTEGER NOT NULL CHECK (slot_count > 0),
+            PRIMARY KEY (report_id, reason)
+        ) STRICT;
+    ",
+    },
+    Migration {
+        version: 10,
+        sql: include_str!("ai-schema.sql"),
+    },
+    Migration {
+        version: 11,
+        sql: include_str!("collection-schema.sql"),
+    },
+    Migration {
+        version: 12,
+        sql: include_str!("recovery-schema.sql"),
+    },
 ];
 
 fn validate_event_order(events: &[CollectorEvent]) -> Result<()> {
@@ -1454,6 +1745,9 @@ fn ingest_collector_event(
     event: &CollectorEvent,
 ) -> Result<()> {
     let transition = match event.body.as_ref() {
+        Some(collector_event::Body::SystemInterval(interval)) => {
+            return collection::ingest_system_interval(transaction, event, interval);
+        }
         Some(collector_event::Body::WindowTransition(transition)) => transition,
         Some(collector_event::Body::MonitoringGap(gap)) => {
             return ingest_monitoring_gap(transaction, event, gap);
@@ -1645,73 +1939,75 @@ fn ingest_input_minute(
     minute: &InputMinute,
 ) -> Result<()> {
     validate_input_minute(event, minute)?;
-    let existing_bucket = transaction
-        .query_row(
-            "SELECT bucket_id FROM input_minute_buckets
+    if !minute.anonymous_only {
+        let existing_bucket = transaction
+            .query_row(
+                "SELECT bucket_id FROM input_minute_buckets
              WHERE minute_started_utc_ms = ?1
                AND timezone_offset_minutes = ?2
                AND focused_application_identity IS ?3",
-            params![
-                minute.minute_started_at_utc_ms,
-                minute.timezone_offset_minutes,
-                &minute.focused_application_identity
-            ],
-            |row| row.get::<_, i64>(0),
-        )
-        .optional()?;
-    if let Some(bucket_id) = existing_bucket {
-        transaction.execute(
-            "UPDATE input_minute_buckets SET
+                params![
+                    minute.minute_started_at_utc_ms,
+                    minute.timezone_offset_minutes,
+                    &minute.focused_application_identity
+                ],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()?;
+        if let Some(bucket_id) = existing_bucket {
+            transaction.execute(
+                "UPDATE input_minute_buckets SET
                 keyboard_count = keyboard_count + ?2,
                 left_click_count = left_click_count + ?3,
                 middle_click_count = middle_click_count + ?4,
                 right_click_count = right_click_count + ?5
              WHERE bucket_id = ?1",
-            params![
-                bucket_id,
-                i64::from(minute.keyboard_count),
-                i64::from(minute.left_click_count),
-                i64::from(minute.middle_click_count),
-                i64::from(minute.right_click_count)
-            ],
-        )?;
-    } else {
-        transaction.execute(
-            "INSERT INTO input_minute_buckets (
+                params![
+                    bucket_id,
+                    i64::from(minute.keyboard_count),
+                    i64::from(minute.left_click_count),
+                    i64::from(minute.middle_click_count),
+                    i64::from(minute.right_click_count)
+                ],
+            )?;
+        } else {
+            transaction.execute(
+                "INSERT INTO input_minute_buckets (
                 minute_started_utc_ms, timezone_offset_minutes, local_date,
                 focused_application_identity, keyboard_count, left_click_count,
                 middle_click_count, right_click_count
              ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-            params![
-                minute.minute_started_at_utc_ms,
-                minute.timezone_offset_minutes,
-                &minute.local_date,
-                &minute.focused_application_identity,
-                i64::from(minute.keyboard_count),
-                i64::from(minute.left_click_count),
-                i64::from(minute.middle_click_count),
-                i64::from(minute.right_click_count)
-            ],
-        )?;
-    }
+                params![
+                    minute.minute_started_at_utc_ms,
+                    minute.timezone_offset_minutes,
+                    &minute.local_date,
+                    &minute.focused_application_identity,
+                    i64::from(minute.keyboard_count),
+                    i64::from(minute.left_click_count),
+                    i64::from(minute.middle_click_count),
+                    i64::from(minute.right_click_count)
+                ],
+            )?;
+        }
 
-    for key in &minute.key_counts {
-        transaction.execute(
-            "INSERT INTO daily_physical_key_frequency (
+        for key in &minute.key_counts {
+            transaction.execute(
+                "INSERT INTO daily_physical_key_frequency (
                 local_date, timezone_offset_minutes, scan_code,
                 keyboard_layout, key_count
              ) VALUES (?1, ?2, ?3, ?4, ?5)
              ON CONFLICT (
                 local_date, timezone_offset_minutes, scan_code, keyboard_layout
              ) DO UPDATE SET key_count = key_count + excluded.key_count",
-            params![
-                &minute.local_date,
-                minute.timezone_offset_minutes,
-                i64::from(key.scan_code),
-                to_i64(key.keyboard_layout, "keyboard layout")?,
-                i64::from(key.count)
-            ],
-        )?;
+                params![
+                    &minute.local_date,
+                    minute.timezone_offset_minutes,
+                    i64::from(key.scan_code),
+                    to_i64(key.keyboard_layout, "keyboard layout")?,
+                    i64::from(key.count)
+                ],
+            )?;
+        }
     }
     transaction.execute(
         "INSERT INTO anonymous_daily_input_ledger (
@@ -1736,6 +2032,13 @@ fn ingest_input_minute(
 }
 
 fn validate_input_minute(event: &CollectorEvent, minute: &InputMinute) -> Result<()> {
+    if minute.anonymous_only
+        && (minute.focused_application_identity.is_some() || !minute.key_counts.is_empty())
+    {
+        return Err(StorageError::InvalidBatch(
+            "anonymous input contains detail".into(),
+        ));
+    }
     let date = minute.local_date.as_bytes();
     let valid_date = date.len() == 10
         && date[4] == b'-'
@@ -1744,7 +2047,7 @@ fn validate_input_minute(event: &CollectorEvent, minute: &InputMinute) -> Result
             .iter()
             .enumerate()
             .all(|(index, byte)| matches!(index, 4 | 7) || byte.is_ascii_digit());
-    if minute.minute_started_at_utc_ms <= 0
+    if (!minute.anonymous_only && minute.minute_started_at_utc_ms <= 0)
         || minute.minute_started_at_utc_ms % 60_000 != 0
         || minute.minute_started_at_utc_ms >= event.observed_at_utc_ms
         || !(-1_440..=1_440).contains(&minute.timezone_offset_minutes)
@@ -1769,7 +2072,7 @@ fn validate_input_minute(event: &CollectorEvent, minute: &InputMinute) -> Result
             .checked_add(u64::from(key.count))
             .ok_or_else(|| StorageError::InvalidBatch("input count overflow".to_owned()))?;
     }
-    if keyboard_total != u64::from(minute.keyboard_count)
+    if (!minute.anonymous_only && keyboard_total != u64::from(minute.keyboard_count))
         || minute
             .keyboard_count
             .saturating_add(minute.left_click_count)
@@ -2219,6 +2522,14 @@ fn schema_version(connection: &Connection) -> Result<i64> {
 fn check_integrity(connection: &Connection) -> Result<()> {
     let result: String = connection.query_row("PRAGMA quick_check", [], |row| row.get(0))?;
     if result == "ok" {
+        if connection
+            .prepare("PRAGMA foreign_key_check")?
+            .query([])?
+            .next()?
+            .is_some()
+        {
+            return Err(StorageError::Integrity("foreign key violation".into()));
+        }
         Ok(())
     } else {
         Err(StorageError::Integrity(result))
@@ -2495,7 +2806,7 @@ mod tests {
         drop(connection);
 
         let upgraded = Storage::open(directory.path()).unwrap();
-        assert_eq!(upgraded.schema_version().unwrap(), 8);
+        assert_eq!(upgraded.schema_version().unwrap(), LATEST_SCHEMA_VERSION);
         upgraded
             .connection
             .prepare("SELECT batch_checksum FROM collector_batches")
@@ -2507,6 +2818,14 @@ mod tests {
         upgraded
             .connection
             .prepare("SELECT keyboard_count FROM input_minute_buckets")
+            .unwrap();
+        upgraded
+            .connection
+            .prepare("SELECT result, missing_reason FROM snapshot_slots")
+            .unwrap();
+        upgraded
+            .connection
+            .prepare("SELECT covered_ms, rules_version FROM local_reports")
             .unwrap();
         let timeline_indexes: i64 = upgraded
             .connection
@@ -2809,6 +3128,7 @@ mod tests {
             observed_at_utc_ms: 1_700_000_040_000,
             monotonic_ms: 60_010,
             body: Some(collector_event::Body::InputMinute(InputMinute {
+                anonymous_only: false,
                 minute_started_at_utc_ms: 1_699_999_980_000,
                 timezone_offset_minutes: 480,
                 local_date: "2023-11-15".to_owned(),
@@ -3035,6 +3355,7 @@ mod tests {
                         observed_at_utc_ms: base + 60_000,
                         monotonic_ms: 60_010,
                         body: Some(collector_event::Body::InputMinute(InputMinute {
+                            anonymous_only: false,
                             minute_started_at_utc_ms: base,
                             timezone_offset_minutes: 480,
                             local_date: "2023-11-15".to_owned(),
@@ -3217,26 +3538,17 @@ mod tests {
         let database_path = directory.path().join(DATABASE_FILE);
         let backup_path = directory.path().join(BACKUP_FILE);
         let key = load_key(&directory.path().join(KEY_FILE)).unwrap();
-        let migrations = [
-            MIGRATIONS[0],
-            MIGRATIONS[1],
-            MIGRATIONS[2],
-            MIGRATIONS[3],
-            MIGRATIONS[4],
-            MIGRATIONS[5],
-            MIGRATIONS[6],
-            MIGRATIONS[7],
-            Migration {
-                version: 9,
-                sql: "CREATE TABLE should_rollback (id INTEGER); INVALID SQL;",
-            },
-        ];
+        let mut migrations = MIGRATIONS.to_vec();
+        migrations.push(Migration {
+            version: LATEST_SCHEMA_VERSION + 1,
+            sql: "CREATE TABLE should_rollback (id INTEGER); INVALID SQL;",
+        });
         let error = migrate_database(&database_path, &backup_path, &key, &migrations).unwrap_err();
         assert!(error.to_string().contains("restored"));
         assert!(!backup_path.exists());
 
         let connection = open_encrypted(&database_path, &key, false).unwrap();
-        assert_eq!(schema_version(&connection).unwrap(), 8);
+        assert_eq!(schema_version(&connection).unwrap(), LATEST_SCHEMA_VERSION);
         let core_rows: i64 = connection
             .query_row(
                 "SELECT COUNT(*) FROM runtime_health WHERE component = 'core'",

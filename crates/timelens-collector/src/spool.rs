@@ -159,6 +159,7 @@ impl PendingSpool {
         Ok(spool)
     }
 
+    #[cfg(test)]
     pub fn len(&self) -> u64 {
         self.header.count
     }

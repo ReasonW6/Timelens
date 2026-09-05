@@ -1,0 +1,26 @@
+[
+  {
+    "file": "target/release/timelens.exe",
+    "bytes": 21774848,
+    "sha256": "92CEF5C8EA34FEBE0006C971CA7034BCFA41FDC209C50AEEDC389B18E0DACB56",
+    "authenticode": "NotSigned"
+  },
+  {
+    "file": "target/release/timelens-collector.exe",
+    "bytes": 656384,
+    "sha256": "2C1445FC5C34CA3D9626E6D16260D4E831DB1938CE526C6756EE35CB0BA8C454",
+    "authenticode": "NotSigned"
+  },
+  {
+    "file": "target/release/timelens-ai-worker.exe",
+    "bytes": 691200,
+    "sha256": "2D113759BBC8849CC125EBE5D902D6803FCB2B5AC068A7717F12F7155B441B9F",
+    "authenticode": "NotSigned"
+  },
+  {
+    "file": "dist/Timelens-0.1.0-x64-setup.exe",
+    "bytes": 10134704,
+    "sha256": "7115EE915C6AD13D769975D964C22D69CDD12F68B83A3956FDEDF4206F103548",
+    "authenticode": "NotSigned"
+  }
+]

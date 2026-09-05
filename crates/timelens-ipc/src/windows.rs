@@ -97,7 +97,7 @@ impl SingleInstanceGuard {
 pub fn current_pipe_name() -> Result<String> {
     let sid = current_user_sid()?;
     let session = current_session_id()?;
-    Ok(format!(r"\\.\pipe\Timelens.{sid}.{session}.collector.v3"))
+    Ok(format!(r"\\.\pipe\Timelens.{sid}.{session}.collector.v4"))
 }
 
 pub fn run_server_probe(pipe_name: &str, expected_peer_names: &[&str]) -> Result<HandshakeReport> {

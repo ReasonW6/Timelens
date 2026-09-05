@@ -18,7 +18,7 @@ const BUDGET_BYTES: u64 = 100 * 1024 * 1024;
 const COLLECTOR_ARTIFACT_RESERVE_BYTES: u64 = 32 * 1024 * 1024 + 1024 * 1024;
 
 fn main() -> Result<(), Box<dyn Error>> {
-    let data_directory = parse_data_directory()?;
+    let (data_directory, include_ai) = parse_data_directory()?;
     if data_directory.exists() && fs::read_dir(&data_directory)?.next().is_some() {
         return Err(format!(
             "capacity data directory must be empty: {}",
@@ -73,6 +73,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 observed_at_utc_ms: observed_at,
                 monotonic_ms: (observed_at - BASE_UTC_MS + 1) as u64,
                 body: Some(collector_event::Body::InputMinute(InputMinute {
+                    anonymous_only: false,
                     minute_started_at_utc_ms: minute_started_at,
                     timezone_offset_minutes: 0,
                     local_date: format!("{year:04}-{month:02}-{day:02}"),
@@ -115,6 +116,12 @@ fn main() -> Result<(), Box<dyn Error>> {
         )
         .into());
     }
+    let ai_versions = if include_ai {
+        add_ai_month(&storage)?
+    } else {
+        0
+    };
+    storage.verify_integrity()?;
     storage.checkpoint()?;
     let database_path = storage.database_path().to_owned();
     drop(storage);
@@ -132,6 +139,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             "  \"applicationCount\": {},\n",
             "  \"windowStateUpdates\": {},\n",
             "  \"inputMinuteRows\": {},\n",
+            "  \"aiSummaryVersions\": {},\n",
             "  \"databaseBytes\": {},\n",
             "  \"walBytesAfterCheckpoint\": {},\n",
             "  \"shmBytesAfterCheckpoint\": {},\n",
@@ -146,6 +154,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         APP_COUNT,
         WINDOW_STATE_UPDATES,
         INPUT_MINUTES,
+        ai_versions,
         database_bytes,
         wal_bytes,
         shm_bytes,
@@ -165,16 +174,55 @@ fn main() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-fn parse_data_directory() -> Result<PathBuf, Box<dyn Error>> {
+fn parse_data_directory() -> Result<(PathBuf, bool), Box<dyn Error>> {
     let mut arguments = env::args().skip(1);
     match (
         arguments.next().as_deref(),
         arguments.next(),
         arguments.next(),
     ) {
-        (Some("--data-dir"), Some(path), None) => Ok(PathBuf::from(path)),
-        _ => Err("usage: milestone2_capacity --data-dir <empty-directory>".into()),
+        (Some("--data-dir"), Some(path), flag)
+            if arguments.next().is_none()
+                && matches!(flag.as_deref(), None | Some("--include-ai")) =>
+        {
+            Ok((PathBuf::from(path), flag.is_some()))
+        }
+        _ => Err("usage: milestone2_capacity --data-dir <empty-directory> [--include-ai]".into()),
     }
+}
+
+fn add_ai_month(storage: &Storage) -> Result<usize, Box<dyn Error>> {
+    let mut profile = timelens_ai::ProviderProfile::preset(0, "capacity-synthetic".into());
+    profile.model = timelens_ai::Model::unknown("synthetic-model");
+    profile.tested_revision = Some(profile.revision());
+    storage.save_ai_profile(&profile)?;
+    let body = "Synthetic capacity answer with no external request. ".repeat(160);
+    let usage = timelens_ai::TokenUsage {
+        input: Some(12_000),
+        output: Some(2_000),
+        ..Default::default()
+    };
+    for day in 0..30 {
+        let start = BASE_UTC_MS + day * 86_400_000;
+        let end = start + 86_400_000;
+        for version in 0..3 {
+            let now = BASE_UTC_MS + RANGE_MS + day * 3 + version + 10;
+            let job = storage.enqueue_ai_summary(&profile.id, "default", start, end, &[], now)?;
+            let claimed = storage
+                .claim_ai_job(now)?
+                .ok_or("capacity job was not queued")?;
+            if claimed.id != job {
+                return Err("unexpected capacity queue ordering".into());
+            }
+            storage.persist_ai_progress(job, &body, "Synthetic public reasoning", &usage, now)?;
+            storage.finish_ai_job(job, now)?;
+        }
+    }
+    let versions = storage.ai_versions()?.len();
+    if versions != 90 {
+        return Err(format!("expected 90 AI versions, got {versions}").into());
+    }
+    Ok(versions)
 }
 
 fn window_event(

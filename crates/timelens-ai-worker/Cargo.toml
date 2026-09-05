@@ -1,0 +1,15 @@
+[package]
+name = "timelens-ai-worker"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+build = "build.rs"
+
+[dependencies]
+timelens-ai = { path = "../timelens-ai" }
+serde_json.workspace = true
+windows-sys.workspace = true
+
+[build-dependencies]
+embed-resource.workspace = true

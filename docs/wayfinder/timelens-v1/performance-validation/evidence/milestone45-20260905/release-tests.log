@@ -1,0 +1,186 @@
+   Compiling timelens-storage v0.1.0 (D:\GitHub_Project\Timelens\crates\timelens-storage)
+   Compiling timelens-app v0.1.0 (D:\GitHub_Project\Timelens\crates\timelens-app)
+    Finished `release` profile [optimized] target(s) in 1m 03s
+     Running unittests src\lib.rs (target\release\deps\timelens_ai-7f44c730b835ffa4.exe)
+
+running 12 tests
+test context::tests::a_count_window_expands_to_a_complete_user_turn_and_preserves_the_source ... ok
+test context::tests::compression_keeps_recent_complete_turns_without_deleting_original_messages ... ok
+test credentials::tests::a_secret_header_cannot_rewrite_the_request_target_or_framing ... ok
+test protocol::tests::credentials_never_survive_error_rendering ... ok
+test protocol::tests::endpoints_cannot_smuggle_credentials_or_downgrade_remote_tls ... ok
+test protocol::tests::fragmented_unicode_and_multiline_sse_survive_arbitrary_network_boundaries ... ok
+test protocol::tests::native_protocols_keep_public_reasoning_and_usage_separate ... ok
+test protocol::tests::retries_do_not_replay_partial_answers_or_single_use_images ... ok
+test protocol::tests::unknown_capabilities_block_images_and_untyped_parameters ... ok
+test schedule::tests::daily_run_summarizes_previous_calendar_day_without_first_enable_backfill ... ok
+test schedule::tests::interval_restart_only_runs_latest_complete_window_and_never_overlaps ... ok
+test transport::tests::actual_http_stream_is_decoded_and_redirects_are_not_followed ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running unittests src\main.rs (target\release\deps\timelens_ai_worker-f4afd53d058bd169.exe)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests\worker_boundary.rs (target\release\deps\worker_boundary-cb684bc8bac63bea.exe)
+
+running 3 tests
+test canceling_worker_closes_a_stalled_stream_without_waiting_for_provider ... ok
+test worker_preserves_retry_after_and_redacts_credential_errors ... ok
+test ordinary_worker_streams_all_three_protocols_over_real_loopback_http ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.16s
+
+     Running unittests src\main.rs (target\release\deps\timelens-795956657afd75cd.exe)
+
+running 9 tests
+test snapshot::tests::active_display_prefers_focused_area_then_cursor_then_primary ... ok
+test snapshot::tests::fixed_slots_start_at_the_next_boundary ... ok
+test snapshot::tests::half_float_and_tone_mapping_cover_sdr_and_hdr_values ... ok
+test snapshot::tests::heavy_task_gate_prevents_scheduled_overlap ... ok
+test snapshot::tests::intersection_uses_positive_area_only ... ok
+test snapshot::tests::session_boundaries_are_conservative_and_have_stable_precedence ... ok
+test snapshot::tests::sleep_detection_uses_unbiased_awake_time ... ok
+test tests::middle_drag_range_normalizes_reverse_direction_and_stops_following_now ... ok
+test tests::middle_drag_range_rejects_clicks_and_clamps_outside_the_axis ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src\main.rs (target\release\deps\timelens_collector-cc1fb480827a2797.exe)
+
+running 10 tests
+test collection::tests::typed_exclusions_do_not_leak_other_rule_categories ... ok
+test collection::tests::wall_clock_edits_are_distinct_from_measured_suspend_time ... ok
+test spool::tests::reports_full_without_discarding_the_oldest_batch ... ok
+test spool::tests::survives_reopen_and_never_writes_plain_facts ... ok
+test spool::tests::key_rotation_cryptographically_invalidates_pending_records_and_tray_state ... ok
+test tests::civil_date_conversion_handles_epoch_leap_day_and_pre_epoch ... ok
+test tests::input_aggregator_seals_only_completed_minutes_with_app_attribution ... ok
+test tests::maps_an_observer_transition_without_content_fields ... ok
+test tests::maps_every_identity_source_explicitly ... ok
+test spool::tests::tray_restart_seed_is_encrypted_and_survives_reopen ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+
+     Running unittests src\lib.rs (target\release\deps\timelens_ipc-db84945e1746fa78.exe)
+
+running 15 tests
+test protocol::tests::rejects_a_frame_length_before_allocating_it ... ok
+test protocol::tests::rejects_an_oversized_executable_path ... ok
+test protocol::tests::rejects_an_unsupported_protocol_version ... ok
+test protocol::tests::rejects_invalid_run_ids_and_identity_sources ... ok
+test protocol::tests::round_trips_a_valid_heartbeat ... ok
+test protocol::tests::round_trips_a_valid_window_batch ... ok
+test protocol::tests::round_trips_and_validates_a_monitoring_gap ... ok
+test protocol::tests::round_trips_and_validates_a_tray_transition ... ok
+test protocol::tests::round_trips_and_validates_an_input_minute ... ok
+test windows::tests::collector_run_ids_use_the_fixed_random_length ... ok
+test windows::tests::authenticated_event_batch_is_acknowledged_after_persistence ... ok
+test windows::tests::collector_server_accepts_an_idle_heartbeat ... ok
+test windows::tests::refuses_remote_or_arbitrary_pipe_names ... ok
+test windows::tests::named_pipe_probe_authenticates_and_acknowledges ... ok
+test windows::tests::rejected_event_batch_is_not_acknowledged_as_accepted ... ok
+
+test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+
+     Running unittests src\lib.rs (target\release\deps\timelens_observer-68006daabe6732fd.exe)
+
+running 13 tests
+test input::tests::counts_only_physical_up_to_down_transitions ... ok
+test input::tests::mouse_counts_only_supported_non_injected_buttons ... ok
+test input::tests::splits_counts_at_minute_boundaries_and_reports_external_overflow ... ok
+test tests::another_window_for_the_same_application_prevents_or_ends_tray_inference ... ok
+test tests::hidden_create_is_not_a_user_window ... ok
+test tests::identityless_system_hosts_are_not_applications ... ok
+test tests::identity_prefers_explicit_values_and_normalizes_path_fallback ... ok
+test tests::minimized_window_is_open_but_not_displayed ... ok
+test tests::other_desktop_cloaked_window_can_onboard_as_background ... ok
+test tests::owned_tool_and_no_activate_windows_do_not_onboard ... ok
+test tests::transition_diff_reports_only_semantic_changes ... ok
+test tests::tray_background_starts_after_the_last_window_and_ends_on_process_exit ... ok
+test tests::visible_top_level_window_onboards_and_displays ... ok
+
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src\lib.rs (target\release\deps\timelens_storage-8d68b42c04c6b28e.exe)
+
+running 41 tests
+test ai::tests::changed_model_requires_retest_and_deletion_pauses_referencing_schedule ... ok
+test ai::tests::crashes_preserve_partial_answer_but_never_silently_replay_it ... ok
+test ai::tests::queue_prioritizes_manual_deduplicates_plans_and_claims_only_one_worker ... ok
+test ai::tests::empty_and_cleaned_ranges_never_claim_full_coverage_or_call_ai ... ok
+test ai::tests::regenerated_versions_have_independent_branches_and_pinned_versions_survive ... ok
+test collection::tests::anonymous_input_is_only_daily_and_idempotent ... ok
+test collection::tests::explicit_app_deletion_removes_derived_artifacts_and_keeps_rules ... ok
+test collection::tests::merge_is_reversible_and_uses_real_interval_union ... ok
+test collection::tests::system_intervals_are_coalesced_without_excluded_identities ... ok
+test milestone3::tests::local_report_persists_only_aggregated_results ... ok
+test milestone3::tests::snapshot_defaults_match_the_five_minute_active_display_contract ... ok
+test milestone3::tests::snapshot_byte_cap_cleans_the_oldest_live_blob_automatically ... ok
+test milestone3::tests::snapshot_images_are_encrypted_deduplicated_previewed_and_deleted ... ok
+test milestone3::tests::snapshot_file_reconciliation_recovers_staged_deletes_and_marks_missing_blobs ... ok
+test milestone3::tests::snapshot_retention_marks_slots_and_keeps_settings_and_exclusions ... ok
+test portable::tests::password_and_tampering_fail_before_replacement ... ok
+test portable::tests::snapshot_pixels_are_portable_and_authenticated ... ok
+2026-09-05 18:33:50.298: ERROR CORE sqlcipher_page_cipher: hmac check failed for pgno=1
+2026-09-05 18:33:50.298: ERROR CORE sqlite3Codec: error decrypting page 1 data: 1
+2026-09-05 18:33:50.298: ERROR CORE sqlcipher_codec_ctx_set_error 1
+test recovery::tests::any_sqlite_corruption_error_latches_read_only_before_next_operation ... ok
+test recovery::tests::recovery_keeps_original_and_removes_orphans_without_inventing_parents ... ok
+2026-09-05 18:33:50.557: ERROR CORE sqlcipher_page_cipher: hmac check failed for pgno=1
+2026-09-05 18:33:50.557: ERROR CORE sqlite3Codec: error decrypting page 1 data: 1
+2026-09-05 18:33:50.557: ERROR CORE sqlcipher_codec_ctx_set_error 1
+test recovery::tests::startup_recovers_interrupted_upgrade_before_inspecting_migration_notice ... ok
+2026-09-05 18:33:50.639: ERROR CORE sqlcipher_page_cipher: hmac check failed for pgno=1
+2026-09-05 18:33:50.639: ERROR CORE sqlite3Codec: error decrypting page 1 data: 1
+2026-09-05 18:33:50.639: ERROR CORE sqlcipher_codec_ctx_set_error 1
+test recovery::tests::unreadable_header_does_not_replace_original_or_publish_target ... ok
+test relocation::tests::failed_pointer_publish_preserves_source_and_verified_destination ... ok
+test portable::tests::portable_roundtrip_uses_new_key_and_preserves_ai_and_filtered_exports ... ok
+test relocation::tests::relocation_and_uninstall_leave_unrelated_exports_intact ... ok
+test tests::a_new_collector_run_closes_old_facts_and_records_a_gap ... ok
+test tests::an_explicit_buffer_gap_replaces_the_generic_restart_gap ... ok
+test tests::clear_all_rotates_the_key_and_preserves_retention_settings ... ok
+test tests::coordinated_clear_removes_offline_collector_artifacts ... ok
+test tests::creates_reopens_and_encrypts_the_database ... ok
+test tests::coordinated_clear_waits_for_collector_and_resumes_it ... ok
+test tests::dpapi_round_trip_does_not_embed_the_plain_key ... ok
+test tests::current_window_state_lookup_uses_the_partial_index ... ok
+test tests::failed_migration_restores_the_encrypted_backup ... ok
+test tests::input_minutes_update_buckets_key_frequency_and_anonymous_ledger ... ok
+test tests::rejects_sequence_gaps_without_partial_writes ... ok
+test tests::retention_deletes_detail_but_preserves_the_anonymous_ledger ... ok
+test tests::timeline_uses_application_interval_unions_and_numbered_windows ... ok
+test tests::tray_background_is_an_application_interval_not_a_window_instance ... ok
+test tests::tray_snapshot_can_recreate_an_application_after_clear ... ok
+test tests::upgrades_schema_two_with_batch_content_checksums ... ok
+test tests::window_batches_are_idempotent_and_close_state_intervals ... ok
+
+test result: ok. 41 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.93s
+
+   Doc-tests timelens_ai
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests timelens_ipc
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests timelens_observer
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests timelens_storage
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s

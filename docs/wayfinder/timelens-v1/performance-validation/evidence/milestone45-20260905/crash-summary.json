@@ -1,0 +1,9 @@
+{
+  "coreRestarted": true,
+  "collectorRestarted": true,
+  "encryptedDatasetReopened": true,
+  "dataKeyUnchanged": true,
+  "collectorRestartGapCount": 2,
+  "gracefulSystemEndRecorded": true,
+  "passed": true
+}

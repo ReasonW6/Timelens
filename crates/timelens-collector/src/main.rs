@@ -1,6 +1,7 @@
 #![cfg(windows)]
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod collection;
 mod spool;
 
 use std::{
@@ -73,173 +74,207 @@ fn main() -> Result<()> {
 }
 
 fn collect_window_events(pipe_name: &str, data_directory: PathBuf) -> Result<()> {
-    let mut observer = WindowObserver::new().context("failed to initialize window observation")?;
-    let monitor = WinEventMonitor::new().context("failed to install Windows event hooks")?;
-    let input_monitor = InputMonitor::new().context("failed to install Windows input hooks")?;
+    let mut observer = WindowObserver::new()?;
+    let monitor = WinEventMonitor::new()?;
+    let input_monitor = InputMonitor::new()?;
     let reset_request_path = data_directory.join(COLLECTOR_RESET_REQUEST_FILE);
     let reset_paused_path = data_directory.join(COLLECTOR_RESET_PAUSED_FILE);
     if reset_paused_path.exists() && !reset_request_path.exists() {
-        fs::remove_file(&reset_paused_path)
-            .context("failed to remove a stale collector reset acknowledgement")?;
+        fs::remove_file(&reset_paused_path)?;
     }
-    let pending_spool =
-        PendingSpool::open(&data_directory).context("failed to open collector event spool")?;
-    if !pending_spool.is_empty() {
-        println!(
-            "collector spool replay ready: pending_batches={}",
-            pending_spool.len()
-        );
-    }
-    let tray_seeds = pending_spool
-        .load_tray_state()
-        .context("failed to load collector tray restart state")?
+    let pending = PendingSpool::open(&data_directory)?;
+    let policy = timelens_ipc::privacy::Policy::load(&data_directory)?;
+    let seeds = pending
+        .load_tray_state()?
         .into_iter()
+        .filter(|t| !policy.paused && !policy.activity.contains(&t.application_identity))
         .map(observer_tray_seed)
         .collect::<Result<Vec<_>>>()?;
-    observer.seed_tray_presence(tray_seeds);
-    let spool = Arc::new(Mutex::new(pending_spool));
+    observer.seed_tray_presence(seeds);
+    let spool = Arc::new(Mutex::new(pending));
     let delivery_wake = spawn_delivery_worker(
         pipe_name.to_owned(),
-        Arc::clone(&spool),
+        spool.clone(),
         reset_request_path.clone(),
         reset_paused_path.clone(),
     );
-    let mut collector_run_id =
-        new_collector_run_id().context("failed to create collector run ID")?;
-    let mut next_sequence = 1_u64;
-
-    let initial = observer
-        .reconcile_transitions()
-        .context("failed to reconcile the initial Windows desktop")?;
-    let mut current = initial.current;
-    let mut current_tray = observer.current_tray_presence();
-    save_tray_state(&spool, &current_tray)?;
-    let mut recent_identities = window_identities(&current);
-    let mut input_aggregator = InputAggregator::default();
-    let mut last_reconcile = Instant::now();
-    let (initial_utc_ms, initial_monotonic_ms) = observer.timestamp();
-    let initial_tray = current_tray
-        .iter()
-        .map(|presence| ObserverTrayTransition {
-            kind: ObserverTrayTransitionKind::Started,
-            observed_at_utc_ms: initial_utc_ms,
-            monotonic_ms: initial_monotonic_ms,
-            application_identity: presence.application_identity.clone(),
-            process_id: presence.process_id,
-            process_started_at_100ns: presence.process_started_at_100ns,
-        })
-        .collect::<Vec<_>>();
-    queue_transitions(
+    let mut collector_run_id = new_collector_run_id()?;
+    let mut next_sequence = 1;
+    let initial = observer.reconcile_transitions()?;
+    let mut raw = initial.current;
+    let mut raw_tray = observer.current_tray_presence();
+    let (now, mono) = observer.timestamp();
+    let mut filter = collection::Filter::new(&data_directory, now, mono);
+    let mut input = InputAggregator::default();
+    let mut identities = window_identities(&raw);
+    let mut last_reconcile = Instant::now() - RECONCILE_INTERVAL;
+    publish_collection(
         &spool,
         &delivery_wake,
         &mut collector_run_id,
         &mut next_sequence,
-        &initial.transitions,
-        &initial_tray,
-        CurrentSnapshot {
-            windows: &current,
-            tray: &current_tray,
-        },
+        &mut filter,
+        &raw,
+        &raw_tray,
+        now,
+        mono,
     )?;
-
     loop {
-        if reset_request_path.exists() {
-            acknowledge_collector_reset(&reset_paused_path)?;
-            let reset_started = Instant::now();
-            while reset_request_path.exists() && reset_started.elapsed() < RESET_REQUEST_TIMEOUT {
-                monitor.wait_for_change(RESET_POLL_INTERVAL);
-                let _ = input_monitor.drain();
-            }
-            if reset_request_path.exists() {
-                fs::remove_file(&reset_request_path)
-                    .context("timed-out collector reset request could not be removed")?;
-            }
-            {
-                let mut pending = spool
-                    .lock()
-                    .map_err(|_| anyhow::anyhow!("collector spool lock poisoned"))?;
-                pending
-                    .rotate_key()
-                    .context("failed to rotate collector spool key")?;
-            }
-            collector_run_id =
-                new_collector_run_id().context("failed to rotate collector run ID")?;
-            next_sequence = 1;
-            input_aggregator = InputAggregator::default();
-            let reconciled = observer
-                .reconcile_transitions()
-                .context("failed to reconcile after clearing collector data")?;
-            current = reconciled.current;
-            current_tray = observer.current_tray_presence();
-            save_tray_state(&spool, &current_tray)?;
-            recent_identities = window_identities(&current);
-            let (observed_at_utc_ms, monotonic_ms) = observer.timestamp();
-            let snapshot =
-                snapshot_events(&current, &current_tray, observed_at_utc_ms, monotonic_ms);
+        let stop = data_directory.join("collector-stop.request");
+        if stop.is_file() {
+            fs::remove_file(stop)?;
+            input.add_private(
+                input_monitor.drain(),
+                &identities,
+                &filter.policy,
+                filter.blocked,
+            )?;
+            let (now, mono) = observer.timestamp();
+            let mut events = input.take_completed(
+                now,
+                mono,
+                LocalTimeFacts {
+                    minute_started_at_utc_ms: i64::MAX,
+                    ..local_time_facts(now)?
+                },
+            );
+            events.extend(filter.windows.iter().map(|w| CollectorEvent {
+                observed_at_utc_ms: now,
+                monotonic_ms: mono,
+                body: Some(collector_event::Body::WindowTransition(
+                    ProtocolWindowTransition {
+                        kind: ProtocolWindowTransitionKind::Closed as i32,
+                        window: Some(protocol_window(w)),
+                    },
+                )),
+            }));
+            events.extend(filter.tray.iter().map(|p| CollectorEvent {
+                observed_at_utc_ms: now,
+                monotonic_ms: mono,
+                body: Some(collector_event::Body::TrayTransition(
+                    ProtocolTrayTransition {
+                        kind: ProtocolTrayTransitionKind::Ended as i32,
+                        application_identity: p.application_identity.clone(),
+                        process_id: p.process_id,
+                        process_started_at_100ns: p.process_started_at_100ns,
+                    },
+                )),
+            }));
+            events.push(CollectorEvent {
+                observed_at_utc_ms: now,
+                monotonic_ms: mono,
+                body: Some(collector_event::Body::SystemInterval(
+                    timelens_ipc::SystemInterval {
+                        kind: "system_end".into(),
+                        started_utc_ms: now,
+                        duration_ms: 0,
+                        timezone_offset_minutes: local_time_facts(now)?.timezone_offset_minutes,
+                    },
+                )),
+            });
             queue_events(
                 &spool,
                 &delivery_wake,
                 &mut collector_run_id,
                 &mut next_sequence,
-                &snapshot,
+                &events,
                 CurrentSnapshot {
-                    windows: &current,
-                    tray: &current_tray,
+                    windows: &[],
+                    tray: &[],
                 },
             )?;
-            fs::remove_file(&reset_paused_path)
-                .context("collector reset acknowledgement could not be removed")?;
+            save_tray_state(&spool, &[])?;
+            let stopping = Instant::now();
+            while stopping.elapsed() < Duration::from_secs(10)
+                && !spool
+                    .lock()
+                    .map_err(|_| anyhow::anyhow!("spool lock poisoned"))?
+                    .is_empty()
+            {
+                thread::sleep(Duration::from_millis(50));
+            }
+            return Ok(());
+        }
+        if reset_request_path.exists() {
+            acknowledge_collector_reset(&reset_paused_path)?;
+            let start = Instant::now();
+            while reset_request_path.exists() {
+                monitor.wait_for_change(RESET_POLL_INTERVAL);
+                let _ = input_monitor.drain();
+                if start.elapsed() >= RESET_REQUEST_TIMEOUT
+                    && let Ok(_absent_core) = SingleInstanceGuard::acquire_core()
+                {
+                    fs::remove_file(&reset_request_path)?;
+                    break;
+                }
+            }
+            spool
+                .lock()
+                .map_err(|_| anyhow::anyhow!("spool lock poisoned"))?
+                .rotate_key()?;
+            collector_run_id = new_collector_run_id()?;
+            next_sequence = 1;
+            input = InputAggregator::default();
+            raw = observer.reconcile_transitions()?.current;
+            raw_tray = observer.current_tray_presence();
+            identities = window_identities(&raw);
+            let (now, mono) = observer.timestamp();
+            filter = collection::Filter::new(&data_directory, now, mono);
+            publish_collection(
+                &spool,
+                &delivery_wake,
+                &mut collector_run_id,
+                &mut next_sequence,
+                &mut filter,
+                &raw,
+                &raw_tray,
+                now,
+                mono,
+            )?;
+            fs::remove_file(&reset_paused_path)?;
             last_reconcile = Instant::now();
             continue;
         }
-
-        let now_utc_ms = unix_time_ms();
+        let now = unix_time_ms();
         let until_minute =
-            Duration::from_millis((MINUTE_MS - now_utc_ms.rem_euclid(MINUTE_MS)).max(1) as u64);
-        let until_reconcile = RECONCILE_INTERVAL.saturating_sub(last_reconcile.elapsed());
-        let window_changed = monitor.wait_for_change(
+            Duration::from_millis((MINUTE_MS - now.rem_euclid(MINUTE_MS)).max(1) as u64);
+        let changed = monitor.wait_for_change(
             until_minute
-                .min(until_reconcile)
+                .min(RECONCILE_INTERVAL.saturating_sub(last_reconcile.elapsed()))
                 .min(Duration::from_secs(1)),
         );
-
-        if window_changed || last_reconcile.elapsed() >= RECONCILE_INTERVAL {
-            let result = observer
-                .reconcile_transitions()
-                .context("failed to reconcile a Windows event")?;
-            current = result.current;
-            recent_identities.extend(window_identities(&current));
-            let next_tray = observer.current_tray_presence();
-            if next_tray != current_tray {
-                save_tray_state(&spool, &next_tray)?;
-                current_tray = next_tray;
-            }
-            if !result.transitions.is_empty() || !result.tray_transitions.is_empty() {
-                queue_transitions(
-                    &spool,
-                    &delivery_wake,
-                    &mut collector_run_id,
-                    &mut next_sequence,
-                    &result.transitions,
-                    &result.tray_transitions,
-                    CurrentSnapshot {
-                        windows: &current,
-                        tray: &current_tray,
-                    },
-                )?;
-            }
+        filter.refresh(&data_directory);
+        if changed || last_reconcile.elapsed() >= RECONCILE_INTERVAL {
+            raw = observer.reconcile_transitions()?.current;
+            raw_tray = observer.current_tray_presence();
+            identities.extend(window_identities(&raw));
             last_reconcile = Instant::now();
         }
-
-        let (observed_at_utc_ms, monotonic_ms) = observer.timestamp();
-        input_aggregator.add(input_monitor.drain(), &recent_identities)?;
-        let local_time = local_time_facts(observed_at_utc_ms)?;
-        if input_aggregator.take_new_overflow() {
+        let (now, mono) = observer.timestamp();
+        publish_collection(
+            &spool,
+            &delivery_wake,
+            &mut collector_run_id,
+            &mut next_sequence,
+            &mut filter,
+            &raw,
+            &raw_tray,
+            now,
+            mono,
+        )?;
+        let local = local_time_facts(now)?;
+        input.add_private(
+            input_monitor.drain(),
+            &identities,
+            &filter.policy,
+            filter.blocked,
+        )?;
+        if input.take_new_overflow() {
             let gap = CollectorEvent {
-                observed_at_utc_ms,
-                monotonic_ms,
+                observed_at_utc_ms: now,
+                monotonic_ms: mono,
                 body: Some(collector_event::Body::MonitoringGap(MonitoringGap {
-                    started_at_utc_ms: local_time.minute_started_at_utc_ms,
+                    started_at_utc_ms: local.minute_started_at_utc_ms,
                     reason: MonitoringGapReason::InputOverflow as i32,
                 })),
             };
@@ -250,13 +285,12 @@ fn collect_window_events(pipe_name: &str, data_directory: PathBuf) -> Result<()>
                 &mut next_sequence,
                 &[gap],
                 CurrentSnapshot {
-                    windows: &current,
-                    tray: &current_tray,
+                    windows: &filter.windows,
+                    tray: &filter.tray,
                 },
             )?;
         }
-        let completed =
-            input_aggregator.take_completed(observed_at_utc_ms, monotonic_ms, local_time);
+        let completed = input.take_completed(now, mono, local);
         if !completed.is_empty() {
             queue_events(
                 &spool,
@@ -265,40 +299,60 @@ fn collect_window_events(pipe_name: &str, data_directory: PathBuf) -> Result<()>
                 &mut next_sequence,
                 &completed,
                 CurrentSnapshot {
-                    windows: &current,
-                    tray: &current_tray,
+                    windows: &filter.windows,
+                    tray: &filter.tray,
                 },
             )?;
-            recent_identities = window_identities(&current);
+            identities = window_identities(&raw);
         }
     }
 }
 
+#[allow(clippy::too_many_arguments)]
+fn publish_collection(
+    spool: &Arc<Mutex<PendingSpool>>,
+    wake: &mpsc::Sender<()>,
+    run: &mut Vec<u8>,
+    sequence: &mut u64,
+    filter: &mut collection::Filter,
+    raw: &[timelens_observer::WindowObservation],
+    tray: &[TrayPresence],
+    now: i64,
+    mono: u64,
+) -> Result<()> {
+    let previous_tray = filter.tray.clone();
+    let (windows, tray_events, mut events) = filter.reconcile(
+        raw,
+        tray,
+        now,
+        mono,
+        local_time_facts(now)?.timezone_offset_minutes,
+    );
+    if previous_tray != filter.tray {
+        save_tray_state(spool, &filter.tray)?;
+    }
+    events.extend(windows.iter().map(protocol_event));
+    events.extend(tray_events.iter().map(protocol_tray_event));
+    events.sort_by_key(|e| (e.monotonic_ms, e.observed_at_utc_ms));
+    if !events.is_empty() {
+        queue_events(
+            spool,
+            wake,
+            run,
+            sequence,
+            &events,
+            CurrentSnapshot {
+                windows: &filter.windows,
+                tray: &filter.tray,
+            },
+        )?;
+    }
+    Ok(())
+}
 #[derive(Clone, Copy)]
 struct CurrentSnapshot<'a> {
     windows: &'a [timelens_observer::WindowObservation],
     tray: &'a [TrayPresence],
-}
-
-fn queue_transitions(
-    spool: &Arc<Mutex<PendingSpool>>,
-    delivery_wake: &mpsc::Sender<()>,
-    collector_run_id: &mut Vec<u8>,
-    next_sequence: &mut u64,
-    transitions: &[ObserverWindowTransition],
-    tray_transitions: &[ObserverTrayTransition],
-    current: CurrentSnapshot<'_>,
-) -> Result<()> {
-    let mut events = transitions.iter().map(protocol_event).collect::<Vec<_>>();
-    events.extend(tray_transitions.iter().map(protocol_tray_event));
-    queue_events(
-        spool,
-        delivery_wake,
-        collector_run_id,
-        next_sequence,
-        &events,
-        current,
-    )
 }
 
 fn queue_events(
@@ -526,40 +580,6 @@ fn acknowledge_collector_reset(path: &std::path::Path) -> Result<()> {
     Ok(())
 }
 
-fn snapshot_events(
-    current: &[timelens_observer::WindowObservation],
-    current_tray: &[TrayPresence],
-    observed_at_utc_ms: i64,
-    monotonic_ms: u64,
-) -> Vec<CollectorEvent> {
-    let mut events = current
-        .iter()
-        .map(|window| CollectorEvent {
-            observed_at_utc_ms,
-            monotonic_ms,
-            body: Some(collector_event::Body::WindowTransition(
-                ProtocolWindowTransition {
-                    kind: ProtocolWindowTransitionKind::Opened as i32,
-                    window: Some(protocol_window(window)),
-                },
-            )),
-        })
-        .collect::<Vec<_>>();
-    events.extend(current_tray.iter().map(|presence| CollectorEvent {
-        observed_at_utc_ms,
-        monotonic_ms,
-        body: Some(collector_event::Body::TrayTransition(
-            ProtocolTrayTransition {
-                kind: ProtocolTrayTransitionKind::Started as i32,
-                application_identity: presence.application_identity.clone(),
-                process_id: presence.process_id,
-                process_started_at_100ns: presence.process_started_at_100ns,
-            },
-        )),
-    }));
-    events
-}
-
 fn protocol_event(transition: &ObserverWindowTransition) -> CollectorEvent {
     CollectorEvent {
         observed_at_utc_ms: transition.observed_at_utc_ms,
@@ -680,6 +700,7 @@ impl LocalTimeFacts {
 struct InputBucketKey {
     local_time: LocalTimeFacts,
     focused_application_identity: Option<String>,
+    anonymous_only: bool,
 }
 
 #[derive(Default)]
@@ -699,7 +720,25 @@ struct InputAggregator {
 }
 
 impl InputAggregator {
+    #[cfg(test)]
     fn add(&mut self, drain: InputDrain, identities: &HashMap<u64, String>) -> Result<()> {
+        self.add_private(
+            drain,
+            identities,
+            &timelens_ipc::privacy::Policy::default(),
+            false,
+        )
+    }
+    fn add_private(
+        &mut self,
+        drain: InputDrain,
+        identities: &HashMap<u64, String>,
+        policy: &timelens_ipc::privacy::Policy,
+        blocked: bool,
+    ) -> Result<()> {
+        if blocked || policy.paused {
+            return Ok(());
+        }
         if drain.overflowed {
             self.overflowed = true;
         }
@@ -715,7 +754,13 @@ impl InputAggregator {
                 };
             let key = InputBucketKey {
                 local_time,
-                focused_application_identity: identities.get(&sample.window_id).cloned(),
+                focused_application_identity: identities
+                    .get(&sample.window_id)
+                    .filter(|id| !policy.activity.contains(*id) && !policy.input.contains(*id))
+                    .cloned(),
+                anonymous_only: identities
+                    .get(&sample.window_id)
+                    .is_some_and(|id| policy.input.contains(id)),
             };
             if !self.buckets.contains_key(&key)
                 && self.buckets.len() >= MAX_INPUT_BUCKETS_PER_MINUTE
@@ -723,12 +768,19 @@ impl InputAggregator {
                 self.overflowed = true;
                 continue;
             }
+            let anonymous_only = key.anonymous_only;
             let counts = self.buckets.entry(key).or_default();
             match sample.kind {
                 InputSampleKind::Keyboard {
                     scan_code,
                     keyboard_layout,
                 } => {
+                    if anonymous_only {
+                        counts.keyboard_count = counts
+                            .keyboard_count
+                            .saturating_add(u64::from(sample.count));
+                        continue;
+                    }
                     let physical_key = (scan_code, keyboard_layout);
                     if !counts.key_counts.contains_key(&physical_key)
                         && counts.key_counts.len() >= MAX_INPUT_KEYS_PER_MINUTE
@@ -813,7 +865,12 @@ impl InputAggregator {
 
 fn input_minute(key: InputBucketKey, counts: InputBucketCounts) -> Option<InputMinute> {
     Some(InputMinute {
-        minute_started_at_utc_ms: key.local_time.minute_started_at_utc_ms,
+        anonymous_only: key.anonymous_only,
+        minute_started_at_utc_ms: if key.anonymous_only {
+            0
+        } else {
+            key.local_time.minute_started_at_utc_ms
+        },
         timezone_offset_minutes: key.local_time.timezone_offset_minutes,
         local_date: key.local_time.local_date(),
         focused_application_identity: key.focused_application_identity,

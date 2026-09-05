@@ -8,12 +8,20 @@ publish.workspace = true
 [dependencies]
 crc32fast.workspace = true
 hex.workspace = true
+image.workspace = true
 prost.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+chrono.workspace = true
+base64.workspace = true
 rusqlite.workspace = true
 thiserror.workspace = true
 timelens-ipc = { path = "../timelens-ipc" }
+timelens-ai = { path = "../timelens-ai" }
 windows-sys.workspace = true
 zeroize.workspace = true
+zip.workspace = true
+tempfile.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

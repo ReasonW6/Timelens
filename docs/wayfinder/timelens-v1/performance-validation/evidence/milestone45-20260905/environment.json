@@ -1,0 +1,17 @@
+{
+  "capturedAt": "2026-09-05T18:36:10.9168356+08:00",
+  "os": {
+    "Caption": "Microsoft Windows 11 专业版",
+    "Version": "10.0.26200",
+    "BuildNumber": "26200",
+    "OSArchitecture": "64 位"
+  },
+  "cpu": {
+    "Name": "AMD Ryzen 7 7840H w/Radeon 780M Graphics",
+    "NumberOfCores": 8,
+    "NumberOfLogicalProcessors": 16
+  },
+  "physicalMemoryBytes": 14731603968,
+  "rustc": "rustc 1.94.1 (e408947bf 2026-03-25)",
+  "cargo": "cargo 1.94.1 (29ea6fb6a 2026-03-24)"
+}

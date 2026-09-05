@@ -51,6 +51,10 @@ Canonical path: docs/wayfinder/timelens-v1/map.md
 4. **AI 与分支对话**：实现 OpenAI 兼容、Claude、Gemini 和自定义提供商、模型能力标记、调度/手动总结、可编辑提示词、流式侧栏、重试版本和逐张授权视觉输入；网络代码保持普通权限，worker 按需退出。
 5. **数据可携与发布硬化**：实现便携 ZIP 备份/恢复、凭据策略、签名更新、崩溃恢复和卸载清理；在干净 Windows 11 上完成最终 Inno 体积、权限、锁屏/睡眠/重启、30 天数据、常驻/按需资源及签名验收。
 
+当前实施状态（2026-09-05）：里程碑 1 至 5 的功能均已实现，协议为 v4、schema 为 v12。里程碑 2 证据见[首个可运行闭环验收报告](performance-validation/milestone-2-report.md)，里程碑 3 证据见[快照与本地报告验收报告](performance-validation/milestone-3-report.md)，新增 AI、便携数据、恢复与安装维护，以及最终 103 项 Release 回归、容量和进程组性能见[里程碑 4、5 报告](performance-validation/milestone-4-5-report.md)。实际 Inno 包为 9.665 MiB，30 天非图片负载投影为 78.17 MiB，常驻与 AI 活跃内存低于 100 MiB；真实 UI 单帧按需峰值另记为 142.69 MiB。
+
+发布验收状态：按用户既有决定跳过签名与干净 Windows 11 虚拟机，采用 ADR 0004 的用户主动安装器升级，所有产物为 `NotSigned`。当前宿主机安装、升级、保留/删除卸载、进程崩溃和单屏截图已实测；锁屏、安全桌面、睡眠、系统重启、物理多屏、HDR 与远程环境仍按[实机发布矩阵](performance-validation/milestone-5-physical-matrix.md)标为未执行。本批实现及报告随本次本地提交归档，尚未推送；功能实现状态不等同于完整发布矩阵通过。
+
 ## Out of scope
 
 - V1 不支持 macOS、Linux、多用户账号、团队管理、跨设备同步或云端数据托管。

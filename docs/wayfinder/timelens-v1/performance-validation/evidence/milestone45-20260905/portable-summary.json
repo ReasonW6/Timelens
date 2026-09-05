@@ -1,0 +1,19 @@
+{
+  "manifestHashesValid": true,
+  "schemaVersion": 12,
+  "snapshotFiles": 1,
+  "databaseIntegrity": "ok",
+  "foreignKeyViolations": 0,
+  "aiVersions": 2,
+  "aiMessages": 2,
+  "imageAuthorizations": 0,
+  "providerTestsCleared": true,
+  "plansDisabled": true,
+  "syntheticCredentialAbsent": true,
+  "archiveFiles": [
+    "snapshots/1.webp",
+    "database.sqlite3",
+    "manifest.json"
+  ],
+  "passed": true
+}

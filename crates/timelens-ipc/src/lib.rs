@@ -1,13 +1,14 @@
 #![cfg(windows)]
 
+pub mod privacy;
 mod protocol;
 mod windows;
 
 pub use protocol::{
     Ack, ClientHello, CollectorEvent, Envelope, EventBatch, HandshakeComplete, Heartbeat,
     IdentitySource, InputMinute, MonitoringGap, MonitoringGapReason, PhysicalKeyCount, ServerHello,
-    TrayTransition, TrayTransitionKind, WindowObservation, WindowTransition, WindowTransitionKind,
-    collector_event, envelope,
+    SystemInterval, TrayTransition, TrayTransitionKind, WindowObservation, WindowTransition,
+    WindowTransitionKind, collector_event, envelope,
 };
 pub use windows::{
     HandshakeReport, PeerVerification, SingleInstanceGuard, current_pipe_name,
@@ -15,7 +16,7 @@ pub use windows::{
     run_server_probe,
 };
 
-pub const PROTOCOL_VERSION: u32 = 3;
+pub const PROTOCOL_VERSION: u32 = 4;
 pub const MAX_FRAME_BYTES: usize = 64 * 1024;
 pub const MAX_BATCH_EVENTS: usize = 512;
 pub const MAX_EXECUTABLE_PATH_BYTES: usize = 1024;

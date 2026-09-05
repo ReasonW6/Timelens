@@ -2,7 +2,7 @@
 
 Timelens 使用 Wayfinder 的 local-markdown tracker。V1 地图、票据及决策证据已从临时工作区迁入 Git；这里是正式开发唯一应依赖的规划入口。
 
-当前实施进度：里程碑 1 与里程碑 2 已完成；里程碑 2 的实现范围、问题修复和可复现证据见[验收报告](timelens-v1/performance-validation/milestone-2-report.md)。
+当前实施进度（2026-09-05）：里程碑 1 至 5 的功能均已实现。里程碑 2 的首个可运行闭环见[验收报告](timelens-v1/performance-validation/milestone-2-report.md)；里程碑 3 的快照与本地报告见[验收报告](timelens-v1/performance-validation/milestone-3-report.md)；最终 103 项回归、AI、便携数据、安装维护、容量与资源证据见[里程碑 4、5 报告](timelens-v1/performance-validation/milestone-4-5-report.md)。签名和干净 Windows 11 虚拟机按用户要求跳过，物理系统场景的[发布矩阵](timelens-v1/performance-validation/milestone-5-physical-matrix.md)仍有未执行项；本批实现与证据随本次本地提交归档，尚未推送。
 
 ## 从这里开始
 

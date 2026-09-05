@@ -1,0 +1,16 @@
+{
+  "capturedAt": "2026-09-05T19:11:11.3052889+08:00",
+  "scenario": "Visible Release Slint core and Collector; one user-interface manual capture; scheduled capture disabled; no AI worker",
+  "measuredSeconds": 30.022231,
+  "sampleCount": 662,
+  "requestedSampleIntervalMs": 20,
+  "averageSampleIntervalMs": 45.286229954614214,
+  "maximumSampleIntervalMs": 58.459,
+  "initialWorkingSetBytes": 57585664,
+  "peakWorkingSetBytes": 149618688,
+  "finalWorkingSetBytes": 87457792,
+  "peakPrivateBytes": 126074880,
+  "averageCpuPercent": 0.3382909817728069,
+  "uiResponding": true,
+  "interpretation": "On-demand sampled peak, not the steady-state 100 MiB gate. Confirm the successful capture separately before accepting this record."
+}
