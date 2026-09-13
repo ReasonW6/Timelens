@@ -33,6 +33,7 @@ rusqlite = { version = "0.40.2", default-features = false, features = [
     "serialize",
 ] }
 slint = { version = "1.17.1", default-features = false, features = [
+    "accessibility",
     "backend-winit",
     "compat-1-2",
     "renderer-software",

@@ -1,8 +1,25 @@
-import {Button,LineEdit,ScrollView} from "std-widgets.slint";
-component Note inherits Text {color:#a7b9c9; font-size:13px; wrap:word-wrap;}
+import { LineEdit, ScrollView, Palette } from "std-widgets.slint";
+import { Theme, Action, Label, Note, SectionTitle, Rule } from "theme.slint";
+
+component RecoveryField inherits LineEdit {
+    min-height: 36px;
+    max-height: 36px;
+    min-width: 0px;
+    vertical-stretch: 0;
+    font-size: 14px;
+}
+
 export component RecoveryWindow inherits Window {
-    title:"Timelens · 数据恢复"; preferred-width:720px; preferred-height:740px;
-    min-width:580px; min-height:540px; background:#0d1721;
+    title: "Timelens · 数据恢复";
+    preferred-width: 800px;
+    preferred-height: 780px;
+    min-width: 620px;
+    min-height: 580px;
+    background: Theme.paper;
+    default-font-family: "Microsoft YaHei UI";
+    default-font-size: 14px;
+    init => { Palette.color-scheme = ColorScheme.light; }
+
     in-out property<string> source;
     in-out property<string> destination;
     in-out property<string> archive;
@@ -13,32 +30,144 @@ export component RecoveryWindow inherits Window {
     in-out property<bool> busy:false;
     in-out property<bool> ready:false;
     callback action(int);
-    VerticalLayout {padding:28px;spacing:16px;
-        Text{text:root.upgrade?"准备升级本地数据":"保留原件，恢复数据";color:#edf4fa;font-size:26px;font-weight:600;}
-        Note{text:root.detail;}
-        ScrollView {VerticalLayout {spacing:12px;
-            Note{text:"原数据位置";}
-            LineEdit{text<=>root.source;enabled:!root.busy;}
-            if root.upgrade: Button{text:"升级并打开";enabled:!root.busy;clicked=>{root.action(0);}}
-            if !root.upgrade: VerticalLayout {spacing:12px;
-                Note{text:"原数据库、密钥和快照不会被覆盖。恢复及新建都使用另一个空目录；先完成校验，再由你选择是否切换。";}
-                Note{text:"新数据目录";}
-                LineEdit{text<=>root.destination;placeholder-text:"选择本地固定磁盘上的空目录";enabled:!root.busy;}
-                Note{text:"从便携 ZIP 恢复";}
-                HorizontalLayout {
-                    LineEdit{text<=>root.archive;placeholder-text:"备份 ZIP 路径";enabled:!root.busy;}
-                    Button{text:"浏览";enabled:!root.busy;clicked=>{root.action(6);}}
-                }
-                LineEdit{text<=>root.password;input-type:InputType.password;placeholder-text:"备份独立密码（无密码时留空）";enabled:!root.busy;}
-                Button{text:"校验并恢复备份到新目录";enabled:!root.busy && root.archive!="";clicked=>{root.action(1);}}
-                Note{text:"没有备份时，可尝试从可读取的记录建立新数据集。无法恢复的记录将明确标记为缺失；采集、快照和 AI 计划保持暂停，供你先检查排除规则。";}
-                Button{text:"尝试恢复可读取的记录";enabled:!root.busy;clicked=>{root.action(3);}}
-                Button{text:"在新目录建立空数据集";enabled:!root.busy;clicked=>{root.action(2);}}
-                Button{text:"重新检查并打开原位置";enabled:!root.busy;clicked=>{root.action(5);}}
+
+    private property <bool> other-methods-open: false;
+
+    VerticalLayout {
+        padding: 28px;
+        spacing: 16px;
+
+        VerticalLayout {
+            spacing: 6px;
+            vertical-stretch: 0;
+            Note { text: "TIMELENS"; }
+            Text {
+                text: root.upgrade ? "准备升级本地数据" : "保留原件，恢复数据";
+                color: Theme.ink;
+                font-size: 28px;
+                font-weight: 600;
+                vertical-stretch: 0;
             }
-        }}
-        Note{text:root.busy?"正在处理，请稍候…":root.status;}
-        Button{text:"使用已校验的新数据集";enabled:root.ready && !root.busy;clicked=>{root.action(4);}}
-        Note{text:"关闭此窗口即可退出；原始文件仍保留在原位置。";}
+            Note { text: root.upgrade ? "确认数据位置并阅读说明，然后继续。" : "先恢复并校验，再决定是否切换到新的数据集。"; }
+        }
+        Rule { }
+
+        ScrollView {
+            vertical-stretch: 1;
+            horizontal-scrollbar-policy: always-off;
+            VerticalLayout {
+                alignment: start;
+                spacing: 16px;
+                padding-right: 12px;
+
+                if root.detail != "" : Note { text: root.detail; color: Theme.ink; }
+                VerticalLayout {
+                    spacing: 7px;
+                    Label { text: "原数据位置"; }
+                    RecoveryField {
+                        text <=> root.source;
+                        enabled: !root.busy;
+                        accessible-label: "原数据位置";
+                    }
+                }
+
+                if root.upgrade : HorizontalLayout {
+                    Action { width: 144px; text: "升级并打开"; accent: true; enabled: !root.busy; clicked => { root.action(0); } }
+                    Rectangle { horizontal-stretch: 1; }
+                }
+
+                if !root.upgrade : VerticalLayout {
+                    spacing: 16px;
+                    Rule { }
+                    SectionTitle { text: "恢复到新目录"; }
+                    Note { text: "原数据库、密钥和快照不会被覆盖。恢复及新建都使用另一个空目录；先完成校验，再由你选择是否切换。"; }
+                    VerticalLayout {
+                        spacing: 7px;
+                        Label { text: "新数据目录"; }
+                        RecoveryField {
+                            text <=> root.destination;
+                            placeholder-text: "本地固定磁盘上的空目录";
+                            enabled: !root.busy;
+                            accessible-label: "用于恢复的新数据目录";
+                        }
+                    }
+                    Rule { }
+                    SectionTitle { text: "从备份恢复"; }
+                    VerticalLayout {
+                        spacing: 7px;
+                        Label { text: "便携 ZIP 备份"; }
+                        HorizontalLayout {
+                            spacing: 8px;
+                            RecoveryField { text <=> root.archive; placeholder-text: "选择备份 ZIP 文件"; enabled: !root.busy; accessible-label: "便携 ZIP 备份路径"; }
+                            Action { width: 88px; text: "浏览"; enabled: !root.busy; clicked => { root.action(6); } }
+                        }
+                    }
+                    VerticalLayout {
+                        spacing: 7px;
+                        Label { text: "备份独立密码（可选）"; }
+                        RecoveryField {
+                            text <=> root.password;
+                            input-type: InputType.password;
+                            placeholder-text: "无密码备份请留空";
+                            enabled: !root.busy;
+                            accessible-label: "备份独立密码";
+                        }
+                    }
+                    HorizontalLayout {
+                        Action { width: 232px; text: "校验并恢复备份到新目录"; accent: true; enabled: !root.busy && root.archive != ""; clicked => { root.action(1); } }
+                        Rectangle { horizontal-stretch: 1; }
+                    }
+                    Rule { }
+                    HorizontalLayout {
+                        Action { width: 224px; text: root.other-methods-open ? "收起其他恢复方式" : "没有备份？查看其他方式"; selected: root.other-methods-open; enabled: !root.busy; clicked => { root.other-methods-open = !root.other-methods-open; } }
+                        Rectangle { horizontal-stretch: 1; }
+                    }
+                    if root.other-methods-open : VerticalLayout {
+                        spacing: 14px;
+                        Note { text: "可以尝试从可读取的记录建立新数据集。无法恢复的记录会明确标记为缺失；采集、快照和 AI 计划保持暂停，供你先检查排除规则。"; }
+                        HorizontalLayout {
+                            spacing: 8px;
+                            Action { width: 224px; text: "尝试恢复可读取的记录"; enabled: !root.busy; clicked => { root.action(3); } }
+                            Rectangle { horizontal-stretch: 1; }
+                        }
+                        HorizontalLayout {
+                            spacing: 8px;
+                            Action { width: 216px; text: "在新目录建立空数据集"; enabled: !root.busy; clicked => { root.action(2); } }
+                            Rectangle { horizontal-stretch: 1; }
+                        }
+                        HorizontalLayout {
+                            spacing: 8px;
+                            Action { width: 224px; text: "重新检查并打开原位置"; enabled: !root.busy; clicked => { root.action(5); } }
+                            Rectangle { horizontal-stretch: 1; }
+                        }
+                    }
+                }
+                Rectangle { height: 8px; }
+            }
+        }
+
+        Rule { }
+        Rectangle {
+            height: 76px;
+            vertical-stretch: 0;
+            background: Theme.sidebar;
+            border-radius: 5px;
+            HorizontalLayout {
+                padding: 12px;
+                spacing: 12px;
+                Label { width: 56px; text: root.busy ? "处理中" : root.ready ? "已校验" : "状态"; color: Theme.muted; }
+                ScrollView {
+                    horizontal-stretch: 1;
+                    horizontal-scrollbar-policy: always-off;
+                    Note { x: 0px; y: 0px; width: parent.width; text: root.busy ? "正在处理，请稍候…" : root.status != "" ? root.status : "准备就绪。请选择上方操作。"; color: Theme.ink; }
+                }
+            }
+        }
+        if !root.upgrade || root.ready : HorizontalLayout {
+            spacing: 16px;
+            Action { width: 232px; text: "使用已校验的新数据集"; accent: root.ready; enabled: root.ready && !root.busy; clicked => { root.action(4); } }
+            Note { text: root.ready ? "将切换到状态区中已校验的新位置。" : "恢复并校验完成后，可在这里切换。"; vertical-alignment: center; }
+        }
+        Note { text: "关闭此窗口即可退出；原始文件仍保留在原位置。"; }
     }
 }

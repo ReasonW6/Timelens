@@ -263,13 +263,14 @@ pub fn install(
                     Event::Open => {
                         let _ = w.show();
                         w.window().set_minimized(false);
+                        crate::window_placement::fit_after_show(&w);
                     }
                     Event::Summary(id) => {
                         let _ = w.show();
                         w.window().set_minimized(false);
+                        crate::window_placement::fit_after_show(&w);
+                        w.invoke_navigate(4);
                         let g = w.global::<AiState>();
-                        g.set_open(true);
-                        g.invoke_opened();
                         g.set_status(format!("任务 #{id}，可在任务历史中查看结果").into());
                         g.set_page(4);
                     }

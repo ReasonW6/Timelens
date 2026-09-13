@@ -1,0 +1,26 @@
+[
+  {
+    "name": "timelens.exe",
+    "path": "D:\\GitHub_Project\\Timelens\\target\\ui-rebuild\\preview\\timelens.exe",
+    "bytes": 28542976,
+    "sha256": "a1aacde8afe66e23630304d611f69be3717f4e716a765a10eedb753bb4cb6769",
+    "signature": "NotSigned",
+    "packageVersion": "0.1.0"
+  },
+  {
+    "name": "timelens-ai-worker.exe",
+    "path": "D:\\GitHub_Project\\Timelens\\target\\ui-rebuild\\preview\\timelens-ai-worker.exe",
+    "bytes": 691200,
+    "sha256": "c4a993b681a52603510a5158c74416477aa9dc00a0bd40a299a4a00848af996f",
+    "signature": "NotSigned",
+    "packageVersion": "0.1.0"
+  },
+  {
+    "name": "timelens-collector.exe",
+    "path": "D:\\GitHub_Project\\Timelens\\target\\ui-rebuild\\preview\\timelens-collector.exe",
+    "bytes": 656384,
+    "sha256": "1d2e5fca8c9d56ec43fb75945430340fbffa89547eb377c6b011b0e588893f1c",
+    "signature": "NotSigned",
+    "packageVersion": "0.1.0"
+  }
+]

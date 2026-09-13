@@ -1,0 +1,52 @@
+{
+  "date": "2026-09-05",
+  "displayOrderBasis": "Order in which the three new generated-image results were displayed in the conversation",
+  "supersedes": "ui-concepts-20260905",
+  "selected": 2,
+  "selectedKey": "paper",
+  "selectionDate": "2026-09-05",
+  "selectionBasis": "User selected option 2 and attached the exact paper reference image.",
+  "implementationStatus": "native implementation verified",
+  "implementationVerifiedDate": "2026-09-06",
+  "implementationQa": "../../../design-qa.md",
+  "implementationScreenshot": "implementation/final-timeline.png",
+  "implementationArtifacts": "implementation/release-artifacts.json",
+  "options": [
+    {
+      "displayOrder": 1,
+      "key": "porcelain",
+      "file": "options/display-01-porcelain.png",
+      "original": "C:\\Users\\WangXuan\\.codex\\generated_images\\01a07184-ee57-7f30-9d51-2550e12e7414\\exec-5cd98dac-b94f-4057-9539-e05ec173a47a.png",
+      "sha256": "d92e60fa298bee5dda83c91198898cfca8d68a13aa27cdedbd94a059a2869552",
+      "bytes": 958573,
+      "width": 1586,
+      "height": 992,
+      "kind": "generated design concept",
+      "nativeRuntimeScreenshot": false
+    },
+    {
+      "displayOrder": 2,
+      "key": "paper",
+      "file": "options/display-02-paper.png",
+      "original": "C:\\Users\\WangXuan\\.codex\\generated_images\\01a07184-ee57-7f30-9d51-2550e12e7414\\exec-e9ab7115-6347-4c8d-b0c4-afb68f9eb0ff.png",
+      "sha256": "de764e9ae9cdf19f4d4945ca251c984f5a2d51f997933d54b5fd9ae69febaa7e",
+      "bytes": 1166065,
+      "width": 1586,
+      "height": 992,
+      "kind": "generated design concept",
+      "nativeRuntimeScreenshot": false
+    },
+    {
+      "displayOrder": 3,
+      "key": "graphite",
+      "file": "options/display-03-graphite.png",
+      "original": "C:\\Users\\WangXuan\\.codex\\generated_images\\01a07184-ee57-7f30-9d51-2550e12e7414\\exec-db70c541-469e-4339-a6d1-599c1ea59bf0.png",
+      "sha256": "9d36331b2248680c0082b19c0541b7e3d6f339cc2294eac96a42bb415f4af3d3",
+      "bytes": 1218771,
+      "width": 1586,
+      "height": 992,
+      "kind": "generated design concept",
+      "nativeRuntimeScreenshot": false
+    }
+  ]
+}

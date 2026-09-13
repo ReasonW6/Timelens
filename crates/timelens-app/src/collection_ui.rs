@@ -24,7 +24,14 @@ fn strings(values: impl IntoIterator<Item = String>) -> ModelRc<slint::SharedStr
 }
 fn refresh(w: &AppWindow, d: &mut Data, s: &Storage) -> Result<()> {
     let g = w.global::<CollectionState>();
-    d.apps = s.known_applications()?;
+    d.apps = s
+        .known_applications()?
+        .into_iter()
+        .map(|(identity, name)| {
+            let name = crate::app_icon::display_name(&identity, &name);
+            (identity, name)
+        })
+        .collect();
     d.links = s.merge_links()?;
     g.set_apps(strings(d.apps.iter().map(|(_, name)| name.clone())));
     g.set_links(strings(d.links.iter().map(|(a, b)| {
@@ -259,6 +266,7 @@ pub fn install(
                                 let name = std::path::Path::new(id.trim_start_matches("path:"))
                                     .file_name()
                                     .map_or(id.clone(), |s| s.to_string_lossy().into_owned());
+                                let name = crate::app_icon::display_name(&id, &name);
                                 d.apps.push((id.clone(), name));
                                 g.set_apps(strings(d.apps.iter().map(|(_, n)| n.clone())));
                             }
@@ -300,7 +308,7 @@ fn statistics(w: &AppWindow, s: &Storage, range: &UiState) -> Result<()> {
             (11, "0"),
             (12, "−"),
             (13, "="),
-            (14, "⌫"),
+            (14, "Back"),
         ],
         &[
             (15, "Tab"),

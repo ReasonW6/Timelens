@@ -1,0 +1,621 @@
+import { LineEdit, ListView, ScrollView, Palette } from "std-widgets.slint";
+import { Theme, Action, NavItem, Label, Note, SectionTitle, Rule, DetailRow, ConfirmationDialog, CheckBox } from "theme.slint";
+import { AiPanel, AiState } from "ai-panel.slint";
+import { DataPanel, DataState } from "data-panel.slint";
+import { CollectionPanel, CollectionState, KeyCell } from "collection-panel.slint";
+export { AiState, DataState, CollectionState, KeyCell }
+
+export struct AppRow { identity: string, original-index: int, name: string, summary: string, open-ratio: float, display-ratio: float, focus-ratio: float, icon: image }
+export struct WindowRow { identity: string, label: string, summary: string, focused: string }
+export struct SegmentRow { offset: float, width: float, kind: int }
+export struct SnapshotRow { identity: string, time: string, display: string, result: string }
+export struct ReportAppRow { name: string, summary: string, focused: string, icon: image }
+export struct ActivityRow { identity: string, name: string, time: string, interval: string, duration: string, group: string, gap: bool, detail: string, icon: image }
+export struct DayRow { date: string, weekday: string, offset: int, selected: bool, today: bool, enabled: bool }
+
+component AppIcon inherits Rectangle {
+    in property <image> app-icon;
+    width: 30px; min-height: 30px;
+    Image {
+        width: parent.width; height: self.width; y: (parent.height - self.height) / 2;
+        source: root.app-icon.width > 0 ? root.app-icon : @image-url("icons/app-window.svg");
+        image-fit: contain;
+        colorize: root.app-icon.width > 0 ? transparent : Theme.muted;
+    }
+}
+
+component ActivityItem inherits Rectangle {
+    in property <ActivityRow> item;
+    in property <bool> selected;
+    callback clicked;
+    height: item.group == "" ? 58px : 86px;
+    accessible-role: button;
+    accessible-label: item.name + " " + item.interval;
+    accessible-enabled: !item.gap;
+    accessible-action-default => { if !item.gap { root.clicked(); } }
+    forward-focus: keyboard;
+    if item.group != "" : Note { y: 4px; x: 12px; text: item.group; font-size: 14px; }
+    row := Rectangle {
+        y: item.group == "" ? 0px : 28px;
+        height: 58px;
+        background: root.selected ? Theme.accent-soft : touch.has-hover && !item.gap ? Theme.hover : transparent;
+        border-radius: 4px;
+        border-width: keyboard.has-focus ? 1px : 0px;
+        border-color: Theme.accent;
+        if root.selected : Rectangle { x: 0px; width: 3px; height: parent.height; background: Theme.accent; }
+        HorizontalLayout {
+            padding-left: 14px; padding-right: 16px; spacing: 16px;
+            Text { width: 48px; text: item.time; color: item.gap ? Theme.muted : Theme.ink; font-size: 15px; vertical-alignment: center; }
+            Rectangle {
+                width: 14px;
+                Rectangle { x: 6px; width: 1px; height: parent.height; background: Theme.line; }
+                Rectangle { x: 2px; y: (parent.height - self.height) / 2; width: 9px; height: 9px; border-radius: 5px; background: item.gap ? #b97822 : root.selected ? Theme.accent : #b3afa8; }
+            }
+            if !item.gap : AppIcon { app-icon: item.icon; }
+            VerticalLayout {
+                alignment: center; spacing: 3px;
+                Text { text: item.name; color: item.gap ? #996318 : Theme.ink; font-size: 16px; overflow: elide; }
+                Text { text: item.gap ? item.detail : item.interval; color: item.gap ? #996318 : Theme.muted; font-size: 14px; overflow: elide; }
+            }
+            Text { text: item.duration; color: item.gap ? #996318 : Theme.ink; font-size: 15px; horizontal-alignment: right; vertical-alignment: center; }
+        }
+        if !root.selected : Rectangle { x: 124px; y: parent.height - 1px; width: parent.width - self.x - 16px; height: 1px; background: Theme.line; }
+        touch := TouchArea { enabled: !item.gap; mouse-cursor: pointer; clicked => { keyboard.focus(); root.clicked(); } }
+    }
+    keyboard := FocusScope { width: 0px; enabled: !item.gap; key-pressed(event) => { if event.text == " " || event.text == "\n" { root.clicked(); return accept; } return reject; } }
+}
+
+component WindowItem inherits Rectangle {
+    in property <WindowRow> item;
+    private property <bool> expanded: false;
+    height: root.expanded ? 112px : 40px;
+    vertical-stretch: 0;
+    forward-focus: key;
+    accessible-role: button;
+    accessible-label: root.item.label + "，聚焦 " + root.item.focused;
+    accessible-action-default => { root.expanded = !root.expanded; }
+    border-radius: 4px;
+    border-width: key.has-focus ? 1px : 0px;
+    border-color: Theme.accent;
+    background: touch.has-hover ? Theme.hover : transparent;
+    Label { x: 8px; y: 0px; width: parent.width - 150px; height: 40px; text: root.item.label; vertical-alignment: center; }
+    Label { x: parent.width - 142px; width: 112px; height: 40px; text: root.item.focused; horizontal-alignment: right; vertical-alignment: center; }
+    Image { x: parent.width - 22px; y: 12px; width: 16px; height: 16px; source: @image-url("icons/chevron-right.svg"); colorize: Theme.muted; transform-rotation: root.expanded ? 90deg : 0deg; }
+    if root.expanded : Note { x: 8px; y: 45px; width: parent.width - 16px; height: 62px; text: root.item.summary; }
+    touch := TouchArea { mouse-cursor: pointer; clicked => { key.focus(); root.expanded = !root.expanded; } }
+    key := FocusScope { width: 0px; key-pressed(event) => { if event.text == " " || event.text == "\n" { root.expanded = !root.expanded; return accept; } return reject; } }
+}
+
+export component AppWindow inherits Window {
+    title: "Timelens";
+    preferred-width: 1440px; preferred-height: 900px;
+    min-width: 1180px; min-height: 680px;
+    background: Theme.paper;
+    default-font-family: "Microsoft YaHei UI";
+    default-font-size: 14px;
+    init => { Palette.color-scheme = ColorScheme.light; }
+
+    in property <string> storage-status;
+    in property <string> collector-status;
+    in property <string> data-path;
+    in property <string> build-version;
+    in property <string> range-label;
+    in property <string> selected-name: "选择一条活动";
+    in property <image> selected-icon;
+    in property <string> opened-value: "0 秒";
+    in property <string> displayed-value: "0 秒";
+    in property <string> focused-value: "0 秒";
+    in property <string> background-value: "0 秒";
+    in property <string> input-value: "键盘 0 · 鼠标 0";
+    in property <string> keyboard-value: "0 次";
+    in property <string> mouse-value: "0 次";
+    in property <string> coverage-value: "尚无记录";
+    in property <bool> has-gaps: false;
+    in property <string> retention-value: "30 天 · 100 MiB";
+    in property <int> retention-days: 30;
+    in property <string> action-status;
+    in property <bool> action-busy;
+    in property <string> date-title;
+    in property <string> calendar-date;
+    in property <string> previous-year;
+    in property <bool> multiple-days;
+    in property <string> weekday-title;
+    in property <string> range-time;
+    in property <string> focus-total;
+    in property <string> axis-start;
+    in property <string> axis-middle;
+    in property <string> axis-end;
+    in property <bool> can-next-day;
+    in property <bool> selected-is-activity;
+    in property <string> selected-start;
+    in property <string> selected-end;
+    in property <string> selected-duration;
+    in property <string> selected-interval;
+    in property <[DayRow]> week;
+    in property <[ActivityRow]> activity;
+    in property <[AppRow]> apps;
+    in property <[AppRow]> filtered-apps;
+    in property <[WindowRow]> windows;
+    in property <[SegmentRow]> segments;
+    in property <[SegmentRow]> overview-segments;
+    in property <[SnapshotRow]> snapshots;
+    in property <image> snapshot-preview;
+    in property <string> snapshot-detail: "选择快照以查看详情";
+    in property <string> snapshot-policy-label: "快照已关闭";
+    in property <string> snapshot-exclusion-label: "先选择应用";
+    in property <bool> snapshot-enabled;
+    in property <int> snapshot-interval-minutes: 5;
+    in property <int> snapshot-retention-days: 30;
+    in property <string> snapshot-capacity;
+    in property <bool> snapshot-all-displays;
+    in property <bool> snapshot-deletable;
+    in property <[ReportAppRow]> report-apps;
+    in property <string> report-summary: "为当前时段生成一份本地报告。";
+    in property <bool> report-ready;
+    in property <string> report-range;
+    in property <string> report-coverage;
+    in property <string> report-keyboard;
+    in property <string> report-snapshot-count;
+    in-out property <int> selected-index: -1;
+    in-out property <int> activity-selected-index: -1;
+    in-out property <int> snapshot-selected-index: -1;
+    in-out property <int> page: 0;
+    in-out property <int> settings-tab: 0;
+    in-out property <int> stats-tab: 0;
+    in-out property <bool> windows-expanded: true;
+    in-out property <bool> snapshot-open: false;
+    in-out property <bool> report-open: false;
+    private property <bool> app-settings: false;
+    private property <bool> range-options: false;
+    private property <bool> clear-confirm-open: false;
+    private property <bool> delete-snapshot-confirm: false;
+    changed clear-confirm-open => { Theme.modal-open = root.clear-confirm-open || root.delete-snapshot-confirm; }
+    changed delete-snapshot-confirm => { Theme.modal-open = root.clear-confirm-open || root.delete-snapshot-confirm; }
+    in-out property <string> app-search;
+    private property <bool> showing-activity: root.selected-is-activity && root.page == 0;
+    in-out property <float> selection-left: 0;
+    in-out property <float> selection-right: 1;
+    private property <bool> range-dragging: false;
+    private property <float> range-drag-start: 0;
+    private property <length> sidebar-width: 228px;
+    private property <length> detail-width: 396px;
+    private property <string> manual-start: "09:00";
+    private property <string> manual-end: "18:00";
+    private property <string> date-input;
+
+    callback navigate(int);
+    callback app-search-changed;
+    callback day-selected(int);
+    callback date-selected(string);
+    callback today-selected;
+    callback time-range-selected(string, string);
+    callback activity-selected(int);
+    callback app-selected(int);
+    callback horizon-selected(int);
+    callback range-selected(float, float);
+    callback retention-selected(int);
+    callback run-cleanup;
+    callback clear-all;
+    callback snapshot-opened;
+    callback snapshot-row-selected(int);
+    callback snapshot-delete-selected;
+    callback snapshot-capture-now;
+    callback snapshot-toggle-enabled;
+    callback snapshot-interval-selected(int);
+    callback snapshot-toggle-target;
+    callback snapshot-retention-selected(int);
+    callback snapshot-toggle-exclusion;
+    callback report-generate;
+
+    body := FocusScope {
+        enabled: !root.clear-confirm-open && !root.delete-snapshot-confirm;
+        focus-on-tab-navigation: false;
+        focus-on-click: false;
+        capture-key-pressed(event) => {
+            if root.clear-confirm-open || root.delete-snapshot-confirm { return accept; }
+            return reject;
+        }
+        capture-key-released(event) => {
+            if root.clear-confirm-open || root.delete-snapshot-confirm { return accept; }
+            return reject;
+        }
+        HorizontalLayout {
+            spacing: 0px;
+            Rectangle {
+                width: root.sidebar-width;
+                background: Theme.sidebar;
+                VerticalLayout {
+                    padding: 14px; padding-top: 25px; padding-bottom: 22px; spacing: 8px;
+                    HorizontalLayout {
+                        height: 60px; padding-left: 12px; spacing: 11px;
+                        Rectangle { width: 28px; Image { source: @image-url("icons/clock.svg"); colorize: Theme.ink; width: 28px; height: 28px; y: (parent.height - self.height) / 2; } }
+                        Text { text: "Timelens"; color: Theme.ink; font-size: 20px; vertical-alignment: center; }
+                    }
+                    Rectangle { height: 10px; }
+                    NavItem { text: "时间线"; icon: @image-url("icons/clock.svg"); selected: root.page == 0; clicked => { root.app-settings = false; root.navigate(0); } }
+                    NavItem { text: "应用"; icon: @image-url("icons/layout-grid.svg"); selected: root.page == 1; clicked => { root.app-settings = false; root.navigate(1); } }
+                    snapshots-nav := NavItem { text: "快照"; icon: @image-url("icons/photo.svg"); selected: root.page == 2; clicked => { root.navigate(2); } }
+                    NavItem { text: "统计与报告"; icon: @image-url("icons/chart-bar.svg"); selected: root.page == 3; clicked => { root.navigate(3); } }
+                    NavItem { text: "AI 总结"; icon: @image-url("icons/sparkles.svg"); selected: root.page == 4; clicked => { root.navigate(4); } }
+                    Rectangle { vertical-stretch: 1; }
+                    HorizontalLayout {
+                        height: 35px; padding-left: 14px; spacing: 12px;
+                        Rectangle { width: 20px; Image { width: 20px; height: 20px; y: (parent.height - self.height) / 2; source: CollectionState.paused ? @image-url("icons/player-pause.svg") : @image-url("icons/clock.svg"); colorize: Theme.muted; } }
+                        Note { text: CollectionState.paused ? "已暂停记录" : "正在记录"; vertical-alignment: center; }
+                    }
+                    Action { width: 156px; danger: true; text: CollectionState.paused ? "继续记录" : "暂停记录"; enabled: !CollectionState.busy && !root.action-busy; clicked => { CollectionState.paused = !CollectionState.paused; CollectionState.action(0); } }
+                    Rectangle { height: 12px; }
+                    Rule { }
+                    settings-nav := NavItem { text: "设置"; icon: @image-url("icons/settings.svg"); selected: root.page == 5; clicked => { root.navigate(5); } }
+                }
+            }
+            Rectangle { width: 1px; background: Theme.line; }
+            Rectangle {
+                horizontal-stretch: 1;
+                VerticalLayout {
+                    padding-top: 20px; padding-left: 26px; padding-right: 26px; padding-bottom: 16px; spacing: 12px;
+                    if root.page <= 1 && !root.app-settings : VerticalLayout {
+                        vertical-stretch: 0;
+                        spacing: 12px;
+                        Note { text: (root.page == 0 ? "时间线" : "应用") + (root.previous-year == "" ? "" : " · " + root.previous-year + " 年"); }
+                        HorizontalLayout {
+                            height: 52px; spacing: 8px;
+                            Text { text: root.date-title; color: Theme.ink; font-size: 40px; font-weight: 500; vertical-alignment: center; }
+                            Text { text: root.weekday-title; color: Theme.ink; font-size: 16px; vertical-alignment: center; }
+                            Rectangle { horizontal-stretch: 1; }
+                            Action { width: 36px; quiet: true; icon: @image-url("icons/chevron-left.svg"); accessible-label: "前一天"; clicked => { root.day-selected(-1); } }
+                            Action { width: 64px; text: "今天"; clicked => { root.today-selected(); } }
+                            Action { width: 36px; quiet: true; icon: @image-url("icons/chevron-right.svg"); accessible-label: "后一天"; enabled: root.can-next-day; clicked => { root.day-selected(1); } }
+                            Action { width: 100px; text: "生成总结"; accent: true; clicked => { root.navigate(4); } }
+                        }
+                        Rule { }
+                        HorizontalLayout {
+                            height: 52px; spacing: 5px;
+                            for day in root.week : Rectangle {
+                                background: day.selected ? Theme.accent : day-touch.has-hover && day.enabled ? Theme.hover : transparent;
+                                border-radius: 5px;
+                                border-width: day-key.has-focus ? 2px : 0px;
+                                border-color: Theme.accent;
+                                opacity: day.enabled ? 1 : 0.4;
+                                forward-focus: day-key;
+                                accessible-role: button;
+                                accessible-label: day.date + " 星期" + day.weekday;
+                                accessible-enabled: day.enabled;
+                                accessible-action-default => { if day.enabled { root.day-selected(day.offset); } }
+                                VerticalLayout { padding: 5px; spacing: 3px;
+                                    Text { text: day.date; color: day.selected ? #ffffff : Theme.ink; font-size: 14px; horizontal-alignment: center; }
+                                    Text { text: day.weekday + (day.today ? " · 今" : ""); color: day.selected ? #ffffff : Theme.muted; font-size: 14px; horizontal-alignment: center; }
+                                }
+                                day-touch := TouchArea { enabled: day.enabled; mouse-cursor: pointer; clicked => { day-key.focus(); root.day-selected(day.offset); } }
+                                day-key := FocusScope { width: 0px; enabled: day.enabled; key-pressed(event) => { if event.text == " " || event.text == "\n" { root.day-selected(day.offset); return accept; } return reject; } }
+                            }
+                        }
+                        Rule { }
+                        HorizontalLayout { height: 30px;
+                            Note { text: "聚焦 " + root.focus-total + "  ·  " + root.apps.length + " 个应用"; font-size: 14px; vertical-alignment: center; }
+                            Rectangle { horizontal-stretch: 1; }
+                            Action { width: root.multiple-days ? 240px : 160px; text: root.range-time; icon: @image-url("icons/calendar.svg"); quiet: true; clicked => { root.date-input = root.calendar-date; root.range-options = !root.range-options; } }
+                        }
+                        if root.range-options : HorizontalLayout {
+                            Action { text: "当天"; clicked => { root.day-selected(0); root.range-options = false; } }
+                            Action { text: "最近 6 小时"; clicked => { root.horizon-selected(6); root.range-options = false; } }
+                            Action { text: "最近 24 小时"; clicked => { root.horizon-selected(24); root.range-options = false; } }
+                            Action { text: "最近 7 天"; clicked => { root.horizon-selected(168); root.range-options = false; } }
+                        }
+                        if root.range-options : HorizontalLayout {
+                            spacing: 10px;
+                            Label { text: "日期"; vertical-alignment: center; }
+                            LineEdit { width: 180px; height: 36px; text <=> root.date-input; placeholder-text: "YYYY-MM-DD"; }
+                            Action { text: "转到日期"; clicked => { root.date-selected(root.date-input); root.range-options = false; } }
+                            Rectangle { horizontal-stretch: 1; }
+                        }
+                        if root.range-options : HorizontalLayout {
+                            spacing: 10px;
+                            Label { text: "开始"; vertical-alignment: center; }
+                            LineEdit { height: 36px; text <=> root.manual-start; placeholder-text: "HH:MM"; }
+                            Label { text: "结束"; vertical-alignment: center; }
+                            LineEdit { height: 36px; text <=> root.manual-end; placeholder-text: "HH:MM"; }
+                            Action { text: "应用时段"; clicked => { root.time-range-selected(root.manual-start, root.manual-end); root.range-options = false; } }
+                        }
+                    }
+                    if root.page == 0 && root.activity.length > 0 : ListView {
+                        vertical-stretch: 1;
+                        for item[index] in root.activity : ActivityItem { item: item; selected: root.activity-selected-index == index; clicked => { root.activity-selected(index); } }
+                    }
+                    if root.page == 0 && root.activity.length == 0 : Rectangle {
+                        vertical-stretch: 1;
+                        VerticalLayout {
+                            width: min(380px, parent.width); height: 174px;
+                            x: (parent.width - self.width) / 2; y: max(0px, (parent.height - self.height) * 0.4);
+                            spacing: 14px;
+                            Rectangle { height: 36px; Image { width: 32px; height: 32px; x: (parent.width - self.width) / 2; y: 2px; source: @image-url("icons/clock.svg"); colorize: Theme.muted; } }
+                            SectionTitle { text: root.apps.length == 0 ? "这一天还没有记录" : "这段时间没有聚焦活动"; horizontal-alignment: center; }
+                            Note { text: CollectionState.paused ? "记录已暂停。你可以回看其他日期，或从左下角继续记录。" : "应用活动会显示在这里。你也可以先回看其他日期。"; horizontal-alignment: center; }
+                            HorizontalLayout { alignment: center; Action { width: 144px; text: "查看前一天"; clicked => { root.day-selected(-1); } } }
+                        }
+                    }
+                    if root.page == 1 && !root.app-settings : VerticalLayout {
+                        spacing: 12px;
+                        HorizontalLayout {
+                            LineEdit { height: 36px; text <=> root.app-search; placeholder-text: "查找应用"; edited => { root.app-search-changed(); } }
+                            Action { text: "管理应用规则"; clicked => { CollectionState.page = 0; CollectionState.opened(); root.app-settings = true; } }
+                        }
+                        ListView {
+                            for app in root.filtered-apps : Rectangle {
+                                height: 80px;
+                                background: root.selected-index == app.original-index ? Theme.accent-soft : app-touch.has-hover ? Theme.hover : transparent;
+                                border-radius: 5px;
+                                border-width: app-key.has-focus ? 1px : 0px; border-color: Theme.accent;
+                                forward-focus: app-key;
+                                accessible-role: button;
+                                accessible-label: app.name + "，" + app.summary;
+                                accessible-action-default => { root.app-selected(app.original-index); }
+                                HorizontalLayout { padding: 14px; spacing: 14px;
+                                    AppIcon { app-icon: app.icon; }
+                                    VerticalLayout { spacing: 7px;
+                                        Text { text: app.name; color: Theme.ink; font-size: 15px; overflow: elide; }
+                                        Note { text: app.summary; }
+                                    }
+                                }
+                                app-touch := TouchArea { mouse-cursor: pointer; clicked => { app-key.focus(); root.app-selected(app.original-index); } }
+                                app-key := FocusScope { width: 0px; key-pressed(event) => { if event.text == " " || event.text == "\n" { root.app-selected(app.original-index); return accept; } return reject; } }
+                            }
+                        }
+                    }
+                    if root.page == 1 && !root.app-settings && root.filtered-apps.length == 0 : Note { text: root.app-search == "" ? "这个时段没有应用记录。" : "没有匹配的应用，试试其他名称。"; }
+                    if root.page == 1 && root.app-settings : VerticalLayout {
+                        Action { text: "返回应用"; quiet: true; clicked => { root.app-settings = false; } }
+                        CollectionPanel { }
+                    }
+                    if root.page == 2 : VerticalLayout {
+                        spacing: 14px;
+                        HorizontalLayout { Text { text: "快照"; color: Theme.ink; font-size: 30px; font-weight: 600; } Rectangle { horizontal-stretch: 1; } Action { text: "立即拍摄"; accent: true; enabled: !root.action-busy; clicked => { root.snapshot-capture-now(); } } }
+                        Note { text: root.range-time + " · " + root.snapshots.length + " 条快照记录"; }
+                        Rule { }
+                        Rectangle { height: 300px; background: Theme.sidebar; border-radius: 6px;
+                            Image { x: 10px; y: 10px; width: parent.width - 20px; height: parent.height - 20px; source: root.snapshot-preview; image-fit: contain; }
+                            if root.snapshot-preview.width == 0 : Text { text: root.snapshot-selected-index < 0 ? "选择一条快照" : "此记录没有图片"; color: Theme.muted; font-size: 16px; horizontal-alignment: center; vertical-alignment: center; }
+                        }
+                        Note { text: root.snapshot-detail; }
+                        ListView { for item[index] in root.snapshots : Rectangle {
+                            height: 66px; background: index == root.snapshot-selected-index ? Theme.accent-soft : shot-touch.has-hover ? Theme.hover : transparent; border-radius: 5px;
+                            border-width: shot-key.has-focus ? 1px : 0px; border-color: Theme.accent; forward-focus: shot-key;
+                            accessible-role: button;
+                            accessible-label: item.time + "，" + item.display + "，" + item.result;
+                            accessible-enabled: !Theme.modal-open;
+                            accessible-action-default => { if !Theme.modal-open { root.snapshot-row-selected(index); } }
+                            VerticalLayout { padding: 12px; spacing: 4px; Label { text: item.time + " · " + item.display; } Note { text: item.result; } }
+                            shot-touch := TouchArea { mouse-cursor: pointer; clicked => { shot-key.focus(); root.snapshot-row-selected(index); } }
+                            shot-key := FocusScope { width: 0px; key-pressed(event) => { if event.text == " " || event.text == "\n" { root.snapshot-row-selected(index); return accept; } return reject; } }
+                        } }
+                        if root.snapshots.length == 0 : Note { text: "当前时段没有快照。快照记录默认关闭，可在右侧配置。"; }
+                    }
+                    if root.page == 3 : VerticalLayout {
+                        spacing: 14px;
+                        Text { text: "统计与报告"; color: Theme.ink; font-size: 30px; font-weight: 600; }
+                        HorizontalLayout {
+                            spacing: 8px;
+                            Action { width: 120px; text: "本地报告"; selected: root.stats-tab == 0; clicked => { root.stats-tab = 0; } }
+                            Action { width: 132px; text: "键位与系统"; selected: root.stats-tab == 1; clicked => { root.stats-tab = 1; CollectionState.page = 1; CollectionState.date = root.calendar-date; CollectionState.action(7); } }
+                            Rectangle { horizontal-stretch: 1; }
+                        }
+                        Rule { }
+                        if root.stats-tab == 0 : VerticalLayout {
+                            spacing: 16px;
+                            HorizontalLayout { Note { text: root.range-label; vertical-alignment: center; } Rectangle { horizontal-stretch: 1; } Action { width: 144px; text: root.action-busy ? "正在生成…" : "生成本地报告"; accent: true; enabled: !root.action-busy; clicked => { root.report-generate(); } } }
+                            if root.report-ready : VerticalLayout {
+                                vertical-stretch: 0; spacing: 18px;
+                                Note { text: root.report-range; }
+                                HorizontalLayout {
+                                    spacing: 20px;
+                                    VerticalLayout { spacing: 8px; Note { text: "数据覆盖"; } Text { text: root.report-coverage; font-size: 32px; color: Theme.ink; } }
+                                    Rectangle { width: 1px; background: Theme.line; }
+                                    VerticalLayout { spacing: 8px; Note { text: "键盘次数"; } Text { text: root.report-keyboard; font-size: 32px; color: Theme.ink; } }
+                                    Rectangle { width: 1px; background: Theme.line; }
+                                    VerticalLayout { spacing: 8px; Note { text: "保存快照"; } Text { text: root.report-snapshot-count; font-size: 32px; color: Theme.ink; } }
+                                }
+                                Rule { }
+                                SectionTitle { text: "应用聚焦"; }
+                            }
+                            if !root.report-ready : Note { text: root.report-summary; }
+                            ListView { for app in root.report-apps : Rectangle { height: 86px;
+                                HorizontalLayout { padding-top: 10px; padding-bottom: 12px; spacing: 14px;
+                                    AppIcon { app-icon: app.icon; }
+                                    VerticalLayout { alignment: center; spacing: 8px; Label { text: app.name; font-size: 16px; } Note { text: app.summary; } }
+                                    Text { text: app.focused; font-size: 18px; color: Theme.ink; horizontal-alignment: right; vertical-alignment: center; }
+                                }
+                                Rule { y: parent.height - 1px; }
+                            } }
+                            if root.report-ready : Note { text: root.report-summary; }
+                        }
+                        if root.stats-tab == 1 : CollectionPanel { }
+                    }
+                    if root.page == 4 : AiPanel { }
+                    if root.page == 5 : VerticalLayout {
+                        spacing: 16px;
+                        Text { text: "设置"; color: Theme.ink; font-size: 30px; font-weight: 600; }
+                        HorizontalLayout {
+                            spacing: 8px;
+                            Action { width: 120px; text: "记录与隐私"; selected: root.settings-tab == 0; clicked => { root.settings-tab = 0; } }
+                            Action { width: 120px; text: "数据与存储"; selected: root.settings-tab == 1; clicked => { root.settings-tab = 1; } }
+                            Action { width: 100px; text: "AI 连接"; selected: root.settings-tab == 2; clicked => { root.settings-tab = 2; AiState.opened(); } }
+                            Action { width: 80px; text: "关于"; selected: root.settings-tab == 3; clicked => { root.settings-tab = 3; } }
+                            Rectangle { horizontal-stretch: 1; }
+                        }
+                        Rule { }
+                        if root.settings-tab == 0 : ScrollView { VerticalLayout {
+                            alignment: start;
+                            spacing: 16px;
+                            SectionTitle { text: "记录"; }
+                            CheckBox { text: "暂停应用活动与输入记录"; checked <=> CollectionState.paused; enabled: !CollectionState.busy; toggled => { CollectionState.action(0); } }
+                            Note { text: "暂停时保留明确的暂停区间；恢复后不会补录。"; }
+                            Action { width: 240px; text: "管理应用排除与合并"; clicked => { root.navigate(1); CollectionState.page = 0; CollectionState.opened(); root.app-settings = true; } }
+                            Action { width: 220px; text: "快照记录与排除"; clicked => { root.navigate(2); } }
+                            Rectangle { height: 12px; }
+                            Rule { }
+                            SectionTitle { text: "活动数据保留"; }
+                            Note { text: "当前策略 " + root.retention-value; }
+                            HorizontalLayout {
+                                spacing: 8px;
+                                Action { width: 80px; text: "7 天"; selected: root.retention-days == 7; clicked => { root.retention-selected(7); } }
+                                Action { width: 80px; text: "30 天"; selected: root.retention-days == 30; clicked => { root.retention-selected(30); } }
+                                Action { width: 80px; text: "90 天"; selected: root.retention-days == 90; clicked => { root.retention-selected(90); } }
+                                Action { width: 80px; text: "永久"; selected: root.retention-days == 0; clicked => { root.retention-selected(0); } }
+                                Rectangle { horizontal-stretch: 1; }
+                            }
+                            Action { width: 180px; text: "按当前策略清理"; enabled: !root.action-busy; clicked => { root.run-cleanup(); } }
+                            Note { text: "清理活动数据不会删除你主动导出到其他位置的文件。快照和 AI 内容使用各自的保留策略。"; }
+                            Rectangle { height: 12px; }
+                            Rule { }
+                            SectionTitle { text: "清空本地记录"; color: Theme.danger; }
+                            Note { text: "删除活动、输入、快照、报告和 AI 内容，并轮换数据密钥。此操作无法撤销。"; }
+                            CheckBox { text: "清空时同时删除 AI 凭据"; checked <=> DataState.clear-credentials; }
+                            Action { width: 180px; text: "清空全部记录…"; danger: true; enabled: !root.action-busy; clicked => { root.clear-confirm-open = true; } }
+                            Rectangle { height: 20px; }
+                        } }
+                        if root.settings-tab == 1 : DataPanel { snapshot-available: root.snapshot-deletable; }
+                        if root.settings-tab == 2 : AiPanel { connection-only: true; }
+                        if root.settings-tab == 3 : ScrollView { VerticalLayout {
+                            alignment: start;
+                            spacing: 18px;
+                            SectionTitle { text: "Timelens"; }
+                            Note { text: "在本机回看应用活动、输入统计和快照。"; }
+                            Rule { }
+                            SectionTitle { text: "本地状态"; }
+                            Note { text: root.storage-status; }
+                            Note { text: root.collector-status; }
+                            Label { text: "数据位置"; }
+                            Note { text: root.data-path; }
+                            Rule { }
+                            Note { text: "版本 " + root.build-version; }
+                            Note { text: "界面图标使用 Tabler Icons，遵循 MIT 许可。"; }
+                        } }
+                    }
+                    if root.page <= 1 && !root.app-settings : VerticalLayout {
+                        vertical-stretch: 0;
+                        spacing: 7px;
+                        Rule { }
+                        axis := Rectangle {
+                            height: 20px; background: Theme.sidebar; border-radius: 4px; clip: true;
+                            for segment in root.overview-segments : Rectangle {
+                                x: segment.offset * parent.width; width: max(1px, segment.width * parent.width); height: parent.height;
+                                background: segment.kind < 0 ? #d29b47 : segment.kind == 0 ? #8fa8b7 : segment.kind == 1 ? #aba2ba : segment.kind == 2 ? #9eab8b : #bd9d8b;
+                            }
+                            Rectangle { x: min(root.selection-left, root.selection-right) * parent.width; width: abs(root.selection-right - root.selection-left) * parent.width; height: parent.height; border-width: 1px; border-color: Theme.accent; background: #b9573c0c; }
+                            axis-touch := TouchArea {
+                                mouse-cursor: crosshair;
+                                pointer-event(event) => {
+                                    if (event.button == PointerEventButton.left || event.button == PointerEventButton.middle) && event.kind == PointerEventKind.down { root.range-dragging = true; root.range-drag-start = self.mouse-x / self.width; root.selection-left = root.range-drag-start; root.selection-right = root.range-drag-start; }
+                                    if (event.button == PointerEventButton.left || event.button == PointerEventButton.middle) && event.kind == PointerEventKind.up && root.range-dragging { root.range-dragging = false; root.range-selected(root.range-drag-start, self.mouse-x / self.width); }
+                                }
+                                moved => { if root.range-dragging { root.selection-right = max(0, min(1, self.mouse-x / self.width)); } }
+                            }
+                        }
+                        HorizontalLayout { vertical-stretch: 0; Note { text: root.axis-start; } Note { text: root.axis-middle; horizontal-alignment: center; } Note { text: root.axis-end; horizontal-alignment: right; } }
+                        Note { text: root.coverage-value + " · 拖动时间带选择范围"; horizontal-alignment: center; color: root.has-gaps ? #996318 : Theme.muted; }
+                    }
+                    if root.action-status != "" : Note { text: root.action-status; }
+                }
+            }
+            Rectangle { width: 1px; background: Theme.line; }
+            Rectangle {
+                width: root.detail-width;
+                background: #f8f5f0;
+                ScrollView { horizontal-scrollbar-policy: always-off; VerticalLayout {
+                    alignment: start;
+                    padding: 26px; spacing: 14px;
+                    if root.page == 1 && root.app-settings : VerticalLayout {
+                        spacing: 16px;
+                        SectionTitle { text: "应用规则"; }
+                        Label { text: "当前应用"; }
+                        Note { text: CollectionState.app-index >= 0 ? CollectionState.apps[CollectionState.app-index] : "先选择一个应用"; }
+                        Rule { }
+                        Note { text: "活动、输入和截图使用三份独立的排除规则。合并应用会保留各自的数据来源。"; }
+                        Note { text: "规则更改影响之后的记录；删除历史需要单独确认。"; }
+                    }
+                    if root.page <= 1 && !root.app-settings && root.selected-index < 0 : VerticalLayout {
+                        spacing: 16px;
+                        SectionTitle { text: "回顾提示"; }
+                        Label { text: root.date-title + " " + root.weekday-title; }
+                        Note { text: root.range-time; }
+                        Rule { }
+                        Note { text: "选择有记录的日期，再点选一条活动，即可查看它的时长、输入统计与窗口信息。"; }
+                    }
+                    if root.page <= 1 && !root.app-settings && root.selected-index >= 0 : VerticalLayout {
+                        spacing: 12px;
+                        Label { text: root.showing-activity ? "时段详情" : "应用详情"; }
+                        Rectangle { height: 6px; }
+                        HorizontalLayout { vertical-stretch: 0; spacing: 13px; AppIcon { app-icon: root.selected-icon; width: 36px; min-height: 36px; } VerticalLayout { spacing: 4px; Label { text: root.selected-name; wrap: word-wrap; } Note { text: root.showing-activity ? root.selected-interval : root.range-time; } } }
+                        Text { text: root.showing-activity ? root.selected-duration : root.focused-value; color: Theme.ink; font-size: 36px; }
+                        Note { text: root.showing-activity ? "本次聚焦" : "所选时段聚焦"; }
+                        if root.showing-activity : Rectangle { height: 78px; background: Theme.paper; border-width: 1px; border-color: Theme.line; border-radius: 5px; VerticalLayout { padding: 8px; DetailRow { label: "开始"; value: root.selected-start; } DetailRow { label: "结束"; value: root.selected-end; } } }
+                        Rule { }
+                        SectionTitle { text: "应用时段汇总"; }
+                        VerticalLayout { DetailRow { label: "聚焦"; value: root.focused-value; } DetailRow { label: "打开"; value: root.opened-value; } DetailRow { label: "显示"; value: root.displayed-value; } DetailRow { label: "后台"; value: root.background-value; } }
+                        Rule { }
+                        VerticalLayout { DetailRow { label: "键盘"; value: root.keyboard-value; } DetailRow { label: "鼠标"; value: root.mouse-value; } }
+                        Rule { }
+                        Action { text: "窗口 · " + root.windows.length; quiet: true; enabled: root.windows.length > 0; clicked => { root.windows-expanded = !root.windows-expanded; } }
+                        if root.windows-expanded : VerticalLayout { vertical-stretch: 0; spacing: 2px; for item in root.windows : WindowItem { item: item; } }
+                        Rectangle { height: 14px; }
+                        Rule { }
+                        Action { text: "查看时段快照"; icon: @image-url("icons/photo.svg"); quiet: true; clicked => { root.navigate(2); } }
+                        Action { text: "生成本地报告"; icon: @image-url("icons/file-description.svg"); quiet: true; clicked => { root.navigate(3); root.report-generate(); } }
+                    }
+                    if root.page == 2 : VerticalLayout {
+                        spacing: 14px;
+                        SectionTitle { text: "快照设置"; }
+                        Note { text: root.snapshot-policy-label; }
+                        Action { text: root.snapshot-enabled ? "关闭定时快照" : "开启定时快照"; selected: root.snapshot-enabled; clicked => { root.snapshot-toggle-enabled(); } }
+                        Rule { }
+                        Label { text: "拍摄间隔"; }
+                        HorizontalLayout { Action { text: "1 分钟"; selected: root.snapshot-interval-minutes == 1; clicked => { root.snapshot-interval-selected(1); } } Action { text: "3 分钟"; selected: root.snapshot-interval-minutes == 3; clicked => { root.snapshot-interval-selected(3); } } Action { text: "5 分钟"; selected: root.snapshot-interval-minutes == 5; clicked => { root.snapshot-interval-selected(5); } } }
+                        HorizontalLayout { for minutes in [10, 15, 30, 60] : Action { text: minutes + " 分"; min-width: 54px; selected: root.snapshot-interval-minutes == minutes; clicked => { root.snapshot-interval-selected(minutes); } } }
+Label { text: "拍摄屏幕"; }
+                        Action { text: root.snapshot-all-displays ? "全部显示器" : "当前活动显示器"; clicked => { root.snapshot-toggle-target(); } }
+                        Note { text: "单屏拍摄优先选择聚焦窗口所在的显示器。"; }
+                        Rule { }
+                        Label { text: "图片保留 · 上限 " + root.snapshot-capacity; }
+                        HorizontalLayout { Action { text: "7 天"; selected: root.snapshot-retention-days == 7; clicked => { root.snapshot-retention-selected(7); } } Action { text: "30 天"; selected: root.snapshot-retention-days == 30; clicked => { root.snapshot-retention-selected(30); } } }
+                        HorizontalLayout { Action { text: "90 天"; selected: root.snapshot-retention-days == 90; clicked => { root.snapshot-retention-selected(90); } } Action { text: "365 天"; selected: root.snapshot-retention-days == 365; clicked => { root.snapshot-retention-selected(365); } } Action { text: "永久"; selected: root.snapshot-retention-days == 0; clicked => { root.snapshot-retention-selected(0); } } }
+                        Rule { }
+                        Label { text: "应用截图排除"; }
+                        Note { text: root.snapshot-exclusion-label; }
+                        Action { text: "切换此应用的截图排除"; enabled: root.selected-index >= 0; clicked => { root.snapshot-toggle-exclusion(); } }
+                        Note { text: "排除应用出现在屏幕上时，该屏幕跳过拍摄。图片不会自动发送给 AI。"; }
+                        Rule { }
+                        Action { text: "删除所选图片…"; danger: true; enabled: root.snapshot-deletable; clicked => { root.delete-snapshot-confirm = true; } }
+                    }
+                    if root.page == 3 : VerticalLayout {
+                        spacing: 16px; SectionTitle { text: "报告范围"; } Label { text: root.date-title + " " + root.weekday-title; } Note { text: root.range-time; } Rule { } Note { text: root.coverage-value; } Note { text: "本地报告基于当前选中时段生成，保留覆盖范围、记录缺口和规则版本。"; } Note { text: "键位统计只表示物理位置与次数，不包含你输入的文字。"; }
+                    }
+                    if root.page == 4 : VerticalLayout {
+                        spacing: 16px; SectionTitle { text: "当前上下文"; } Label { text: root.date-title + " " + root.weekday-title; } Note { text: root.range-time; } Rule { } Label { text: "模型"; } Note { text: AiState.model-id == "" ? "尚未配置" : AiState.model-id; } Label { text: "图片"; } Note { text: AiState.image-count; } Rule { } Note { text: "先预览本次发送的内容，再生成总结。图片需要逐张查看并授权。"; } Note { text: AiState.status; }
+                    }
+                    if root.page == 5 : VerticalLayout {
+                        spacing: 16px; SectionTitle { text: "本机记录"; } Note { text: "活动、输入、快照分别配置排除规则。"; } Rule { } Label { text: "当前记录状态"; } Note { text: CollectionState.paused ? "已暂停" : "正在记录"; } Label { text: "活动保留"; } Note { text: root.retention-value; } Rule { } Note { text: "更改规则影响之后的采集。清空记录、恢复备份和迁移目录均有各自的确认流程。"; }
+                    }
+                    Rectangle { height: 12px; }
+                } }
+            }
+        }
+    }
+
+    if root.clear-confirm-open : ConfirmationDialog {
+        z: 100;
+        title: "清空全部本地记录？";
+        explanation: "活动、输入、快照、本地报告、AI 总结和对话将被删除，数据密钥也会轮换。此操作无法撤销。";
+        detail: "普通设置与排除规则保留。外部备份和导出文件不会删除。" + (DataState.clear-credentials ? "本次也会删除 AI 凭据。" : "本次保留 AI 凭据。");
+        accept-text: "确认清空";
+        dismissed => { root.clear-confirm-open = false; Theme.modal-open = false; settings-nav.focus(); }
+        accepted => { root.clear-confirm-open = false; Theme.modal-open = false; root.clear-all(); settings-nav.focus(); }
+    }
+    if root.delete-snapshot-confirm : ConfirmationDialog {
+        z: 100;
+        title: "删除这张快照图片？";
+        explanation: "图片无法恢复，时间线中会保留一条明确的用户删除记录。";
+        accept-text: "删除图片";
+        dismissed => { root.delete-snapshot-confirm = false; Theme.modal-open = false; snapshots-nav.focus(); }
+        accepted => { root.delete-snapshot-confirm = false; Theme.modal-open = false; root.snapshot-delete-selected(); snapshots-nav.focus(); }
+    }
+}

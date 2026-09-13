@@ -1,68 +1,204 @@
-import { Button, CheckBox, LineEdit, ScrollView } from "std-widgets.slint";
+import { LineEdit, ScrollView } from "std-widgets.slint";
+import { Theme, Action, Label, Note, SectionTitle, Rule, CheckBox, StatusLine } from "theme.slint";
+
 export global DataState {
-    in-out property <bool> open:false;
-    in-out property <bool> busy:false;
-    in-out property <string> status:"外部备份与导出文件由你管理，不会随应用清理而删除。";
+    in-out property <bool> open: false;
+    in-out property <bool> busy: false;
+    in-out property <string> status: "外部备份与导出文件由你管理，不会随应用清理而删除。";
     in-out property <string> archive;
     in-out property <string> password;
-    in-out property <bool> snapshots:false;
-    in-out property <bool> sensitive-confirmed:false;
-    in-out property <bool> restore-ready:false;
-    in-out property <bool> replace-confirmed:false;
+    in-out property <bool> snapshots: false;
+    in-out property <bool> sensitive-confirmed: false;
+    in-out property <bool> restore-ready: false;
+    in-out property <bool> replace-confirmed: false;
     in-out property <string> restore-info;
-    in-out property <bool> export-paths:false;
-    in-out property <bool> clear-credentials:false;
+    in-out property <bool> export-paths: false;
+    in-out property <bool> clear-credentials: false;
     in-out property <string> current-directory;
     in-out property <string> destination;
-    in-out property <bool> recovery-needed:false;
+    in-out property <bool> recovery-needed: false;
     callback action(int);
 }
-component Note inherits Text { color:#8498ad;font-size:12px;wrap:word-wrap; }
-component Title inherits Text { color:#eef4fa;font-size:18px;font-weight:600; }
+
 export component DataPanel inherits Rectangle {
-    background:#111d29;border-width:1px;border-color:#344c63;
-    VerticalLayout {padding:24px;spacing:14px;
-        HorizontalLayout {Title{text:"数据与备份";vertical-stretch:0;} Button{text:"关闭";enabled:!DataState.busy;clicked=>{DataState.open=false;}}}
-        ScrollView {VerticalLayout {spacing:14px;
-            Title{text:"数据位置";}
-            Note{text:DataState.current-directory;}
-            Note{text:"可迁移到本地固定磁盘的空目录。迁移时暂停采集并验证全部数据，成功后切换位置；外部导出文件留在原处。";}
-            LineEdit{text<=>DataState.destination;placeholder-text:"新的空数据目录，如 D:\\TimelensData";enabled:!DataState.busy;}
-            Button{text:"迁移到此目录";enabled:!DataState.busy && DataState.destination!="";clicked=>{DataState.action(9);}}
-            Title{text:"便携 ZIP";}
-            Note{text:"包含活动、输入、普通设置、排除规则、本地报告和 AI 总结。API 凭据、日志和登录任务不会进入备份。";}
-            LineEdit {text<=>DataState.archive;placeholder-text:"备份 ZIP 文件路径";enabled:!DataState.busy;edited=>{DataState.restore-ready=false;}}
-            HorizontalLayout {
-                Button{text:"选择保存位置";enabled:!DataState.busy;clicked=>{DataState.action(0);}}
-                Button{text:"打开现有备份";enabled:!DataState.busy;clicked=>{DataState.action(1);}}
+    in property <bool> embedded: true;
+    in property <bool> snapshot-available: false;
+    in-out property <int> page: 0;
+    private property <int> backup-mode: DataState.recovery-needed ? 1 : 0;
+    background: Theme.paper;
+
+    VerticalLayout {
+        padding: root.embedded ? 0px : 28px;
+        spacing: 18px;
+        if !root.embedded : HorizontalLayout {
+            height: 44px;
+            Text { text: "数据与备份"; color: Theme.ink; font-size: 28px; font-weight: 600; vertical-alignment: center; }
+            Rectangle { horizontal-stretch: 1; }
+            if !root.embedded : Action { width: 72px; text: "关闭"; enabled: !DataState.busy; clicked => { DataState.open = false; } }
+        }
+        HorizontalLayout {
+            spacing: 8px;
+            Action { width: 120px; text: "备份与恢复"; selected: root.page == 0; enabled: !DataState.busy; clicked => { root.page = 0; } }
+            Action { width: 100px; text: "范围导出"; selected: root.page == 1; enabled: !DataState.busy; clicked => { root.page = 1; } }
+            Action { width: 100px; text: "数据位置"; selected: root.page == 2; enabled: !DataState.busy; clicked => { root.page = 2; } }
+            Action { width: 80px; text: "维护"; selected: root.page == 3; enabled: !DataState.busy; clicked => { root.page = 3; } }
+            Rectangle { horizontal-stretch: 1; }
+        }
+        Rule { }
+
+        if root.page == 0 : ScrollView {
+            horizontal-scrollbar-policy: always-off;
+            VerticalLayout {
+                alignment: start;
+                padding-right: 16px;
+                padding-bottom: 12px;
+                spacing: 14px;
+                HorizontalLayout {
+                    spacing: 8px;
+                    Action { width: 132px; text: "创建备份"; selected: root.backup-mode == 0; enabled: !DataState.busy; clicked => { root.backup-mode = 0; } }
+                    Action { width: 132px; text: "恢复备份"; selected: root.backup-mode == 1; enabled: !DataState.busy; clicked => { root.backup-mode = 1; } }
+                    Rectangle { horizontal-stretch: 1; }
+                }
+                if DataState.recovery-needed : Note { text: "当前处于恢复模式。选择一个备份，完成校验后再替换数据集。"; color: Theme.accent-ink; }
+                Note {
+                    text: root.backup-mode == 0
+                        ? "便携 ZIP 包含活动、输入、普通设置、排除规则、本地报告和 AI 总结。API 凭据、日志和登录任务不进入备份。"
+                        : "恢复会替换整个数据集，不合并两份记录。程序先检查格式、校验值、图片与数据库，再允许执行恢复。";
+                }
+                SectionTitle { text: "01  选择 ZIP 文件"; font-size: 16px; }
+                HorizontalLayout {
+                    spacing: 10px;
+                    LineEdit {
+                        height: 36px;
+                        horizontal-stretch: 1;
+                        text <=> DataState.archive;
+                        placeholder-text: root.backup-mode == 0 ? "备份 ZIP 的保存路径" : "要恢复的 ZIP 文件路径";
+                        enabled: !DataState.busy;
+                        edited => { DataState.restore-ready = false; DataState.restore-info = ""; DataState.replace-confirmed = false; }
+                    }
+                    Action {
+                        width: 116px;
+                        text: root.backup-mode == 0 ? "选择保存位置" : "打开现有备份";
+                        enabled: !DataState.busy;
+                        clicked => { DataState.replace-confirmed = false; DataState.action(root.backup-mode == 0 ? 0 : 1); }
+                    }
+                }
+                SectionTitle { text: root.backup-mode == 0 ? "02  密码与内容" : "02  解锁与校验"; font-size: 16px; }
+                LineEdit {
+                    height: 36px;
+                    text <=> DataState.password;
+                    input-type: password;
+                    placeholder-text: "独立密码，留空为无密码 ZIP";
+                    enabled: !DataState.busy;
+                    edited => { DataState.restore-ready = false; DataState.restore-info = ""; DataState.replace-confirmed = false; }
+                }
+                Note { text: "无密码 ZIP 中的敏感记录可直接读取。独立密码无法找回，也不会保存在备份内。"; }
+
+                if root.backup-mode == 0 : VerticalLayout {
+                    spacing: 12px;
+                    CheckBox { font-size: 13px; text: "包含快照图片"; checked <=> DataState.snapshots; enabled: !DataState.busy; }
+                    Rule { }
+                    SectionTitle { text: "03  确认并导出"; font-size: 16px; }
+                    CheckBox { font-size: 13px; text: "已知晓敏感数据，并负责保管导出文件"; checked <=> DataState.sensitive-confirmed; enabled: !DataState.busy; }
+                    HorizontalLayout {
+                        Action { width: 150px; text: DataState.busy ? "正在处理…" : "导出备份"; accent: true; enabled: !DataState.busy && DataState.sensitive-confirmed && DataState.archive != ""; clicked => { DataState.action(2); } }
+                        Rectangle { horizontal-stretch: 1; }
+                    }
+                }
+                if root.backup-mode == 1 : VerticalLayout {
+                    spacing: 12px;
+                    HorizontalLayout {
+                        Action { width: 150px; text: DataState.restore-ready ? "重新校验备份" : "校验所选备份"; enabled: !DataState.busy && DataState.archive != ""; clicked => { DataState.action(3); } }
+                        Label { text: DataState.restore-ready ? "校验通过" : "等待校验"; color: DataState.restore-ready ? Theme.accent-ink : Theme.muted; vertical-alignment: center; }
+                        Rectangle { horizontal-stretch: 1; }
+                    }
+                    if DataState.restore-info != "" : Note { text: DataState.restore-info; color: Theme.ink; }
+                    Rule { }
+                    SectionTitle { text: "03  确认整体替换"; font-size: 16px; }
+                    Note { text: "如需保留现有数据，请先主动导出备份。恢复后需要重新配置 AI 凭据并启用计划。"; }
+                    CheckBox { font-size: 13px; text: "确认替换全部现有记录，所需备份已保存"; checked <=> DataState.replace-confirmed; enabled: !DataState.busy && DataState.restore-ready; }
+                    HorizontalLayout {
+                        Action { width: 150px; text: "执行恢复"; danger: true; enabled: !DataState.busy && DataState.restore-ready && DataState.replace-confirmed; clicked => { DataState.action(4); } }
+                        Rectangle { horizontal-stretch: 1; }
+                    }
+                }
             }
-            LineEdit{text<=>DataState.password;input-type:password;placeholder-text:"独立密码（留空为无密码 ZIP）";enabled:!DataState.busy;edited=>{DataState.restore-ready=false;}}
-            Note{text:"无密码 ZIP 含可直接读取的敏感记录。独立密码无法找回，也不会随包保存。";}
-            CheckBox{text:"包含快照图片";checked<=>DataState.snapshots;enabled:!DataState.busy;}
-            CheckBox{text:"我已知晓文件包含敏感数据，并负责保管导出文件";checked<=>DataState.sensitive-confirmed;}
-            Button{text:"导出备份";enabled:!DataState.busy && DataState.sensitive-confirmed && DataState.archive!="";clicked=>{DataState.action(2);}}
-            Title{text:"恢复整个数据集";}
-            Note{text:"先校验格式、校验值、图片与数据库。恢复后需重新配置凭据并启用 AI 计划。不会合并两个数据集。";}
-            Button{text:"校验所选备份";enabled:!DataState.busy && DataState.archive!="";clicked=>{DataState.action(3);}}
-            Note{text:DataState.restore-info;}
-            CheckBox{text:"确认替换全部现有记录；需要保留时，我已主动导出备份";checked<=>DataState.replace-confirmed;enabled:DataState.restore-ready;}
-            Button{text:"执行恢复";enabled:!DataState.busy && DataState.restore-ready && DataState.replace-confirmed;clicked=>{DataState.action(4);}}
-            Title{text:"当前选中范围";}
-            CheckBox{text:"导出中包含可执行路径（默认关闭）";checked<=>DataState.export-paths;}
-            HorizontalLayout {
-                Button{text:"导出 JSON";enabled:!DataState.busy;clicked=>{DataState.action(5);}}
-                Button{text:"导出 CSV";enabled:!DataState.busy;clicked=>{DataState.action(6);}}
-                Button{text:"导出已选快照";enabled:!DataState.busy;clicked=>{DataState.action(7);}}
+        }
+
+        if root.page == 1 : ScrollView {
+            horizontal-scrollbar-policy: always-off;
+            VerticalLayout {
+                alignment: start;
+                padding-right: 16px;
+                padding-bottom: 12px;
+                spacing: 16px;
+                SectionTitle { text: "导出当前选中范围"; }
+                Note { text: "沿用时间线当前选择的时间范围。JSON 和 CSV 适合留存报告或继续分析。"; }
+                CheckBox { font-size: 13px; text: "导出中包含可执行路径"; checked <=> DataState.export-paths; enabled: !DataState.busy; }
+                Note { text: "可执行路径默认关闭；开启后，导出文件会包含相应的本地路径。"; }
+                HorizontalLayout {
+                    spacing: 10px;
+                    Action { width: 140px; text: "导出 JSON"; enabled: !DataState.busy; clicked => { DataState.action(5); } }
+                    Action { width: 140px; text: "导出 CSV"; enabled: !DataState.busy; clicked => { DataState.action(6); } }
+                    Rectangle { horizontal-stretch: 1; }
+                }
+                Rectangle { height: 8px; }
+                Rule { }
+                SectionTitle { text: "导出一张快照"; }
+                Note { text: "先在快照页面选择一张可用图片，再将它导出为 WebP 文件。"; }
+                HorizontalLayout {
+                    Action { width: 160px; text: "导出已选快照"; enabled: !DataState.busy && root.snapshot-available; clicked => { DataState.action(7); } }
+                    Rectangle { horizontal-stretch: 1; }
+                }
             }
-            Title{text:"完整性与清空";}
-            Button{text:"运行完整性检查";enabled:!DataState.busy;clicked=>{DataState.action(8);}}
-            Button{text:"重新启动并进入恢复界面";enabled:!DataState.busy;clicked=>{DataState.action(10);}}
-            CheckBox{text:"一键清空时同时删除 AI 凭据";checked<=>DataState.clear-credentials;}
-            Note{text:"一键清空仍需在主界面的清空对话框确认。此处的选项决定凭据是否一起删除。";}
-            Title{text:"安装与更新";}
-            Note{text:"更新由你主动运行新版本安装器，升级保留本地数据。当前版本未签名，不安装提权自动更新程序。卸载时可以保留加密数据，也可以删除本地数据与凭据。";}
-            Rectangle {height:8px;}
-        }}
-        Note{text:DataState.busy?"正在处理，请稍候…":DataState.status;}
+        }
+
+        if root.page == 2 : ScrollView {
+            horizontal-scrollbar-policy: always-off;
+            VerticalLayout {
+                alignment: start;
+                padding-right: 16px;
+                padding-bottom: 12px;
+                spacing: 16px;
+                SectionTitle { text: "当前数据目录"; }
+                Note { text: DataState.current-directory != "" ? DataState.current-directory : "正在读取数据位置…"; color: Theme.ink; }
+                Rule { }
+                SectionTitle { text: "迁移到其他位置"; }
+                Note { text: "选择本地固定磁盘上的空目录。迁移期间会暂停采集，验证全部数据，成功后切换到新的位置。"; }
+                Label { text: "目标空目录"; }
+                LineEdit { height: 36px; text <=> DataState.destination; placeholder-text: "例如 D:\\TimelensData"; enabled: !DataState.busy; }
+                HorizontalLayout {
+                    Action { width: 160px; text: "迁移到此目录"; enabled: !DataState.busy && DataState.destination != ""; clicked => { DataState.action(9); } }
+                    Rectangle { horizontal-stretch: 1; }
+                }
+                Note { text: "外部备份与导出文件由你管理，会留在原处，不会随应用的数据清理而删除。"; }
+            }
+        }
+
+        if root.page == 3 : ScrollView {
+            horizontal-scrollbar-policy: always-off;
+            VerticalLayout {
+                alignment: start;
+                padding-right: 16px;
+                padding-bottom: 12px;
+                spacing: 16px;
+                SectionTitle { text: "完整性检查"; }
+                Note { text: "检查当前数据库的完整性与外键。需要从备份修复时，可重新进入恢复界面。"; }
+                HorizontalLayout {
+                    spacing: 10px;
+                    Action { width: 156px; text: "运行完整性检查"; enabled: !DataState.busy; clicked => { DataState.action(8); } }
+                    Action { width: 196px; text: "重启并进入恢复界面"; enabled: !DataState.busy; clicked => { DataState.action(10); } }
+                    Rectangle { horizontal-stretch: 1; }
+                }
+                Rule { }
+                SectionTitle { text: "清空本地记录"; color: Theme.danger; }
+                Note { text: "请在“记录与隐私”中选择是否保留 AI 凭据，并确认清空操作。"; }
+                Rule { }
+                SectionTitle { text: "更新前备份"; }
+                Note { text: "更新前可以创建一份独立备份。导出的文件由你保管，不会被活动数据清理删除。"; }
+            }
+        }
+
+        StatusLine { busy: DataState.busy; text: DataState.busy ? "正在处理，请稍候…" : DataState.status; }
     }
 }

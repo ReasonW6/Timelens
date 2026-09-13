@@ -3,12 +3,17 @@
 
 mod ai;
 mod ai_ui;
+mod app_icon;
 mod collection_ui;
 mod data_ui;
 mod local_config;
 mod recovery;
 mod snapshot;
+mod timeline_ui;
+mod timeline_view;
 mod tray;
+mod ui_model;
+mod window_placement;
 
 use std::{
     cell::RefCell,
@@ -38,517 +43,10 @@ use timelens_storage::{
 const COLLECTOR_NAMES: &[&str] = &["timelens-collector.exe", "Timelens.Collector.exe"];
 
 slint::slint! {
-    import { Button, CheckBox, ListView } from "std-widgets.slint";
-    import { AiPanel, AiState } from "ui/ai-panel.slint";
-    import { DataPanel, DataState } from "ui/data-panel.slint";
-    export { DataState } from "ui/data-panel.slint";
-    import { CollectionPanel, CollectionState, KeyCell } from "ui/collection-panel.slint";
-    export { CollectionState, KeyCell } from "ui/collection-panel.slint";
-    export { AiState } from "ui/ai-panel.slint";
-
-    export struct AppRow {
-        name: string,
-        summary: string,
-        open-ratio: float,
-        display-ratio: float,
-        focus-ratio: float,
-    }
-
-    export struct WindowRow {
-        label: string,
-        summary: string,
-    }
-
-    export struct SegmentRow {
-        offset: float,
-        width: float,
-        kind: int,
-    }
-
-    export struct SnapshotRow {
-        time: string,
-        display: string,
-        result: string,
-    }
-
-    export struct ReportAppRow {
-        name: string,
-        summary: string,
-    }
-
-    component FlatButton inherits Rectangle {
-        in property <string> text;
-        in property <bool> danger: false;
-        callback clicked;
-        height: 34px;
-        border-radius: 8px;
-        background: touch.pressed ? (root.danger ? #7b3039 : #234d72)
-                                  : (root.danger ? #4b252c : #1a3147);
-        border-width: 1px;
-        border-color: root.danger ? #8c4652 : #2b506e;
-        Text {
-            text: root.text;
-            color: root.danger ? #ffc1c8 : #d8eaff;
-            horizontal-alignment: center;
-            vertical-alignment: center;
-            font-size: 12px;
-        }
-        touch := TouchArea { clicked => { root.clicked(); } }
-    }
-
-    component MetricCard inherits Rectangle {
-        in property <string> label;
-        in property <string> value;
-        background: #151f2b;
-        border-radius: 10px;
-        VerticalLayout {
-            padding: 12px;
-            spacing: 4px;
-            Text { text: root.label; color: #7e92a8; font-size: 11px; }
-            Text { text: root.value; color: #eef5fb; font-size: 17px; font-weight: 600; }
-        }
-    }
-
-    export component AppWindow inherits Window {
-        title: "Timelens";
-        width: 1120px;
-        height: 720px;
-        background: rgb(11, 17, 24);
-
-        in property <string> storage-status;
-        in property <string> collector-status;
-        in property <string> data-path;
-        in property <string> range-label;
-        in property <string> selected-name: "尚无应用数据";
-        in property <string> opened-value: "0 秒";
-        in property <string> displayed-value: "0 秒";
-        in property <string> focused-value: "0 秒";
-        in property <string> background-value: "0 秒";
-        in property <string> input-value: "键盘 0 · 鼠标 0";
-        in property <string> coverage-value: "未记录清理或中断";
-        in property <string> retention-value: "30 天 · 100 MiB";
-        in property <string> action-status: "";
-        in property <[AppRow]> apps;
-        in property <[WindowRow]> windows;
-        in property <[SegmentRow]> segments;
-        in property <[SnapshotRow]> snapshots;
-        in property <image> snapshot-preview;
-        in property <string> snapshot-detail: "请选择一条快照记录";
-        in property <string> snapshot-policy-label: "快照已关闭";
-        in property <string> snapshot-exclusion-label: "先在主界面选择应用";
-        in property <[ReportAppRow]> report-apps;
-        in property <string> report-summary: "正在生成本地报告…";
-        in-out property <int> selected-index: -1;
-        in-out property <int> snapshot-selected-index: -1;
-        in-out property <bool> windows-expanded: false;
-        in-out property <bool> snapshot-open: false;
-        in-out property <bool> report-open: false;
-        private property <bool> clear-confirm-open: false;
-        in-out property <float> selection-left: 0;
-        in-out property <float> selection-right: 1;
-        private property <bool> middle-dragging: false;
-        private property <float> middle-start: 0;
-
-        callback app-selected(int);
-        callback horizon-selected(int);
-        callback range-selected(float, float);
-        callback retention-selected(int);
-        callback run-cleanup;
-        callback clear-all;
-        callback snapshot-opened;
-        callback snapshot-row-selected(int);
-        callback snapshot-delete-selected;
-        callback snapshot-capture-now;
-        callback snapshot-toggle-enabled;
-        callback snapshot-interval-selected(int);
-        callback snapshot-toggle-target;
-        callback snapshot-retention-selected(int, int);
-        callback snapshot-toggle-exclusion;
-        callback report-generate;
-
-        VerticalLayout {
-            padding: 22px;
-            spacing: 14px;
-
-            HorizontalLayout {
-                height: 54px;
-                VerticalLayout {
-                    spacing: 2px;
-                    Text { text: "TIMELENS"; color: #eef6ff; font-size: 25px; font-weight: 700; }
-                    Text { text: root.collector-status; color: #6f91ae; font-size: 11px; }
-                }
-                Rectangle { horizontal-stretch: 1; }
-                FlatButton { width: 68px; text: "AI 总结"; clicked => { AiState.open = true; AiState.opened(); } }
-                FlatButton { width: 78px; text: "数据备份"; clicked => { DataState.open = true; } }
-                FlatButton { width: 78px; text: "采集统计"; clicked => { CollectionState.open = true; CollectionState.opened(); } }
-                VerticalLayout {
-                    alignment: end;
-                    Text { text: root.range-label; color: #cfe8ff; font-size: 13px; horizontal-alignment: right; }
-                    Text { text: root.coverage-value; color: #70d6a1; font-size: 11px; horizontal-alignment: right; }
-                }
-            }
-
-            Rectangle {
-                height: 122px;
-                background: #111b26;
-                border-radius: 12px;
-                VerticalLayout {
-                    padding: 14px;
-                    spacing: 8px;
-                    HorizontalLayout {
-                        Text { text: "时间范围"; color: #a8bacb; font-size: 12px; }
-                        Rectangle { horizontal-stretch: 1; }
-                        FlatButton { width: 58px; text: "6 小时"; clicked => { root.horizon-selected(6); } }
-                        FlatButton { width: 62px; text: "24 小时"; clicked => { root.horizon-selected(24); } }
-                        FlatButton { width: 54px; text: "7 天"; clicked => { root.horizon-selected(168); } }
-                    }
-                    Text { text: "在下方时间带按住鼠标中键拖动可截取区间"; color: rgb(97, 121, 142); font-size: 10px; }
-                    axis := Rectangle {
-                        height: 42px;
-                        background: rgb(11, 19, 28);
-                        border-radius: 8px;
-                        for segment in root.segments : Rectangle {
-                            x: segment.offset * parent.width;
-                            width: max(2px, segment.width * parent.width);
-                            height: parent.height;
-                            background: segment.kind == 2 ? #62b6ff55
-                                      : segment.kind == 1 ? #54d7a255
-                                      : #a58bff3c;
-                        }
-                        Rectangle {
-                            x: min(root.selection-left, root.selection-right) * parent.width;
-                            width: abs(root.selection-right - root.selection-left) * parent.width;
-                            height: parent.height;
-                            background: #8cc8ff24;
-                            border-width: 1px;
-                            border-color: #8cc8ff;
-                        }
-                        axis-touch := TouchArea {
-                            pointer-event(event) => {
-                                if (event.button == PointerEventButton.middle && event.kind == PointerEventKind.down) {
-                                    root.middle-dragging = true;
-                                    root.middle-start = axis-touch.mouse-x / axis-touch.width;
-                                    root.selection-left = root.middle-start;
-                                    root.selection-right = root.middle-start;
-                                }
-                                if (event.button == PointerEventButton.middle && event.kind == PointerEventKind.up && root.middle-dragging) {
-                                    root.middle-dragging = false;
-                                    root.selection-right = axis-touch.mouse-x / axis-touch.width;
-                                    root.range-selected(root.middle-start, root.selection-right);
-                                }
-                            }
-                            moved => {
-                                if (root.middle-dragging) {
-                                    root.selection-right = axis-touch.mouse-x / axis-touch.width;
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            HorizontalLayout {
-                spacing: 14px;
-                vertical-stretch: 1;
-
-                Rectangle {
-                    width: 330px;
-                    background: #101923;
-                    border-radius: 12px;
-                    VerticalLayout {
-                        padding: 12px;
-                        spacing: 8px;
-                        Text { text: "选中时段内的应用"; color: #94a9bc; font-size: 12px; }
-                        ListView {
-                            for app[index] in root.apps : Rectangle {
-                                height: 70px;
-                                border-radius: 9px;
-                                background: index == root.selected-index ? #1b3650 : app-row-touch.has-hover ? #152535 : #111c27;
-                                VerticalLayout {
-                                    padding: 10px;
-                                    spacing: 5px;
-                                    HorizontalLayout {
-                                        Text { text: app.name; color: #edf6ff; font-size: 13px; font-weight: 600; overflow: elide; }
-                                        Rectangle { horizontal-stretch: 1; }
-                                        Text { text: app.summary; color: #7890a6; font-size: 10px; }
-                                    }
-                                    Rectangle {
-                                        height: 7px;
-                                        background: #0a1118;
-                                        border-radius: 4px;
-                                        Rectangle { width: app.open-ratio * parent.width; height: parent.height; background: #7c6fc766; border-radius: 4px; }
-                                        Rectangle { width: app.display-ratio * parent.width; height: parent.height; background: #4ac58a99; border-radius: 4px; }
-                                        Rectangle { width: app.focus-ratio * parent.width; height: parent.height; background: #5caeff; border-radius: 4px; }
-                                    }
-                                }
-                                app-row-touch := TouchArea { clicked => { root.app-selected(index); } }
-                            }
-                        }
-                    }
-                }
-
-                Rectangle {
-                    horizontal-stretch: 1;
-                    background: #101923;
-                    border-radius: 12px;
-                    VerticalLayout {
-                        padding: 16px;
-                        spacing: 12px;
-                        HorizontalLayout {
-                            VerticalLayout {
-                                Text { text: root.selected-name; color: #f2f7fc; font-size: 21px; font-weight: 650; overflow: elide; }
-                                Text { text: root.input-value; color: #6f8da6; font-size: 11px; }
-                            }
-                            Rectangle { horizontal-stretch: 1; }
-                            FlatButton {
-                                width: 108px;
-                                text: root.windows-expanded ? "收起窗口" : "展开窗口";
-                                clicked => { root.windows-expanded = !root.windows-expanded; }
-                            }
-                        }
-                        HorizontalLayout {
-                            spacing: 8px;
-                            MetricCard { label: "打开"; value: root.opened-value; }
-                            MetricCard { label: "显示中"; value: root.displayed-value; }
-                            MetricCard { label: "聚焦中"; value: root.focused-value; }
-                            MetricCard { label: "后台"; value: root.background-value; }
-                        }
-                        Rectangle {
-                            height: 54px;
-                            background: rgb(11, 19, 28);
-                            border-radius: 8px;
-                            for segment in root.segments : Rectangle {
-                                x: segment.offset * parent.width;
-                                width: max(2px, segment.width * parent.width);
-                                height: segment.kind == 2 ? 16px : segment.kind == 1 ? 14px : 12px;
-                                y: segment.kind == 2 ? 5px : segment.kind == 1 ? 21px : 37px;
-                                background: segment.kind == 2 ? #62b6ff : segment.kind == 1 ? #54d7a2 : #9a82df;
-                                border-radius: 3px;
-                            }
-                        }
-                        if root.windows-expanded : ListView {
-                            for item in root.windows : Rectangle {
-                                height: 48px;
-                                background: #121e2a;
-                                border-radius: 7px;
-                                HorizontalLayout {
-                                    padding: 10px;
-                                    Text { text: item.label; color: #cfe1ef; font-size: 12px; }
-                                    Rectangle { horizontal-stretch: 1; }
-                                    Text { text: item.summary; color: #6f879c; font-size: 10px; }
-                                }
-                            }
-                        }
-                        Rectangle { vertical-stretch: 1; }
-                    }
-                }
-            }
-
-            Rectangle {
-                height: 74px;
-                background: #101923;
-                border-radius: 11px;
-                HorizontalLayout {
-                    padding: 12px;
-                    spacing: 8px;
-                    VerticalLayout {
-                        Text { text: "数据保留  " + root.retention-value; color: #a7bacb; font-size: 12px; }
-                        Text { text: root.storage-status + "  ·  " + root.data-path; color: #536d83; font-size: 10px; overflow: elide; }
-                        Text { text: root.action-status; color: #77cda1; font-size: 10px; }
-                    }
-                    Rectangle { horizontal-stretch: 1; }
-                    FlatButton { width: 70px; text: "快照"; clicked => { root.snapshot-open = true; root.snapshot-opened(); } }
-                    FlatButton { width: 84px; text: "时段报告"; clicked => { root.report-open = true; root.report-generate(); } }
-                    FlatButton { width: 50px; text: "7 天"; clicked => { root.retention-selected(7); } }
-                    FlatButton { width: 56px; text: "30 天"; clicked => { root.retention-selected(30); } }
-                    FlatButton { width: 56px; text: "90 天"; clicked => { root.retention-selected(90); } }
-                    FlatButton { width: 54px; text: "永久"; clicked => { root.retention-selected(0); } }
-                    FlatButton { width: 78px; text: "立即清理"; clicked => { root.run-cleanup(); } }
-                    FlatButton { width: 86px; text: "清空全部"; danger: true; clicked => { root.clear-confirm-open = true; } }
-                }
-            }
-        }
-
-        if root.clear-confirm-open : Rectangle {
-            z: 100;
-            width: parent.width;
-            height: parent.height;
-            background: #05080de6;
-            TouchArea { clicked => { } }
-            Rectangle {
-                width: min(560px, parent.width - 48px);
-                height: 320px;
-                x: (parent.width - self.width) / 2;
-                y: (parent.height - self.height) / 2;
-                background: #111d29;
-                border-width: 1px;
-                border-color: #8c4652;
-                border-radius: 12px;
-                VerticalLayout {
-                    padding: 24px;
-                    spacing: 14px;
-                    Text { text: "确认清空全部本地记录？"; color: #ffc1c8; font-size: 21px; font-weight: 600; }
-                    Text { text: "将删除活动、输入、快照、本地报告、AI 总结与对话，并轮换数据密钥。此操作无法撤销。"; color: #d8eaff; font-size: 13px; wrap: word-wrap; }
-                    Text { text: "普通设置与排除规则保留。外部备份和导出文件不受影响；如需保留记录，请先取消并导出备份。"; color: #91a8bb; font-size: 12px; wrap: word-wrap; }
-                    Text { text: "数据位置：" + root.data-path; color: #91a8bb; font-size: 11px; wrap: word-wrap; }
-                    CheckBox { text: "同时删除当前提供商的 AI 凭据"; checked <=> DataState.clear-credentials; }
-                    HorizontalLayout {
-                        spacing: 12px;
-                        Button { text: "取消，保留记录"; clicked => { root.clear-confirm-open = false; } }
-                        Button { text: "确认清空全部记录"; clicked => { root.clear-confirm-open = false; root.clear-all(); } }
-                    }
-                }
-            }
-        }
-
-        if root.snapshot-open : Rectangle {
-            z: 10;
-            width: parent.width;
-            height: parent.height;
-            background: #05080dcf;
-            Rectangle {
-                width: min(980px, parent.width - 48px);
-                height: min(620px, parent.height - 48px);
-                x: (parent.width - self.width) / 2;
-                y: (parent.height - self.height) / 2;
-                background: #101923;
-                border-width: 1px;
-                border-color: #2b506e;
-                border-radius: 14px;
-                VerticalLayout {
-                    padding: 16px;
-                    spacing: 10px;
-                    HorizontalLayout {
-                        Text { text: "定时屏幕快照"; color: #eef6ff; font-size: 20px; font-weight: 650; }
-                        Rectangle { horizontal-stretch: 1; }
-                        Text { text: root.snapshot-policy-label; color: #79a9ca; font-size: 11px; vertical-alignment: center; }
-                        FlatButton { width: 62px; text: "关闭"; clicked => { root.snapshot-open = false; } }
-                    }
-                    HorizontalLayout {
-                        spacing: 6px;
-                        FlatButton { width: 76px; text: "启用/停用"; clicked => { root.snapshot-toggle-enabled(); } }
-                        FlatButton { width: 70px; text: "当前/全部"; clicked => { root.snapshot-toggle-target(); } }
-                        Text { text: "间隔"; color: #70879b; font-size: 11px; vertical-alignment: center; }
-                        FlatButton { width: 38px; text: "1"; clicked => { root.snapshot-interval-selected(1); } }
-                        FlatButton { width: 38px; text: "3"; clicked => { root.snapshot-interval-selected(3); } }
-                        FlatButton { width: 38px; text: "5"; clicked => { root.snapshot-interval-selected(5); } }
-                        FlatButton { width: 42px; text: "10"; clicked => { root.snapshot-interval-selected(10); } }
-                        FlatButton { width: 42px; text: "15"; clicked => { root.snapshot-interval-selected(15); } }
-                        FlatButton { width: 42px; text: "30"; clicked => { root.snapshot-interval-selected(30); } }
-                        FlatButton { width: 42px; text: "60"; clicked => { root.snapshot-interval-selected(60); } }
-                        Rectangle { horizontal-stretch: 1; }
-                        FlatButton { width: 86px; text: "立即拍一张"; clicked => { root.snapshot-capture-now(); } }
-                    }
-                    HorizontalLayout {
-                        spacing: 6px;
-                        Text { text: "独立保留"; color: #70879b; font-size: 11px; vertical-alignment: center; }
-                        FlatButton { width: 48px; text: "1天"; clicked => { root.snapshot-retention-selected(1, 1024); } }
-                        FlatButton { width: 48px; text: "3天"; clicked => { root.snapshot-retention-selected(3, 1024); } }
-                        FlatButton { width: 48px; text: "7天"; clicked => { root.snapshot-retention-selected(7, 1024); } }
-                        FlatButton { width: 52px; text: "30天"; clicked => { root.snapshot-retention-selected(30, 1024); } }
-                        FlatButton { width: 52px; text: "90天"; clicked => { root.snapshot-retention-selected(90, 1024); } }
-                        FlatButton { width: 60px; text: "365天"; clicked => { root.snapshot-retention-selected(365, 1024); } }
-                        FlatButton { width: 52px; text: "永久"; clicked => { root.snapshot-retention-selected(0, 1024); } }
-                        Text { text: "上限 1 GiB"; color: #526b80; font-size: 10px; vertical-alignment: center; }
-                        Rectangle { horizontal-stretch: 1; }
-                        Text { text: root.snapshot-exclusion-label; color: #6f8da6; font-size: 10px; vertical-alignment: center; overflow: elide; }
-                        FlatButton { width: 118px; text: "切换所选应用排除"; clicked => { root.snapshot-toggle-exclusion(); } }
-                    }
-                    HorizontalLayout {
-                        spacing: 10px;
-                        Rectangle {
-                            width: 310px;
-                            background: rgb(11, 19, 28);
-                            border-radius: 9px;
-                            VerticalLayout {
-                                padding: 7px;
-                                Text { text: "当前时段快照与明确缺失"; color: #8fa6b9; font-size: 11px; }
-                                ListView {
-                                    for item[index] in root.snapshots : Rectangle {
-                                        height: 54px;
-                                        border-radius: 7px;
-                                        background: index == root.snapshot-selected-index ? #1b3650 : snapshot-row-touch.has-hover ? #152535 : #101b26;
-                                        VerticalLayout {
-                                            padding: 7px;
-                                            Text { text: item.time + "  ·  " + item.display; color: #dcecf8; font-size: 11px; overflow: elide; }
-                                            Text { text: item.result; color: #6f91ae; font-size: 10px; overflow: elide; }
-                                        }
-                                        snapshot-row-touch := TouchArea { clicked => { root.snapshot-row-selected(index); } }
-                                    }
-                                }
-                            }
-                        }
-                        Rectangle {
-                            horizontal-stretch: 1;
-                            background: #091019;
-                            border-radius: 9px;
-                            VerticalLayout {
-                                padding: 10px;
-                                spacing: 8px;
-                                Image { source: root.snapshot-preview; image-fit: contain; vertical-stretch: 1; }
-                                Text { text: root.snapshot-detail; color: #7f98ad; font-size: 10px; horizontal-alignment: center; overflow: elide; }
-                                HorizontalLayout {
-                                    Rectangle { horizontal-stretch: 1; }
-                                    FlatButton { width: 92px; text: "删除所选快照"; danger: true; clicked => { root.snapshot-delete-selected(); } }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        if root.report-open : Rectangle {
-            z: 11;
-            width: parent.width;
-            height: parent.height;
-            background: #05080dd8;
-            Rectangle {
-                width: min(820px, parent.width - 64px);
-                height: min(560px, parent.height - 64px);
-                x: (parent.width - self.width) / 2;
-                y: (parent.height - self.height) / 2;
-                background: #101923;
-                border-width: 1px;
-                border-color: #2b506e;
-                border-radius: 14px;
-                VerticalLayout {
-                    padding: 18px;
-                    spacing: 12px;
-                    HorizontalLayout {
-                        Text { text: "可复现的本地时段报告"; color: #eef6ff; font-size: 20px; font-weight: 650; }
-                        Rectangle { horizontal-stretch: 1; }
-                        FlatButton { width: 64px; text: "重新生成"; clicked => { root.report-generate(); } }
-                        FlatButton { width: 58px; text: "关闭"; clicked => { root.report-open = false; } }
-                    }
-                    Text { text: root.report-summary; color: rgb(142, 171, 193); font-size: 12px; wrap: word-wrap; }
-                    Rectangle {
-                        vertical-stretch: 1;
-                        background: rgb(11, 19, 28);
-                        border-radius: 9px;
-                        ListView {
-                            for app in root.report-apps : Rectangle {
-                                height: 54px;
-                                background: #101b26;
-                                HorizontalLayout {
-                                    padding: 9px;
-                                    Text { text: app.name; color: #e1effa; font-size: 12px; overflow: elide; }
-                                    Rectangle { horizontal-stretch: 1; }
-                                    Text { text: app.summary; color: #6f8da6; font-size: 10px; }
-                                }
-                            }
-                        }
-                    }
-                    Text { text: "报告只固化聚合结果、覆盖率、缺失原因与规则版本，不复制原始分钟事件。"; color: #526b80; font-size: 10px; }
-                }
-            }
-        }
-        if AiState.open : AiPanel { x: parent.width - self.width; y: 0; width: min(560px, parent.width - 24px); height: parent.height; }
-        if DataState.open : DataPanel { x: parent.width - self.width; y: 0; width: min(560px, parent.width - 24px); height: parent.height; }
-        if CollectionState.open : CollectionPanel { x: parent.width - self.width; y: 0; width: min(560px, parent.width - 24px); height: parent.height; }
-    }
+    export { AppWindow, AppRow, WindowRow, SegmentRow, SnapshotRow, ReportAppRow,
+             ActivityRow, DayRow, AiState, DataState, CollectionState, KeyCell }
+        from "ui/main-window.slint";
 }
-
 fn main() -> Result<()> {
     let options = Options::parse(env::args_os().skip(1))?;
     timelens_ai::credentials::require_ordinary_privilege().map_err(anyhow::Error::msg)?;
@@ -700,6 +198,9 @@ struct UiState {
     selected_identity: Option<String>,
     application_identities: Vec<String>,
     follow_now: bool,
+    calendar_day: Option<i64>,
+    activity_rows: Vec<timeline_view::ActivityEntry>,
+    selected_activity: Option<(String, i64)>,
 }
 
 impl UiState {
@@ -714,10 +215,20 @@ impl UiState {
             selected_identity: None,
             application_identities: Vec::new(),
             follow_now: true,
+            calendar_day: None,
+            activity_rows: Vec::new(),
+            selected_activity: None,
         }
     }
 
     fn select_fraction_range(&mut self, first: f32, second: f32) -> bool {
+        self.select_fraction_range_at(first, second, unix_time_ms())
+    }
+
+    fn select_fraction_range_at(&mut self, first: f32, second: f32, now: i64) -> bool {
+        if !first.is_finite() || !second.is_finite() {
+            return false;
+        }
         let first = first.clamp(0.0, 1.0);
         let second = second.clamp(0.0, 1.0);
         let left = first.min(second);
@@ -728,12 +239,19 @@ impl UiState {
         let span = self
             .horizon_ended_utc_ms
             .saturating_sub(self.horizon_started_utc_ms);
-        self.range_started_utc_ms = self
+        let started = self
             .horizon_started_utc_ms
             .saturating_add((span as f64 * f64::from(left)) as i64);
-        self.range_ended_utc_ms = self
+        let ended = self
             .horizon_started_utc_ms
-            .saturating_add((span as f64 * f64::from(right)) as i64);
+            .saturating_add((span as f64 * f64::from(right)) as i64)
+            .min(now);
+        if ended <= started {
+            return false;
+        }
+        self.range_started_utc_ms = started;
+        self.range_ended_utc_ms = ended;
+        self.selected_activity = None;
         self.follow_now = false;
         true
     }
@@ -747,6 +265,19 @@ fn run_window(
     background: bool,
 ) -> Result<()> {
     let window = AppWindow::new()?;
+    // A debug-only viewport override keeps native visual QA reproducible.
+    #[cfg(debug_assertions)]
+    if let Ok(viewport) = std::env::var("TIMELENS_QA_VIEWPORT")
+        && let Some((width, height)) = viewport
+            .split_once('x')
+            .and_then(|(w, h)| Some((w.parse::<u32>().ok()?, h.parse::<u32>().ok()?)))
+        && (1180..=3840).contains(&width)
+        && (680..=2160).contains(&height)
+    {
+        window
+            .window()
+            .set_size(slint::LogicalSize::new(width as f32, height as f32));
+    }
     let storage_status = {
         let storage = storage
             .lock()
@@ -760,6 +291,7 @@ fn run_window(
     window.set_storage_status(storage_status.into());
     window.set_collector_status("等待受信采集器事件…".into());
     window.set_data_path(data_directory.display().to_string().into());
+    window.set_build_version(env!("CARGO_PKG_VERSION").into());
 
     let (status_sender, status_receiver) = mpsc::channel();
     let server_storage = Arc::clone(&storage);
@@ -796,10 +328,17 @@ fn run_window(
         }
     });
 
-    let ui_state = Rc::new(RefCell::new(UiState::recent_hours(24)));
+    let ui_state = Rc::new(RefCell::new(timeline_ui::today_state()));
     let snapshot_ui_state = Rc::new(RefCell::new(SnapshotUiState::default()));
     let action_busy = Arc::new(AtomicBool::new(false));
     let (action_sender, action_receiver) = mpsc::channel::<ActionStatus>();
+
+    timeline_ui::install(
+        &window,
+        Arc::clone(&storage),
+        Rc::clone(&ui_state),
+        Arc::clone(&action_busy),
+    );
 
     {
         let weak = window.as_weak();
@@ -812,6 +351,7 @@ fn run_window(
             }
             let mut state = ui_state.borrow_mut();
             state.selected_identity = state.application_identities.get(index as usize).cloned();
+            state.selected_activity = None;
             drop(state);
             if let Some(window) = weak.upgrade()
                 && let Err(error) = refresh_timeline(&window, &storage, &ui_state)
@@ -847,9 +387,7 @@ fn run_window(
                 return;
             }
             let mut state = ui_state.borrow_mut();
-            if !state.select_fraction_range(left, right) {
-                return;
-            }
+            state.select_fraction_range(left, right);
             drop(state);
             if let Some(window) = weak.upgrade()
                 && let Err(error) = refresh_timeline(&window, &storage, &ui_state)
@@ -926,9 +464,15 @@ fn run_window(
         let Some(window) = weak.upgrade() else {
             return;
         };
+        window.set_action_busy(timer_busy.load(Ordering::Acquire));
+        window.global::<AiState>().set_open(
+            window.get_page() == 4 || (window.get_page() == 5 && window.get_settings_tab() == 2),
+        );
         if !recovery_shown && timer_storage.try_lock().is_ok_and(|s| s.is_quarantined()) {
             recovery_shown = true;
             window.global::<DataState>().set_open(true);
+            window.set_page(5);
+            window.set_settings_tab(1);
             window.global::<DataState>().set_recovery_needed(true);
             window.global::<DataState>().set_status(
                 "发现数据损坏，已停止写入。请进入恢复界面，保留原件并恢复到新目录。".into(),
@@ -957,6 +501,7 @@ fn run_window(
             window.set_snapshot_selected_index(-1);
             window.set_snapshot_detail("数据已变更，请重新选择快照".into());
             window.set_report_apps(ModelRc::new(VecModel::<ReportAppRow>::default()));
+            window.set_report_ready(false);
             window.set_report_summary("数据已变更，请重新生成本地报告".into());
             window.global::<DataState>().set_clear_credentials(false);
             refresh_requested = true;
@@ -999,6 +544,7 @@ fn run_window(
     });
     if !background {
         window.show()?;
+        window_placement::fit_after_show(&window);
     }
     slint::run_event_loop_until_quit()?;
     drop(timer);
@@ -1031,9 +577,12 @@ fn refresh_timeline(
     storage: &Arc<Mutex<Storage>>,
     ui_state: &Rc<RefCell<UiState>>,
 ) -> Result<()> {
-    let (range_started, range_ended) = {
+    let (range_started, range_ended, horizon_started, horizon_ended) = {
         let mut state = ui_state.borrow_mut();
-        if state.follow_now {
+        if state.follow_now && state.calendar_day.is_some() {
+            state.range_ended_utc_ms = unix_time_ms().min(state.horizon_ended_utc_ms);
+            state.follow_now = state.range_ended_utc_ms < state.horizon_ended_utc_ms;
+        } else if state.follow_now {
             let horizon_duration = state
                 .horizon_ended_utc_ms
                 .saturating_sub(state.horizon_started_utc_ms);
@@ -1043,18 +592,27 @@ fn refresh_timeline(
             state.range_started_utc_ms = state.horizon_started_utc_ms;
             state.range_ended_utc_ms = state.horizon_ended_utc_ms;
         }
-        (state.range_started_utc_ms, state.range_ended_utc_ms)
+        (
+            state.range_started_utc_ms,
+            state.range_ended_utc_ms.min(unix_time_ms()),
+            state.horizon_started_utc_ms,
+            state.horizon_ended_utc_ms.min(unix_time_ms()),
+        )
     };
-    let (snapshot, policy) = {
+    let (snapshot, overview, policy, paused) = {
         let storage = storage
             .lock()
             .map_err(|_| anyhow::anyhow!("storage lock poisoned"))?;
         (
             storage.timeline_snapshot(range_started, range_ended)?,
+            storage.timeline_snapshot(horizon_started, horizon_ended.max(horizon_started + 1))?,
             storage.retention_policy()?,
+            storage.collection_policy()?.paused,
         )
     };
+    window.global::<CollectionState>().set_paused(paused);
     render_snapshot(window, ui_state, snapshot, policy);
+    timeline_ui::render_overview(window, &ui_state.borrow(), &overview);
     Ok(())
 }
 
@@ -1114,10 +672,15 @@ fn render_snapshot(
     let app_rows = snapshot
         .applications
         .iter()
-        .map(|application| AppRow {
-            name: application.display_name.clone().into(),
+        .enumerate()
+        .map(|(index, application)| AppRow {
+            identity: application.identity.clone().into(),
+            original_index: index as i32,
+            name: app_icon::display_name(&application.identity, &application.display_name).into(),
+            icon: app_icon::for_identity(&application.identity),
             summary: format!(
-                "{} · {} 个窗口",
+                "聚焦 {} · 打开 {} · {} 个窗口",
+                format_duration(application.focused_ms),
                 format_duration(application.opened_ms),
                 application.window_count
             )
@@ -1127,7 +690,10 @@ fn render_snapshot(
             focus_ratio: ratio(application.focused_ms, range_ms),
         })
         .collect::<Vec<_>>();
-    window.set_apps(ModelRc::new(VecModel::from(app_rows)));
+    window.set_apps(ui_model::sync(window.get_apps(), app_rows, |a, b| {
+        a.identity == b.identity
+    }));
+    timeline_ui::filter_apps(window);
     window.set_selected_index(selected_index);
     window.set_selection_left(selection_left);
     window.set_selection_right(selection_right);
@@ -1145,9 +711,11 @@ fn render_snapshot(
         format!("存在 {} 个明确缺口", snapshot.monitoring_gaps.len()).into()
     });
     window.set_retention_value(retention_label(policy).into());
+    window.set_retention_days(policy.days.unwrap_or(0) as i32);
 
     let selected = (selected_index >= 0).then(|| &snapshot.applications[selected_index as usize]);
     render_application(window, selected, &snapshot);
+    timeline_ui::render(window, ui_state, &snapshot);
 }
 
 fn render_application(
@@ -1166,7 +734,9 @@ fn render_application(
         window.set_segments(ModelRc::new(VecModel::<SegmentRow>::default()));
         return;
     };
-    window.set_selected_name(application.display_name.clone().into());
+    window.set_selected_name(
+        app_icon::display_name(&application.identity, &application.display_name).into(),
+    );
     window.set_opened_value(format_duration(application.opened_ms).into());
     window.set_displayed_value(format_duration(application.displayed_ms).into());
     window.set_focused_value(format_duration(application.focused_ms).into());
@@ -1186,7 +756,9 @@ fn render_application(
         .windows
         .iter()
         .map(|item| WindowRow {
+            identity: format!("{}:{}", application.identity, item.number).into(),
             label: format!("窗口 {}", item.number).into(),
+            focused: format_duration(item.focused_ms).into(),
             summary: format!(
                 "打开 {} · 显示 {} · 聚焦 {} · 后台 {}",
                 format_duration(item.opened_ms),
@@ -1197,7 +769,9 @@ fn render_application(
             .into(),
         })
         .collect::<Vec<_>>();
-    window.set_windows(ModelRc::new(VecModel::from(windows)));
+    window.set_windows(ui_model::sync(window.get_windows(), windows, |a, b| {
+        a.identity == b.identity
+    }));
 
     let span = snapshot
         .range_ended_utc_ms
@@ -1414,6 +988,7 @@ fn install_snapshot_callbacks(
                 return;
             };
             window.set_snapshot_selected_index(index);
+            window.set_snapshot_deletable(slot.success);
             if !slot.success {
                 window.set_snapshot_preview(Image::default());
                 window.set_snapshot_detail(
@@ -1444,7 +1019,7 @@ fn install_snapshot_callbacks(
                 Ok((
                     Image::from_rgba8(pixels),
                     format!(
-                        "{} × {} · {} · 解密与 SHA-256 完整性已验证",
+                        "{} × {} · {} · 完整性校验通过",
                         slot.pixel_width,
                         slot.pixel_height,
                         format_bytes(slot.plaintext_bytes)
@@ -1626,7 +1201,7 @@ fn install_snapshot_policy_callbacks(
         let storage = Arc::clone(&storage);
         let ui_state = Rc::clone(&ui_state);
         let snapshot_state = Rc::clone(&snapshot_state);
-        window.on_snapshot_retention_selected(move |days, max_mib| {
+        window.on_snapshot_retention_selected(move |days| {
             update_and_refresh_snapshot_policy(
                 &weak,
                 &storage,
@@ -1634,7 +1209,6 @@ fn install_snapshot_policy_callbacks(
                 &snapshot_state,
                 |policy| {
                     policy.retention_days = (days > 0).then_some(days as u32);
-                    policy.max_bytes = max_mib.max(1) as u64 * 1024 * 1024;
                 },
             );
         });
@@ -1700,6 +1274,7 @@ fn refresh_snapshot_panel(
     let rows = slots
         .iter()
         .map(|slot| SnapshotRow {
+            identity: slot.id.to_string().into(),
             time: snapshot_time_label(slot.slot_started_utc_ms).into(),
             display: slot
                 .display
@@ -1732,13 +1307,28 @@ fn refresh_snapshot_panel(
             state.selected_slot_id = None;
         }
     }
-    window.set_snapshots(ModelRc::new(VecModel::from(rows)));
+    window.set_snapshots(ui_model::sync(window.get_snapshots(), rows, |a, b| {
+        a.identity == b.identity
+    }));
     window.set_snapshot_selected_index(selected_index);
     if selected_index < 0 {
         window.set_snapshot_preview(Image::default());
         window.set_snapshot_detail("请选择一条成功快照进行解密预览".into());
     }
     window.set_snapshot_policy_label(snapshot_policy_label(policy).into());
+    window.set_snapshot_enabled(policy.enabled);
+    window.set_snapshot_interval_minutes(policy.interval_minutes as i32);
+    window.set_snapshot_retention_days(policy.retention_days.unwrap_or(0) as i32);
+    window.set_snapshot_capacity(format_bytes(policy.max_bytes).into());
+    window.set_snapshot_all_displays(policy.capture_all_displays);
+    window.set_snapshot_deletable(
+        selected_index >= 0
+            && snapshot_state
+                .borrow()
+                .slots
+                .get(selected_index as usize)
+                .is_some_and(|slot| slot.success),
+    );
     let exclusion_label = match selected_identity {
         Some(identity) if exclusions.iter().any(|candidate| candidate == &identity) => {
             format!("{} · 当前已排除", window.get_selected_name())
@@ -1763,6 +1353,7 @@ fn install_report_callback(
             return;
         }
         if let Some(window) = weak.upgrade() {
+            window.set_report_ready(false);
             window.set_report_summary("正在根据当前时段的本地事实生成报告…".into());
             window.set_report_apps(ModelRc::new(VecModel::<ReportAppRow>::default()));
         }
@@ -1833,18 +1424,27 @@ fn render_report(window: &AppWindow, report: &LocalReport) {
             .collect::<Vec<_>>()
             .join("、")
     };
+    window.set_report_ready(true);
+    window.set_report_range(
+        format!(
+            "已生成范围  {} — {}",
+            snapshot_time_label(report.range_started_utc_ms),
+            snapshot_time_label(report.range_ended_utc_ms)
+        )
+        .into(),
+    );
+    window.set_report_coverage(format!("{coverage:.1}%").into());
+    window.set_report_keyboard(grouped_count(report.keyboard_count).into());
+    window.set_report_snapshot_count(report.snapshot_success_count.to_string().into());
     window.set_report_summary(
         format!(
-            "报告 #{} · 规则 v{} · 时长 {} · 数据覆盖 {:.1}% · 应用 {} 个 · 明确缺口 {} 个\n键盘 {} · 鼠标 {} · 快照成功 {} · 快照缺失 {}（{}）",
+            "报告 #{} · 规则 v{} · 时长 {} · {} 个应用 · {} 条缺口记录\n鼠标 {} 次 · 快照缺失 {}（{}）",
             report.id,
             report.rules_version,
             format_duration(range_ms),
-            coverage,
             report.applications.len(),
             report.gaps.len(),
-            report.keyboard_count,
             mouse,
-            report.snapshot_success_count,
             report.snapshot_missing_count,
             reasons,
         )
@@ -1854,12 +1454,13 @@ fn render_report(window: &AppWindow, report: &LocalReport) {
         .applications
         .iter()
         .map(|application| ReportAppRow {
-            name: application.display_name.clone().into(),
+            name: app_icon::display_name(&application.identity, &application.display_name).into(),
+            icon: app_icon::for_identity(&application.identity),
+            focused: format_duration(application.focused_ms).into(),
             summary: format!(
-                "打开 {} · 显示 {} · 聚焦 {} · 后台 {}",
+                "打开 {} · 显示 {} · 后台 {}",
                 format_duration(application.opened_ms),
                 format_duration(application.displayed_ms),
-                format_duration(application.focused_ms),
                 format_duration(application.background_ms),
             )
             .into(),
@@ -1909,16 +1510,32 @@ fn snapshot_reason_label(reason: SnapshotMissingReason) -> &'static str {
 }
 
 fn snapshot_time_label(timestamp_utc_ms: i64) -> String {
-    let elapsed = unix_time_ms().saturating_sub(timestamp_utc_ms).max(0) as u64;
-    if elapsed < 60_000 {
-        format!("{} 秒前", elapsed / 1_000)
-    } else if elapsed < 3_600_000 {
-        format!("{} 分钟前", elapsed / 60_000)
-    } else if elapsed < 86_400_000 {
-        format!("{} 小时前", elapsed / 3_600_000)
-    } else {
-        format!("{} 天前", elapsed / 86_400_000)
-    }
+    use chrono::Datelike;
+    chrono::DateTime::from_timestamp_millis(timestamp_utc_ms)
+        .map(|value| {
+            let value = value.with_timezone(&chrono::Local);
+            let format = if value.year() == chrono::Local::now().year() {
+                "%-m月%-d日 %H:%M"
+            } else {
+                "%Y年%-m月%-d日 %H:%M"
+            };
+            value.format(format).to_string()
+        })
+        .unwrap_or_else(|| "时间不可用".to_owned())
+}
+
+fn grouped_count(value: u64) -> String {
+    let digits = value.to_string();
+    digits
+        .chars()
+        .enumerate()
+        .fold(String::new(), |mut output, (index, digit)| {
+            if index > 0 && (digits.len() - index).is_multiple_of(3) {
+                output.push(',');
+            }
+            output.push(digit);
+            output
+        })
 }
 
 fn ratio(value_ms: u64, range_ms: f64) -> f32 {
@@ -1931,11 +1548,19 @@ fn format_duration(milliseconds: u64) -> String {
     let minutes = seconds % 3_600 / 60;
     let seconds = seconds % 60;
     if hours > 0 {
-        format!("{hours} 小时 {minutes} 分")
+        if minutes == 0 {
+            format!("{hours}小时")
+        } else {
+            format!("{hours}小时{minutes}分")
+        }
     } else if minutes > 0 {
-        format!("{minutes} 分 {seconds} 秒")
+        if seconds == 0 {
+            format!("{minutes}分")
+        } else {
+            format!("{minutes}分{seconds}秒")
+        }
     } else {
-        format!("{seconds} 秒")
+        format!("{seconds}秒")
     }
 }
 
@@ -2036,6 +1661,9 @@ mod tests {
             selected_identity: None,
             application_identities: Vec::new(),
             follow_now: true,
+            calendar_day: None,
+            activity_rows: Vec::new(),
+            selected_activity: None,
         }
     }
 
@@ -2063,5 +1691,21 @@ mod tests {
             (1_000, 11_000)
         );
         assert!(!state.follow_now);
+    }
+
+    #[test]
+    fn drag_truncates_at_now_and_keeps_last_selection_for_future_or_invalid_input() {
+        let mut state = fixed_ui_state();
+        assert!(state.select_fraction_range_at(0.9, 0.2, 6_000));
+        assert_eq!(
+            (state.range_started_utc_ms, state.range_ended_utc_ms),
+            (3_000, 6_000)
+        );
+        assert!(!state.select_fraction_range_at(0.7, 0.9, 6_000));
+        assert!(!state.select_fraction_range_at(f32::NAN, 0.8, 6_000));
+        assert_eq!(
+            (state.range_started_utc_ms, state.range_ended_utc_ms),
+            (3_000, 6_000)
+        );
     }
 }

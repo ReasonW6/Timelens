@@ -1,0 +1,29 @@
+{
+  "capturedOn": "2026-09-05",
+  "sources": [
+    {
+      "title": "Linear - A calmer interface for a product in motion",
+      "url": "https://linear.app/now/behind-the-latest-design-refresh",
+      "pageCapture": "linear-2026-page.png",
+      "visualReference": "linear-sidebar-2026.png",
+      "note": "Fresh browser screenshot of the enlarged official sidebar comparison; AVIF asset was unsupported by the local image viewer and is not used as a generation input."
+    },
+    {
+      "title": "Things - All-new design",
+      "url": "https://culturedcode.com/things/features/",
+      "pageCapture": "things-page.png",
+      "assets": [
+        {"file": "things-detail.png", "url": "https://static.culturedcode.com/things/videos/2017-05-18-website-videos/1-design-hotels-3-mac-2.png"},
+        {"file": "things-today.png", "url": "https://static.culturedcode.com/things/videos/2017-05-18-website-videos/2-today-mac.png"}
+      ]
+    },
+    {
+      "title": "Notion Calendar - desktop",
+      "url": "https://www.notion.com/product/calendar/download/windows",
+      "pageCapture": "notion-calendar-page.png",
+      "assets": [
+        {"file": "notion-calendar-desktop.png", "url": "https://www.notion.com/front-static/pages/download/calendar/desktop.png"}
+      ]
+    }
+  ]
+}

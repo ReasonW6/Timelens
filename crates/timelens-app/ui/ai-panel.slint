@@ -1,4 +1,5 @@
-import { Button, CheckBox, ComboBox, LineEdit, TextEdit, ScrollView } from "std-widgets.slint";
+import { ComboBox, LineEdit, TextEdit, ScrollView } from "std-widgets.slint";
+import { Theme, Action, Label, Note, SectionTitle, Rule, CheckBox, StatusLine } from "theme.slint";
 
 export global AiState {
     in-out property <bool> open: false;
@@ -104,220 +105,581 @@ export global AiState {
     callback save-settings;
 }
 
-component Label inherits Text { color: #a9bfd1; font-size: 12px; }
-component Note inherits Text { color: #8099ae; font-size: 11px; wrap: word-wrap; }
-component Action inherits Rectangle {
-    in property <string> text;
-    in property <bool> accent: false;
-    in property <bool> enabled: true;
-    callback clicked;
-    height: 32px;
+// Keep native text editing and selection while giving every single-line field
+// an explicit height. A ScrollView must not stretch a short form into tall inputs.
+component AiField inherits LineEdit {
+    min-height: 36px;
+    max-height: 36px;
+    min-width: 0px;
     vertical-stretch: 0;
-    border-radius: 6px;
-    background: !root.enabled ? #17212c : area.pressed ? #345978 : root.accent ? #2b6385 : #203648;
-    Text { text: root.text; color: root.enabled ? #e3eff8 : #5f7385; font-size: 11px; horizontal-alignment: center; vertical-alignment: center; }
-    area := TouchArea { enabled: root.enabled; clicked => { root.clicked(); } }
+    font-size: 14px;
+}
+
+component AiSelect inherits ComboBox {
+    min-height: 36px;
+    max-height: 36px;
+    min-width: 0px;
+    vertical-stretch: 0;
+}
+
+component AiCheck inherits CheckBox {
+    vertical-stretch: 0;
+    font-size: 14px;
 }
 
 export component AiPanel inherits Rectangle {
-    background: #0f1a25;
-    border-width: 1px;
-    border-color: #355167;
+    in property <bool> embedded: true;
+    in property <bool> connection-only: false;
+    private property <bool> connection-options-open: false;
+    private property <bool> model-options-open: false;
+    private property <bool> reasoning-open: false;
+    private property <bool> delete-provider-open: false;
+    private property <bool> delete-prompt-open: false;
+
+    background: Theme.paper;
+    clip: true;
+
     VerticalLayout {
-        padding: 16px;
-        spacing: 10px;
-        HorizontalLayout {
-            height: 32px;
-            Text { text: "AI 总结与对话"; color: #eff7ff; font-size: 19px; font-weight: 600; }
-            Rectangle { horizontal-stretch: 1; }
-            Action { width: 50px; text: "关闭"; clicked => { AiState.open = false; } }
-        }
-        HorizontalLayout {
-            height: 32px;
-            Action { text: "总结"; accent: AiState.page == 0; clicked => { AiState.page = 0; } }
-            Action { text: "提供商"; accent: AiState.page == 1; clicked => { AiState.page = 1; } }
-            Action { text: "提示词"; accent: AiState.page == 2; clicked => { AiState.page = 2; } }
-            Action { text: "计划"; accent: AiState.page == 3; clicked => { AiState.page = 3; } }
-            Action { text: "历史"; accent: AiState.page == 4; clicked => { AiState.page = 4; } }
-            Action { text: "设置"; accent: AiState.page == 5; clicked => { AiState.page = 5; } }
-        }
-        if AiState.page == 0 : ScrollView {
+        padding: root.embedded ? 0px : 24px;
+        spacing: 16px;
+
+        if !root.connection-only : HorizontalLayout {
+            vertical-stretch: 0;
+            spacing: 16px;
             VerticalLayout {
-                spacing: 9px;
-                Label { text: "手动范围 · 本地时间 YYYY-MM-DD HH:MM:SS"; }
-                LineEdit { text <=> AiState.range-start; edited => { AiState.prepared = false; } }
-                LineEdit { text <=> AiState.range-end; edited => { AiState.prepared = false; } }
-                HorizontalLayout {
-                    ComboBox { model: AiState.providers; current-index <=> AiState.provider-index; selected(value) => { AiState.choose-provider(self.current-index); } }
-                    ComboBox { model: AiState.prompts; current-index <=> AiState.prompt-index; selected(value) => { AiState.choose-prompt(self.current-index); } }
+                spacing: 5px;
+                Text { text: "AI 总结"; color: Theme.ink; font-size: 28px; font-weight: 600; vertical-stretch: 0; }
+                Note { text: "把一段时间整理成可以回顾的内容。"; }
+            }
+            if !root.embedded : Action { width: 72px; text: "关闭"; clicked => { AiState.open = false; } }
+        }
+
+        if !root.connection-only : HorizontalLayout {
+            height: 36px;
+            spacing: 6px;
+            Action { text: "总结"; selected: AiState.page == 0 || AiState.page == 6; clicked => { AiState.page = 0; } }
+            Action { text: "连接"; selected: AiState.page == 1; clicked => { AiState.page = 1; } }
+            Action { text: "提示词"; selected: AiState.page == 2; clicked => { AiState.page = 2; } }
+            Action { text: "计划"; selected: AiState.page == 3; clicked => { AiState.page = 3; } }
+            Action { text: "历史"; selected: AiState.page == 4 || AiState.page == 7 || AiState.page == 8; clicked => { AiState.page = 4; } }
+            Action { text: "设置"; selected: AiState.page == 5; clicked => { AiState.page = 5; } }
+        }
+        if !root.connection-only : Rule { }
+
+        if !root.connection-only && AiState.page == 0 : ScrollView {
+            vertical-stretch: 1;
+            horizontal-scrollbar-policy: always-off;
+            VerticalLayout {
+                alignment: start;
+                spacing: 16px;
+                padding-right: 12px;
+
+                if AiState.providers.length == 0 : Rectangle {
+                    vertical-stretch: 0;
+                    background: Theme.accent-soft;
+                    border-radius: 6px;
+                    VerticalLayout {
+                        padding: 20px;
+                        spacing: 12px;
+                        SectionTitle { text: "先连接你的 AI 服务"; }
+                        Note { text: "选择提供商、填入自己的密钥并测试连接。总结与对话保存在本机，发送前可以预览本次内容。"; }
+                        HorizontalLayout {
+                            Action { width: 144px; text: "配置 AI 连接"; accent: true; clicked => { AiState.page = 1; } }
+                            Rectangle { horizontal-stretch: 1; }
+                        }
+                    }
                 }
-                Note { text: "模型 " + AiState.model-id + " · " + (AiState.vision == 1 ? "◉ 支持图片" : AiState.vision == 2 ? "仅文本" : "视觉能力未知"); }
-                Action { text: "预览发送内容"; clicked => { AiState.prepare(); } }
-                Note { text: AiState.preflight; }
+
+                if AiState.providers.length > 0 : VerticalLayout {
+                    spacing: 14px;
+                    SectionTitle { text: "新建时段总结"; }
+                    Note { text: "使用本地时间选择开始与结束，再查看将要发送的内容。"; }
+                    HorizontalLayout {
+                        spacing: 14px;
+                        VerticalLayout {
+                            spacing: 7px;
+                            Label { text: "开始时间"; }
+                            AiField { text <=> AiState.range-start; accessible-label: "总结开始时间"; placeholder-text: "YYYY-MM-DD HH:MM:SS"; edited => { AiState.prepared = false; } }
+                        }
+                        VerticalLayout {
+                            spacing: 7px;
+                            Label { text: "结束时间"; }
+                            AiField { text <=> AiState.range-end; accessible-label: "总结结束时间"; placeholder-text: "YYYY-MM-DD HH:MM:SS"; edited => { AiState.prepared = false; } }
+                        }
+                    }
+                    HorizontalLayout {
+                        spacing: 14px;
+                        VerticalLayout {
+                            spacing: 7px;
+                            Label { text: "AI 连接"; }
+                            AiSelect { model: AiState.providers; current-index <=> AiState.provider-index; accessible-label: "本次总结使用的 AI 连接"; selected(value) => { AiState.choose-provider(self.current-index); AiState.prepared = false; } }
+                        }
+                        VerticalLayout {
+                            spacing: 7px;
+                            Label { text: "提示词预设"; }
+                            AiSelect { model: AiState.prompts; current-index <=> AiState.prompt-index; accessible-label: "本次总结的提示词预设"; selected(value) => { AiState.choose-prompt(self.current-index); AiState.prepared = false; } }
+                        }
+                    }
+                    Note { text: AiState.provider-index < 0 ? "请选择一个已保存的连接，或前往「连接」完成配置。" : "模型 " + AiState.model-id + " · " + (AiState.vision == 1 ? "支持图片" : AiState.vision == 2 ? "仅文本" : "图片能力待确认"); }
+                    HorizontalLayout {
+                        spacing: 8px;
+                        Action { width: 112px; text: "添加快照"; enabled: AiState.provider-index >= 0 && AiState.vision == 1; clicked => { AiState.list-images(); AiState.page = 6; } }
+                        Action { width: 132px; text: "移除本次图片"; enabled: AiState.image-count != "本次没有图片"; clicked => { AiState.clear-images(); } }
+                        Rectangle { horizontal-stretch: 1; }
+                    }
+                    Note { text: AiState.image-count; }
+                    HorizontalLayout {
+                        spacing: 8px;
+                        Action { width: 144px; text: "预览发送内容"; enabled: AiState.provider-index >= 0 && AiState.range-start != "" && AiState.range-end != ""; clicked => { AiState.prepare(); } }
+                        Action { width: 160px; text: "发送并生成总结"; accent: true; enabled: AiState.prepared; clicked => { AiState.send-summary(); } }
+                        Rectangle { horizontal-stretch: 1; }
+                    }
+                    Rectangle {
+                        vertical-stretch: 0;
+                        background: Theme.sidebar;
+                        border-radius: 5px;
+                        VerticalLayout {
+                            padding: 14px;
+                            spacing: 6px;
+                            Label { text: AiState.prepared ? "本次发送预览" : "发送前检查"; }
+                            Note { text: AiState.preflight; }
+                        }
+                    }
+                }
+
+                Rule { }
                 HorizontalLayout {
-                    Action { text: "选取快照"; enabled: AiState.vision == 1; clicked => { AiState.list-images(); AiState.page = 6; } }
-                    Action { text: "移除本次图片"; clicked => { AiState.clear-images(); } }
+                    SectionTitle { text: "总结与对话"; vertical-alignment: center; }
+                    Action { width: 100px; text: "查看历史"; clicked => { AiState.page = 4; } }
+                }
+                if AiState.versions.length > 0 : VerticalLayout {
+                    spacing: 7px;
+                    Label { text: "当前版本"; }
+                    AiSelect { model: AiState.versions; current-index <=> AiState.version-index; accessible-label: "当前总结版本"; selected(value) => { AiState.choose-version(self.current-index); } }
+                }
+                if AiState.source-label != "" : Note { text: AiState.source-label; }
+                if AiState.conversation == "" : VerticalLayout {
+                    spacing: 8px;
+                    padding-top: 12px;
+                    padding-bottom: 20px;
+                    Label { text: "还没有对话内容"; }
+                    Note { text: "生成总结后，可以在这里阅读、保留不同版本，并从选中的节点继续追问。"; }
+                }
+                if AiState.conversation != "" : TextEdit { text: AiState.conversation; read-only: true; height: 320px; font-size: 15px; wrap: word-wrap; accessible-label: "总结与对话内容"; }
+                if AiState.exposed-reasoning != "" : VerticalLayout {
+                    spacing: 10px;
+                    HorizontalLayout {
+                        Action { width: 192px; text: root.reasoning-open ? "收起公开推理摘要" : "查看公开推理摘要"; selected: root.reasoning-open; clicked => { root.reasoning-open = !root.reasoning-open; } }
+                        Rectangle { horizontal-stretch: 1; }
+                    }
+                    if root.reasoning-open : TextEdit { text: AiState.exposed-reasoning; read-only: true; height: 160px; font-size: 14px; wrap: word-wrap; accessible-label: "提供商公开返回的推理或推理摘要"; }
+                }
+                if AiState.conversation != "" && AiState.exposed-reasoning == "" : Note { text: "提供商未返回公开推理内容。"; }
+                if AiState.jobs.length > 0 || AiState.versions.length > 0 : Note { text: AiState.token-label; }
+                if AiState.versions.length > 0 : VerticalLayout {
+                    spacing: 12px;
+                    Rule { }
+                    SectionTitle { text: "继续这段对话"; }
+                    Label { text: "从哪个节点继续"; }
+                    AiSelect { model: AiState.branches; current-index <=> AiState.branch-index; accessible-label: "追问的起始节点"; selected(value) => { AiState.choose-branch(self.current-index); } }
+                    Label { text: "你的问题"; }
+                    TextEdit { text <=> AiState.question; height: 104px; font-size: 14px; wrap: word-wrap; placeholder-text: "围绕这份总结继续提问…"; enabled: AiState.version-index >= 0; accessible-label: "继续提问的内容"; }
+                    HorizontalLayout {
+                        spacing: 8px;
+                        Action { width: 112px; text: "继续提问"; accent: true; enabled: AiState.version-index >= 0 && AiState.question != ""; clicked => { AiState.follow-up(); } }
+                        Action { width: 112px; text: "重新生成"; clicked => { AiState.regenerate(); } }
+                        Action { width: 144px; text: "取消当前任务"; enabled: AiState.jobs.length > 0; clicked => { AiState.cancel-job(); } }
+                        Rectangle { horizontal-stretch: 1; }
+                    }
+                    HorizontalLayout {
+                        spacing: 8px;
+                        Action { width: 112px; text: AiState.pinned ? "取消固定" : "固定版本"; selected: AiState.pinned; enabled: AiState.version-index >= 0; clicked => { AiState.pin-version(); } }
+                        Action { width: 160px; text: "清除后续上下文"; enabled: AiState.version-index >= 0; clicked => { AiState.clear-context(); } }
+                        Rectangle { horizontal-stretch: 1; }
+                    }
+                }
+                if AiState.versions.length == 0 && AiState.jobs.length > 0 : HorizontalLayout {
+                    spacing: 8px;
+                    Action { width: 144px; text: "取消当前任务"; clicked => { AiState.cancel-job(); } }
+                    Action { width: 112px; text: "重新生成"; clicked => { AiState.regenerate(); } }
+                    Rectangle { horizontal-stretch: 1; }
+                }
+                Rectangle { height: 8px; }
+            }
+        }
+
+        if root.connection-only || AiState.page == 1 : ScrollView {
+            vertical-stretch: 1;
+            horizontal-scrollbar-policy: always-off;
+            VerticalLayout {
+                alignment: start;
+                spacing: 16px;
+                padding-right: 12px;
+                SectionTitle { text: "连接你的 AI 服务"; }
+                Note { text: "使用自己的提供商与密钥。保存并测试连接后，即可创建总结。"; }
+                HorizontalLayout {
+                    spacing: 14px;
+                    VerticalLayout {
+                        spacing: 7px;
+                        Label { text: "已保存的连接"; }
+                        AiSelect { model: AiState.providers; current-index <=> AiState.provider-index; enabled: AiState.providers.length > 0; accessible-label: "已保存的 AI 连接"; selected(value) => { AiState.choose-provider(self.current-index); AiState.prepared = false; root.delete-provider-open = false; } }
+                    }
+                    VerticalLayout {
+                        spacing: 7px;
+                        Label { text: "新增快捷配置"; }
+                        AiSelect { model: ["OpenAI", "Anthropic Claude", "Google Gemini", "Azure OpenAI", "OpenRouter", "DeepSeek", "硅基流动", "Moonshot / Kimi", "自定义"]; current-index <=> AiState.preset-index; accessible-label: "新增 AI 连接的提供商类型"; selected(value) => { AiState.choose-preset(self.current-index); AiState.prepared = false; root.delete-provider-open = false; } }
+                    }
+                }
+                Rule { }
+                SectionTitle { text: "连接信息"; }
+                HorizontalLayout {
+                    spacing: 14px;
+                    VerticalLayout {
+                        spacing: 7px;
+                        Label { text: "连接名称"; }
+                        AiField { text <=> AiState.provider-name; placeholder-text: "例如：我的 OpenAI"; accessible-label: "AI 连接名称"; }
+                    }
+                    VerticalLayout {
+                        spacing: 7px;
+                        Label { text: "接口协议"; }
+                        AiSelect { model: ["OpenAI 兼容", "Anthropic 原生 / 兼容", "Gemini 原生 / 兼容"]; current-index <=> AiState.protocol-index; accessible-label: "AI 接口协议"; }
+                    }
+                }
+                VerticalLayout {
+                    spacing: 7px;
+                    Label { text: "服务地址"; }
+                    AiField { text <=> AiState.endpoint; placeholder-text: "HTTPS Base URL"; accessible-label: "AI 服务地址"; }
+                }
+                VerticalLayout {
+                    spacing: 7px;
+                    Label { text: "API 密钥"; }
+                    AiField { text <=> AiState.api-key; input-type: password; placeholder-text: "留空保留已保存的密钥"; accessible-label: "AI API 密钥"; }
+                    AiCheck { text: "替换已保存的凭据"; checked <=> AiState.replace-credentials; }
+                    Note { text: "勾选后使用当前填写的密钥与秘密头替换原凭据。本机服务的凭据可以为空。"; }
+                }
+                HorizontalLayout {
+                    Action { width: 176px; text: root.connection-options-open ? "收起连接高级选项" : "连接高级选项"; selected: root.connection-options-open; clicked => { root.connection-options-open = !root.connection-options-open; } }
+                    Rectangle { horizontal-stretch: 1; }
+                }
+                if root.connection-options-open : VerticalLayout {
+                    spacing: 12px;
+                    AiCheck { text: "此端点为 Azure OpenAI"; checked <=> AiState.azure; }
+                    AiCheck { text: "允许本机 HTTP"; checked <=> AiState.local-http; }
+                    Note { text: "仅限 localhost / 127.0.0.1。本机 HTTP 不提供 TLS 传输保护；远程端点必须使用 HTTPS。"; }
+                    Label { text: "秘密请求头（可选）"; }
+                    AiField { text <=> AiState.secret-headers; input-type: password; placeholder-text: "X-Tenant=value；多个用分号分隔"; accessible-label: "可选秘密请求头"; }
+                }
+                Note { text: "密钥和秘密头仅保存于 Windows 凭据管理器。连接测试仅发送合成数据；提供商可能按其政策处理请求，支持时关闭服务端会话存储。"; }
+                Rule { }
+                SectionTitle { text: "模型"; }
+                VerticalLayout {
+                    spacing: 7px;
+                    Label { text: "模型 ID"; }
+                    HorizontalLayout {
+                        spacing: 8px;
+                        AiField { text <=> AiState.model-id; placeholder-text: "填写模型 ID，或从目录选择"; accessible-label: "AI 模型 ID"; }
+                        Action { width: 128px; text: "读取模型目录"; clicked => { AiState.fetch-models(); } }
+                    }
+                }
+                VerticalLayout {
+                    spacing: 7px;
+                    Label { text: "模型目录"; }
+                    AiSelect { model: AiState.models; current-index <=> AiState.model-index; enabled: AiState.models.length > 0; accessible-label: "AI 模型目录"; selected(value) => { AiState.choose-model(self.current-index); AiState.prepared = false; } }
+                    if AiState.models.length == 0 : Note { text: "尚未读取模型目录，也可以直接填写模型 ID。"; }
+                }
+                HorizontalLayout {
+                    spacing: 12px;
+                    VerticalLayout { spacing: 7px; Label { text: "图片能力"; } AiSelect { model: ["待确认", "支持", "不支持"]; current-index <=> AiState.vision; accessible-label: "模型图片能力"; } }
+                    VerticalLayout { spacing: 7px; Label { text: "公开推理"; } AiSelect { model: ["待确认", "支持", "不支持"]; current-index <=> AiState.reasoning; accessible-label: "模型公开推理能力"; } }
+                    VerticalLayout { spacing: 7px; Label { text: "工具能力"; } AiSelect { model: ["待确认", "支持", "不支持"]; current-index <=> AiState.tools; accessible-label: "模型工具能力"; } }
+                }
+                Note { text: "手动能力覆盖只用于当前提供商，未确认的能力不会视为支持。Timelens 不执行模型工具调用。"; }
+                HorizontalLayout {
+                    Action { width: 176px; text: root.model-options-open ? "收起模型高级参数" : "模型高级参数"; selected: root.model-options-open; clicked => { root.model-options-open = !root.model-options-open; } }
+                    Rectangle { horizontal-stretch: 1; }
+                }
+                if root.model-options-open : VerticalLayout {
+                    spacing: 14px;
+                    HorizontalLayout {
+                        spacing: 14px;
+                        VerticalLayout { spacing: 7px; Label { text: "上下文窗口（Token）"; } AiField { text <=> AiState.context-tokens; input-type: number; accessible-label: "上下文窗口 Token 数"; } }
+                        VerticalLayout { spacing: 7px; Label { text: "最大输出（Token）"; } AiField { text <=> AiState.max-output; input-type: number; accessible-label: "最大输出 Token 数"; } }
+                    }
+                    AiCheck { text: "模型支持 temperature"; checked <=> AiState.temperature-supported; }
+                    if AiState.temperature-supported : VerticalLayout { spacing: 7px; Label { text: "温度（0–2）"; } AiField { text <=> AiState.temperature; placeholder-text: "留空使用提供商默认值"; accessible-label: "模型温度"; } }
+                    AiCheck { text: "模型支持 OpenAI reasoning_effort"; checked <=> AiState.effort-supported; }
+                    if AiState.effort-supported : VerticalLayout { spacing: 7px; Label { text: "推理强度"; } AiSelect { model: ["提供商默认", "low", "medium", "high"]; current-index <=> AiState.effort; accessible-label: "模型推理强度"; } }
+                    HorizontalLayout {
+                        spacing: 14px;
+                        VerticalLayout { spacing: 7px; Label { text: "自动重试（0–10 次）"; } AiField { text <=> AiState.retries; input-type: number; accessible-label: "AI 自动重试次数"; } }
+                        VerticalLayout { spacing: 7px; Label { text: "无响应超时（秒）"; } AiField { text <=> AiState.idle-timeout; placeholder-text: "留空表示不限"; accessible-label: "AI 无响应超时秒数"; } }
+                    }
+                    Note { text: "无响应超时只限制连续没有响应的时间，不设置总生成时限。"; }
+                }
+                Rule { }
+                HorizontalLayout {
+                    spacing: 8px;
+                    Action { width: 128px; text: "保存并测试"; accent: true; clicked => { AiState.test-provider(); } }
+                    Action { width: 112px; text: "保存配置"; clicked => { AiState.save-provider(); } }
+                    Rectangle { horizontal-stretch: 1; }
+                    Action { width: 144px; text: "删除连接与凭据"; danger: true; enabled: AiState.provider-index >= 0; clicked => { root.delete-provider-open = true; } }
+                }
+                if root.delete-provider-open : VerticalLayout {
+                    spacing: 10px;
+                    Label { text: "删除这个连接及其凭据？"; color: Theme.danger; }
+                    Note { text: "引用它的计划会暂停，历史总结仍会保留。此操作无法撤销。"; }
+                    HorizontalLayout {
+                        spacing: 8px;
+                        Action { width: 112px; text: "保留连接"; clicked => { root.delete-provider-open = false; } }
+                        Action { width: 112px; text: "确认删除"; danger: true; clicked => { AiState.delete-provider(); root.delete-provider-open = false; } }
+                        Rectangle { horizontal-stretch: 1; }
+                    }
+                }
+                Rectangle { height: 8px; }
+            }
+        }
+
+        if !root.connection-only && AiState.page == 2 : ScrollView {
+            vertical-stretch: 1;
+            horizontal-scrollbar-policy: always-off;
+            VerticalLayout {
+                alignment: start;
+                spacing: 16px;
+                padding-right: 12px;
+                SectionTitle { text: "按你的方式整理总结"; }
+                Note { text: "为不同用途保存提示词预设。修改只影响之后创建的任务。"; }
+                VerticalLayout {
+                    spacing: 7px;
+                    Label { text: "当前预设"; }
+                    AiSelect { model: AiState.prompts; current-index <=> AiState.prompt-index; accessible-label: "当前提示词预设"; selected(value) => { AiState.choose-prompt(self.current-index); root.delete-prompt-open = false; } }
+                }
+                HorizontalLayout {
+                    spacing: 14px;
+                    VerticalLayout { spacing: 7px; Label { text: "预设名称"; } AiField { text <=> AiState.prompt-name; placeholder-text: "为这个预设命名"; accessible-label: "提示词预设名称"; } }
+                    VerticalLayout { spacing: 7px; Label { text: "输出语言"; } AiField { text <=> AiState.language; placeholder-text: "例如：简体中文"; accessible-label: "总结输出语言"; } }
+                }
+                Label { text: "提示词正文"; }
+                TextEdit { text <=> AiState.prompt-text; height: 280px; font-size: 14px; wrap: word-wrap; accessible-label: "提示词正文"; }
+                Note { text: "只读变量 {{range}}、{{coverage}}、{{language}}。编辑提示词不会改变数据过滤和图片授权边界。"; }
+                HorizontalLayout {
+                    spacing: 8px;
+                    Action { width: 100px; text: "保存预设"; accent: true; clicked => { AiState.save-prompt(); } }
+                    Action { width: 120px; text: "另存新预设"; clicked => { AiState.new-prompt(); } }
+                    Action { width: 144px; text: "恢复官方正文"; clicked => { AiState.reset-prompt(); } }
+                    Rectangle { horizontal-stretch: 1; }
+                    Action { width: 80px; text: "删除"; danger: true; enabled: AiState.prompt-index >= 0; clicked => { root.delete-prompt-open = true; } }
+                }
+                if root.delete-prompt-open : VerticalLayout {
+                    spacing: 10px;
+                    Label { text: "删除当前提示词预设？"; color: Theme.danger; }
+                    Note { text: "引用此预设的计划会暂停。历史总结保留。"; }
+                    HorizontalLayout {
+                        spacing: 8px;
+                        Action { width: 112px; text: "保留预设"; clicked => { root.delete-prompt-open = false; } }
+                        Action { width: 112px; text: "确认删除"; danger: true; clicked => { AiState.delete-prompt(); root.delete-prompt-open = false; } }
+                        Rectangle { horizontal-stretch: 1; }
+                    }
+                }
+                Rectangle { height: 8px; }
+            }
+        }
+
+        if !root.connection-only && AiState.page == 3 : ScrollView {
+            vertical-stretch: 1;
+            horizontal-scrollbar-policy: always-off;
+            VerticalLayout {
+                alignment: start;
+                spacing: 16px;
+                padding-right: 12px;
+                SectionTitle { text: "按时整理你的记录"; }
+                Note { text: "保存计划时固定当前连接、模型与提示词。每日和间隔计划可以使用不同配置，定时任务只发送文本。"; }
+                HorizontalLayout {
+                    spacing: 14px;
+                    VerticalLayout { spacing: 7px; Label { text: "本次保存使用的连接"; } AiSelect { model: AiState.providers; current-index <=> AiState.provider-index; accessible-label: "计划使用的 AI 连接"; selected(value) => { AiState.choose-provider(self.current-index); } } }
+                    VerticalLayout { spacing: 7px; Label { text: "提示词预设"; } AiSelect { model: AiState.prompts; current-index <=> AiState.prompt-index; accessible-label: "计划使用的提示词预设"; selected(value) => { AiState.choose-prompt(self.current-index); } } }
+                }
+                if AiState.providers.length == 0 : Note { text: "先在「连接」页配置并测试 AI 服务，再启用计划。"; }
+                Rule { }
+                AiCheck { text: "启用每日总结"; checked <=> AiState.daily; }
+                Note { text: "在指定时间总结前一个完整本地自然日。夏令时日期可能为 23 或 25 小时。"; }
+                HorizontalLayout {
+                    spacing: 14px;
+                    VerticalLayout { spacing: 7px; Label { text: "每天执行时间"; } AiField { text <=> AiState.daily-time; placeholder-text: "HH:MM，例如 22:00"; accessible-label: "每日总结的本地执行时间"; } }
+                    VerticalLayout { spacing: 7px; Label { text: "重试次数（0–10 次）"; } AiField { text <=> AiState.daily-retries; placeholder-text: "留空跟随提供商"; accessible-label: "每日计划重试次数"; } }
+                }
+                HorizontalLayout { Action { width: 144px; text: "保存每日计划"; clicked => { AiState.save-daily(); } } Rectangle { horizontal-stretch: 1; } }
+                Rule { }
+                AiCheck { text: "启用固定间隔总结"; checked <=> AiState.interval; }
+                Label { text: "快捷间隔（小时）"; }
+                HorizontalLayout {
+                    spacing: 6px;
+                    for hours in [1, 2, 3, 4, 6, 8, 12, 24] : Action { width: 48px; text: hours + ""; selected: AiState.interval-hours == hours + ""; clicked => { AiState.interval-hours = hours; } }
+                    Rectangle { horizontal-stretch: 1; }
+                }
+                HorizontalLayout {
+                    spacing: 14px;
+                    VerticalLayout { spacing: 7px; Label { text: "自定义间隔（1–168 小时）"; } AiField { text <=> AiState.interval-hours; input-type: number; accessible-label: "间隔总结的小时数"; } }
+                    VerticalLayout { spacing: 7px; Label { text: "重试次数（0–10 次）"; } AiField { text <=> AiState.interval-retries; placeholder-text: "留空跟随提供商"; accessible-label: "间隔计划重试次数"; } }
+                }
+                Note { text: "首次启用不追溯历史。修改周期会重新建立起点；恢复后只补最近一个完整时段，更早时段记为已错过。"; }
+                HorizontalLayout { Action { width: 144px; text: "保存间隔计划"; clicked => { AiState.save-interval(); } } Rectangle { horizontal-stretch: 1; } }
+                if AiState.schedule-status != "" : Note { text: AiState.schedule-status; }
+                Rectangle { height: 8px; }
+            }
+        }
+
+        if !root.connection-only && AiState.page == 4 : ScrollView {
+            vertical-stretch: 1;
+            horizontal-scrollbar-policy: always-off;
+            VerticalLayout {
+                alignment: start;
+                spacing: 16px;
+                padding-right: 12px;
+                SectionTitle { text: "任务与历史版本"; }
+                Note { text: "查看任务记录，回到已保存的总结，或管理它的独立分支。"; }
+                if AiState.jobs.length == 0 : VerticalLayout {
+                    spacing: 12px;
+                    padding-top: 12px;
+                    padding-bottom: 16px;
+                    Label { text: "还没有 AI 任务"; }
+                    Note { text: "选择一个时间范围并生成总结，任务与结果就会保存在这里。"; }
+                    HorizontalLayout { Action { width: 144px; text: "新建时段总结"; accent: true; clicked => { AiState.page = 0; } } Rectangle { horizontal-stretch: 1; } }
+                }
+                if AiState.jobs.length > 0 : VerticalLayout {
+                    spacing: 12px;
+                    Label { text: "任务记录"; }
+                    AiSelect { model: AiState.jobs; current-index <=> AiState.job-index; accessible-label: "AI 任务记录"; selected(value) => { AiState.choose-job(self.current-index); } }
+                    if AiState.conversation != "" : TextEdit { text: AiState.conversation; read-only: true; height: 300px; font-size: 15px; wrap: word-wrap; accessible-label: "所选 AI 任务内容"; }
+                    if AiState.conversation == "" : Note { text: "所选任务还没有可显示的回答。任务状态显示在页面底部。"; }
+                    Note { text: AiState.token-label; }
+                    HorizontalLayout { Action { width: 224px; text: "取消所选排队或运行任务"; enabled: AiState.job-index >= 0; clicked => { AiState.cancel-job(); } } Rectangle { horizontal-stretch: 1; } }
+                }
+                Rule { }
+                SectionTitle { text: "成功版本与分支"; }
+                if AiState.versions.length == 0 : Note { text: "还没有成功保存的总结版本。"; }
+                if AiState.versions.length > 0 : VerticalLayout {
+                    spacing: 12px;
+                    Label { text: "选择版本"; }
+                    AiSelect { model: AiState.versions; current-index <=> AiState.version-index; accessible-label: "历史总结版本"; selected(value) => { AiState.choose-version(self.current-index); } }
+                    if AiState.source-label != "" : Note { text: AiState.source-label; }
+                    HorizontalLayout {
+                        spacing: 8px;
+                        Action { width: 160px; text: "打开总结与对话"; accent: true; enabled: AiState.version-index >= 0; clicked => { AiState.page = 0; } }
+                        Rectangle { horizontal-stretch: 1; }
+                    }
+                    HorizontalLayout {
+                        spacing: 8px;
+                        Action { width: 128px; text: "删除当前版本"; danger: true; enabled: AiState.version-index >= 0; clicked => { AiState.page = 7; } }
+                        Action { width: 144px; text: "清空该版本追问"; danger: true; enabled: AiState.version-index >= 0; clicked => { AiState.page = 8; } }
+                        Rectangle { horizontal-stretch: 1; }
+                    }
+                }
+                Rectangle { height: 8px; }
+            }
+        }
+
+        if !root.connection-only && AiState.page == 5 : ScrollView {
+            vertical-stretch: 1;
+            horizontal-scrollbar-policy: always-off;
+            VerticalLayout {
+                alignment: start;
+                spacing: 16px;
+                padding-right: 12px;
+                SectionTitle { text: "对话上下文"; }
+                AiCheck { text: "自动压缩长对话"; checked <=> AiState.compression; }
+                Note { text: "保留原始消息树，为较长的对话整理后续请求使用的上下文。"; }
+                VerticalLayout {
+                    spacing: 7px;
+                    Label { text: "保留最近消息数（条）"; }
+                    AiField { text <=> AiState.recent-messages; placeholder-text: "留空表示不限"; accessible-label: "上下文保留的最近消息条数"; }
+                }
+                Rule { }
+                SectionTitle { text: "保留与空间"; }
+                HorizontalLayout {
+                    spacing: 14px;
+                    VerticalLayout { spacing: 7px; Label { text: "AI 记录保留（天）"; } AiField { text <=> AiState.retention-days; placeholder-text: "留空表示永久"; accessible-label: "AI 记录保留天数"; } }
+                    VerticalLayout { spacing: 7px; Label { text: "空间上限（MiB）"; } AiField { text <=> AiState.retention-mib; placeholder-text: "例如：100"; accessible-label: "AI 数据空间上限 MiB"; } }
+                }
+                VerticalLayout {
+                    spacing: 7px;
+                    Label { text: "每个时段保留的成功版本数"; }
+                    AiField { text <=> AiState.version-limit; placeholder-text: "例如：3"; accessible-label: "每个时段保留的成功版本数量"; }
+                }
+                Note { text: "固定版本不会自动删除。固定版本占满空间时会提示处理；永久保留只关闭按时间清理。"; }
+                Rule { }
+                SectionTitle { text: "通知"; }
+                HorizontalLayout {
+                    spacing: 24px;
+                    AiCheck { text: "任务成功时通知"; checked <=> AiState.notify-success; }
+                    AiCheck { text: "任务失败时通知"; checked <=> AiState.notify-failure; }
+                    Rectangle { horizontal-stretch: 1; }
+                }
+                HorizontalLayout { Action { width: 144px; text: "保存 AI 设置"; accent: true; clicked => { AiState.save-settings(); } } Rectangle { horizontal-stretch: 1; } }
+                Rectangle { height: 8px; }
+            }
+        }
+
+        if !root.connection-only && AiState.page == 6 : ScrollView {
+            vertical-stretch: 1;
+            horizontal-scrollbar-policy: always-off;
+            VerticalLayout {
+                alignment: start;
+                spacing: 16px;
+                padding-right: 12px;
+                SectionTitle { text: "把快照加入这一次总结"; }
+                Note { text: "逐张预览后再授权。快照可能包含屏幕文字、通知和个人信息，远端模型可能识别这些内容。每次授权只用于一次请求，追问不会再次发送图片。"; }
+                Label { text: "选择快照"; }
+                AiSelect { model: AiState.image-options; current-index <=> AiState.image-index; enabled: AiState.image-options.length > 0; accessible-label: "本次准备授权的快照"; selected(value) => { AiState.image-previewed = false; } }
+                if AiState.image-options.length == 0 : Note { text: "当前范围没有可用图片。可以返回总结页调整时间范围，或直接生成文本总结。"; }
+                HorizontalLayout {
+                    Action { width: 160px; text: "预览所选快照"; enabled: AiState.image-index >= 0 && AiState.image-options.length > 0; clicked => { AiState.preview-image(); } }
+                    Rectangle { horizontal-stretch: 1; }
+                }
+                Rectangle {
+                    height: 280px;
+                    background: Theme.sidebar;
+                    border-width: 1px;
+                    border-color: Theme.line;
+                    border-radius: 5px;
+                    if AiState.image-previewed : Image { x: 12px; y: 12px; width: parent.width - 24px; height: parent.height - 24px; source: AiState.image-preview; image-fit: contain; }
+                    if !AiState.image-previewed : Text { text: "选择一张快照并点击预览"; color: Theme.muted; font-size: 14px; horizontal-alignment: center; vertical-alignment: center; }
+                }
+                if AiState.image-detail != "" : Note { text: AiState.image-detail; }
+                HorizontalLayout {
+                    Action { width: 232px; text: "授权此图用于本次请求"; accent: true; enabled: AiState.image-previewed; clicked => { AiState.authorize-image(); AiState.prepared = false; } }
+                    Rectangle { horizontal-stretch: 1; }
                 }
                 Note { text: AiState.image-count; }
-                Action { text: "发送并生成总结"; accent: true; enabled: AiState.prepared; clicked => { AiState.send-summary(); } }
-                Label { text: "当前对话"; }
-                ComboBox { model: AiState.versions; current-index <=> AiState.version-index; selected(value) => { AiState.choose-version(self.current-index); } }
-                Note { text: AiState.source-label; }
-                TextEdit { text: AiState.conversation; read-only: true; height: 215px; wrap: word-wrap; }
-                if AiState.exposed-reasoning != "" : Label { text: "提供商公开返回的推理 / 推理摘要"; }
-                if AiState.exposed-reasoning != "" : TextEdit { text: AiState.exposed-reasoning; read-only: true; height: 95px; wrap: word-wrap; }
-                if AiState.exposed-reasoning == "" : Note { text: "提供商未返回公开推理内容。"; }
-                Note { text: AiState.token-label; }
-                Label { text: "从所选节点继续追问"; }
-                ComboBox { model: AiState.branches; current-index <=> AiState.branch-index; selected(value) => { AiState.choose-branch(self.current-index); } }
-                TextEdit { text <=> AiState.question; height: 78px; wrap: word-wrap; }
+                Rule { }
                 HorizontalLayout {
-                    Action { text: "继续提问"; accent: true; clicked => { AiState.follow-up(); } }
-                    Action { text: "取消当前任务"; clicked => { AiState.cancel-job(); } }
-                    Action { text: "重新生成"; clicked => { AiState.regenerate(); } }
+                    spacing: 8px;
+                    Action { width: 216px; text: "完成选择，返回发送预览"; clicked => { AiState.page = 0; AiState.prepared = false; } }
+                    Action { width: 144px; text: "移除本次图片"; clicked => { AiState.clear-images(); } }
+                    Rectangle { horizontal-stretch: 1; }
                 }
-                HorizontalLayout {
-                    Action { text: AiState.pinned ? "取消固定" : "固定版本"; clicked => { AiState.pin-version(); } }
-                    Action { text: "清除后续上下文"; clicked => { AiState.clear-context(); } }
-                }
+                Rectangle { height: 8px; }
             }
         }
-        if AiState.page == 1 : ScrollView {
+
+        if !root.connection-only && (AiState.page == 7 || AiState.page == 8) : ScrollView {
+            vertical-stretch: 1;
+            horizontal-scrollbar-policy: always-off;
             VerticalLayout {
-                spacing: 9px;
-                Label { text: "已保存提供商"; }
-                ComboBox { model: AiState.providers; current-index <=> AiState.provider-index; selected(value) => { AiState.choose-provider(self.current-index); } }
-                Label { text: "新增快捷配置"; }
-                ComboBox { model: ["OpenAI", "Anthropic Claude", "Google Gemini", "Azure OpenAI", "OpenRouter", "DeepSeek", "硅基流动", "Moonshot / Kimi", "自定义"]; current-index <=> AiState.preset-index; selected(value) => { AiState.choose-preset(self.current-index); } }
-                LineEdit { text <=> AiState.provider-name; placeholder-text: "配置名称"; }
-                ComboBox { model: ["OpenAI 兼容", "Anthropic 原生 / 兼容", "Gemini 原生 / 兼容"]; current-index <=> AiState.protocol-index; }
-                LineEdit { text <=> AiState.endpoint; placeholder-text: "HTTPS Base URL"; }
-                CheckBox { text: "此端点为 Azure OpenAI"; checked <=> AiState.azure; }
-                CheckBox { text: "允许本机 HTTP（仅 localhost / 127.0.0.1）"; checked <=> AiState.local-http; }
-                Note { text: "本机 HTTP 不提供 TLS 传输保护；远程端点必须是 HTTPS。"; }
-                LineEdit { text <=> AiState.api-key; input-type: password; placeholder-text: "API 密钥（留空保留已存凭据）"; }
-                LineEdit { text <=> AiState.secret-headers; input-type: password; placeholder-text: "可选秘密头：X-Tenant=value；多个用分号分隔"; }
-                CheckBox { text: "替换已保存凭据（本机服务可为空）"; checked <=> AiState.replace-credentials; }
-                Note { text: "密钥和秘密头仅保存于 Windows 凭据管理器。测试仅发送合成数据。提供商可能按其政策处理请求；支持时关闭服务端会话存储。"; }
-                Action { text: "读取模型目录"; clicked => { AiState.fetch-models(); } }
-                ComboBox { model: AiState.models; current-index <=> AiState.model-index; selected(value) => { AiState.choose-model(self.current-index); } }
-                LineEdit { text <=> AiState.model-id; placeholder-text: "模型 ID，也可手动填写"; }
+                alignment: start;
+                spacing: 18px;
+                padding-right: 12px;
+                SectionTitle { text: AiState.page == 7 ? "删除当前版本及其全部分支？" : "删除该版本的全部追问？"; color: Theme.danger; wrap: word-wrap; }
+                Note { text: AiState.page == 7 ? "将删除回答、对话、提示词和上下文快照。原始活动和其他版本保留。此操作不可撤销。" : "将删除追问消息与压缩摘要。初始总结、活动数据和其他版本保留。此操作不可撤销。"; }
+                if AiState.source-label != "" : Note { text: AiState.source-label; }
                 HorizontalLayout {
-                    VerticalLayout { Label { text: "视觉能力"; } ComboBox { model: ["未知", "支持 ◉", "不支持"]; current-index <=> AiState.vision; } }
-                    VerticalLayout { Label { text: "公开推理"; } ComboBox { model: ["未知", "支持", "不支持"]; current-index <=> AiState.reasoning; } }
-                    VerticalLayout { Label { text: "工具能力"; } ComboBox { model: ["未知", "支持", "不支持"]; current-index <=> AiState.tools; } }
-                }
-                Note { text: "手动能力覆盖仅用于当前提供商；未知能力不会视为支持。Timelens 不执行模型工具调用。"; }
-                HorizontalLayout { Label { text: "上下文 Token"; } LineEdit { text <=> AiState.context-tokens; input-type: number; } }
-                HorizontalLayout { Label { text: "最大输出 Token"; } LineEdit { text <=> AiState.max-output; input-type: number; } }
-                CheckBox { text: "模型支持 temperature"; checked <=> AiState.temperature-supported; }
-                if AiState.temperature-supported : LineEdit { text <=> AiState.temperature; placeholder-text: "温度 0–2，空白使用提供商默认"; }
-                CheckBox { text: "模型支持 OpenAI reasoning_effort"; checked <=> AiState.effort-supported; }
-                if AiState.effort-supported : ComboBox { model: ["默认推理强度", "low", "medium", "high"]; current-index <=> AiState.effort; }
-                HorizontalLayout { Label { text: "自动重试 0–10 次"; } LineEdit { text <=> AiState.retries; input-type: number; } }
-                LineEdit { text <=> AiState.idle-timeout; placeholder-text: "无响应超时秒数（空白不限；无总生成时限）"; }
-                HorizontalLayout {
-                    Action { text: "保存配置"; clicked => { AiState.save-provider(); } }
-                    Action { text: "保存并测试"; accent: true; clicked => { AiState.test-provider(); } }
-                    Action { text: "删除配置与凭据"; clicked => { AiState.delete-provider(); } }
+                    spacing: 8px;
+                    Action { width: 128px; text: "返回，保留内容"; clicked => { AiState.page = 4; } }
+                    Action { width: 112px; text: "确认删除"; danger: true; enabled: AiState.version-index >= 0; clicked => { if AiState.page == 7 { AiState.delete-version(); } else { AiState.clear-conversation(); } AiState.page = 4; } }
+                    Rectangle { horizontal-stretch: 1; }
                 }
             }
         }
-        if AiState.page == 2 : VerticalLayout {
-            spacing: 9px;
-            ComboBox { model: AiState.prompts; current-index <=> AiState.prompt-index; selected(value) => { AiState.choose-prompt(self.current-index); } }
-            LineEdit { text <=> AiState.prompt-name; placeholder-text: "预设名称"; }
-            LineEdit { text <=> AiState.language; placeholder-text: "输出语言"; }
-            TextEdit { text <=> AiState.prompt-text; wrap: word-wrap; }
-            Note { text: "只读变量 {{range}}、{{coverage}}、{{language}}。编辑提示词不会改变程序的数据过滤和图片授权边界。"; }
-            HorizontalLayout {
-                Action { text: "保存"; accent: true; clicked => { AiState.save-prompt(); } }
-                Action { text: "另存新预设"; clicked => { AiState.new-prompt(); } }
-                Action { text: "恢复官方默认"; clicked => { AiState.reset-prompt(); } }
-                Action { text: "删除"; clicked => { AiState.delete-prompt(); } }
-            }
-        }
-        if AiState.page == 3 : ScrollView {
-            VerticalLayout {
-                spacing: 12px;
-                Note { text: "保存各计划时固定当前选择的提供商、模型与提示词。计划可分别选择不同配置；定时任务只发送文本。"; }
-                ComboBox { model: AiState.providers; current-index <=> AiState.provider-index; selected(value) => { AiState.choose-provider(self.current-index); } }
-                ComboBox { model: AiState.prompts; current-index <=> AiState.prompt-index; selected(value) => { AiState.choose-prompt(self.current-index); } }
-                CheckBox { text: "每日总结"; checked <=> AiState.daily; }
-                LineEdit { text <=> AiState.daily-time; placeholder-text: "本地时间 HH:MM，默认 22:00"; }
-                Note { text: "每次总结前一个完整本地自然日；夏令时日期可为 23 或 25 小时。"; }
-                LineEdit { text <=> AiState.daily-retries; placeholder-text: "此计划重试次数 0–10，空白跟随提供商"; }
-                Action { text: "保存每日计划"; clicked => { AiState.save-daily(); } }
-                CheckBox { text: "固定间隔总结"; checked <=> AiState.interval; }
-                HorizontalLayout {
-                    for hours in [1, 2, 3, 4, 6, 8, 12, 24] : Action { text: hours + "h"; clicked => { AiState.interval-hours = hours; } }
-                }
-                LineEdit { text <=> AiState.interval-hours; placeholder-text: "自定义 1–168 小时"; input-type: number; }
-                LineEdit { text <=> AiState.interval-retries; placeholder-text: "此计划重试次数 0–10，空白跟随提供商"; }
-                Action { text: "保存间隔计划"; clicked => { AiState.save-interval(); } }
-                Note { text: "首次启用不追溯历史；修改周期重新建立锚点。恢复后只补最近一个完整窗口，较早窗口记为已错过。"; }
-                Note { text: AiState.schedule-status; }
-            }
-        }
-        if AiState.page == 4 : VerticalLayout {
-            spacing: 10px;
-            Label { text: "任务记录"; }
-            ComboBox { model: AiState.jobs; current-index <=> AiState.job-index; selected(value) => { AiState.choose-job(self.current-index); } }
-            TextEdit { text: AiState.conversation; read-only: true; wrap: word-wrap; }
-            Note { text: AiState.token-label; }
-            Action { text: "取消所选排队 / 运行任务"; clicked => { AiState.cancel-job(); } }
-            Label { text: "成功版本与独立分支"; }
-            ComboBox { model: AiState.versions; current-index <=> AiState.version-index; selected(value) => { AiState.choose-version(self.current-index); AiState.page = 0; } }
-            HorizontalLayout {
-                Action { text: "删除当前版本"; clicked => { AiState.page = 7; } }
-                Action { text: "清空该版本追问"; clicked => { AiState.page = 8; } }
-            }
-        }
-        if AiState.page == 5 : ScrollView {
-            VerticalLayout {
-                spacing: 12px;
-                CheckBox { text: "自动压缩长对话（保留原始消息树）"; checked <=> AiState.compression; }
-                LineEdit { text <=> AiState.recent-messages; placeholder-text: "最近 N 条消息；空白表示不限"; }
-                LineEdit { text <=> AiState.retention-days; placeholder-text: "AI 保留天数；空白表示永久"; }
-                LineEdit { text <=> AiState.retention-mib; placeholder-text: "AI 空间上限 MiB"; }
-                LineEdit { text <=> AiState.version-limit; placeholder-text: "每个范围保留成功版本数"; }
-                Note { text: "固定版本不被自动删除。它们占满空间时会提示处理；永久只关闭时间清理。"; }
-                CheckBox { text: "成功后通知"; checked <=> AiState.notify-success; }
-                CheckBox { text: "失败后通知"; checked <=> AiState.notify-failure; }
-                Action { text: "保存 AI 设置"; accent: true; clicked => { AiState.save-settings(); } }
-            }
-        }
-        if AiState.page == 6 : VerticalLayout {
-            spacing: 10px;
-            Label { text: "逐张预览与本次授权"; }
-            Note { text: "快照可能含屏幕文字、通知和个人信息，远端模型可能识别这些内容。每次授权只用于一次提供商请求；追问不重复发送。"; }
-            ComboBox { model: AiState.image-options; current-index <=> AiState.image-index; selected(value) => { AiState.image-previewed = false; } }
-            Action { text: "解密并预览所选图片"; clicked => { AiState.preview-image(); } }
-            Image { source: AiState.image-preview; image-fit: contain; min-height: 200px; }
-            Note { text: AiState.image-detail; }
-            Action { text: "确认授权此图用于本次请求"; accent: true; enabled: AiState.image-previewed; clicked => { AiState.authorize-image(); } }
-            Note { text: AiState.image-count; }
-            Action { text: "完成选择，返回发送预览"; clicked => { AiState.page = 0; AiState.prepared = false; } }
-        }
-        if AiState.page == 7 || AiState.page == 8 : VerticalLayout {
-            spacing: 12px;
-            Text { text: AiState.page == 7 ? "删除当前版本及其全部分支？" : "删除该版本的全部追问？"; color: #f1c4c8; wrap: word-wrap; }
-            Note { text: AiState.page == 7 ? "将删除回答、对话、提示词和上下文快照。原始活动和其他版本保留。此操作不可撤销。" : "将删除追问消息与压缩摘要，初始总结、活动数据和其他版本保留。此操作不可撤销。"; }
-            HorizontalLayout {
-                Action { text: "返回"; clicked => { AiState.page = 4; } }
-                Action { text: "确认删除"; clicked => { if AiState.page == 7 { AiState.delete-version(); } else { AiState.clear-conversation(); } AiState.page = 4; } }
-            }
-            Rectangle { vertical-stretch: 1; }
-        }
-        Rectangle {
-            height: 76px;
-            vertical-stretch: 0;
-            background: #192b3b;
-            border-radius: 6px;
-            ScrollView {
-                x: 8px; y: 6px; width: parent.width - 16px; height: parent.height - 12px;
-                Text { text: AiState.status; color: #afd3ed; font-size: 11px; wrap: word-wrap; }
-            }
-        }
+
+        StatusLine { text: AiState.status; }
     }
 }

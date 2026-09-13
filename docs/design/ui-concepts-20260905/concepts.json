@@ -1,0 +1,24 @@
+{
+  "date": "2026-09-05",
+  "generatedWith": "built-in Image Gen",
+  "displayOrder": [
+    {
+      "file": "display-01-precision.png",
+      "bytes": 1156765,
+      "sha256": "EEDB51828A52BF6309F1C33D75B7A2082098A88599798DC3AB047A1AEEFEB71E"
+    },
+    {
+      "file": "display-02-reading.png",
+      "bytes": 1159506,
+      "sha256": "4249E4A8376BC0AC68CE7AA55C963B7E0230DF5AA0BF529691AD941291EBD349"
+    },
+    {
+      "file": "display-03-layers.png",
+      "bytes": 1164655,
+      "sha256": "D87889FDAC833AA11A9903D9C2795DC8594EF29876E02F258612FB32E99FC05B"
+    }
+  ],
+  "status": "awaiting user selection",
+  "reference": "../ui-audit-20260905/01-overview.jpg",
+  "applicationCodeModified": false
+}

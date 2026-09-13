@@ -1044,9 +1044,9 @@ fn reset_dataset_ui(w: &AppWindow, d: &mut UiData, s: &Storage) -> Result<()> {
     }
     g.set_status(
         if d.profile.is_tested() {
-            "提供商已测试。总结与分支均保存在本机。"
+            "AI 连接已验证。总结与对话保存在本机。"
         } else {
-            "请在提供商页配置并测试连接。计划默认关闭。"
+            "请先配置并测试 AI 连接。计划默认关闭。"
         }
         .into(),
     );

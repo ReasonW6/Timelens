@@ -1,0 +1,226 @@
+// Timelens Paper — shared native components for the selected September 2026 design.
+import { ScrollView } from "std-widgets.slint";
+export global Theme {
+    in-out property <bool> modal-open: false;
+    out property <color> paper: #fbf9f6;
+    out property <color> sidebar: #f5f2ec;
+    out property <color> ink: #302c28;
+    out property <color> muted: #736c63;
+    out property <color> line: #e5dfd6;
+    out property <color> accent: #b9573c;
+    out property <color> accent-ink: #a24731;
+    out property <color> accent-soft: #f2e1d8;
+    out property <color> hover: #f4eee7;
+    out property <color> danger: #a6372d;
+}
+
+export component Label inherits Text {
+    color: Theme.ink;
+    font-size: 14px;
+    vertical-stretch: 0;
+}
+export component Note inherits Text {
+    color: Theme.muted;
+    font-size: 13px;
+    wrap: word-wrap;
+    vertical-stretch: 0;
+}
+export component SectionTitle inherits Text {
+    color: Theme.ink;
+    font-size: 18px;
+    font-weight: 500;
+    vertical-stretch: 0;
+}
+export component Rule inherits Rectangle {
+    height: 1px;
+    vertical-stretch: 0;
+    background: Theme.line;
+}
+export component Action inherits Rectangle {
+    in property <string> text;
+    in property <image> icon;
+    in property <bool> accent: false;
+    in property <bool> selected: false;
+    in property <bool> danger: false;
+    in property <bool> enabled: true;
+    in property <bool> quiet: false;
+    in property <bool> modal-action: false;
+    out property <bool> has-focus: keyboard.has-focus;
+    private property <bool> available: root.enabled && (!Theme.modal-open || root.modal-action);
+    callback clicked;
+    height: 36px;
+    min-width: root.text == "" ? 36px : 72px;
+    vertical-stretch: 0;
+    border-radius: 5px;
+    border-width: keyboard.has-focus ? 2px : root.quiet ? 0px : 1px;
+    border-color: !root.enabled ? Theme.line : keyboard.has-focus ? Theme.accent : root.accent ? Theme.accent : Theme.line;
+    background: !root.enabled ? Theme.sidebar : root.accent ? (pointer.pressed ? #a54b32 : Theme.accent) : pointer.pressed ? Theme.accent-soft : root.selected ? Theme.accent-soft : pointer.has-hover ? Theme.hover : root.quiet ? transparent : Theme.paper;
+    opacity: root.enabled ? 1 : 0.65;
+    forward-focus: keyboard;
+    accessible-role: button;
+    accessible-label: root.text;
+    accessible-enabled: root.available;
+    accessible-action-default => { if root.available { root.clicked(); } }
+    HorizontalLayout {
+        padding-left: root.text == "" ? 9px : 12px;
+        padding-right: root.text == "" ? 9px : 12px;
+        spacing: 8px;
+        alignment: root.quiet ? start : center;
+        if root.icon.width > 0 : Rectangle {
+            width: 18px;
+            Image { width: 18px; height: 18px; y: (parent.height - self.height) / 2;
+            source: root.icon;
+            colorize: !root.enabled ? Theme.muted : root.accent ? #ffffff : root.danger ? Theme.danger : root.selected ? Theme.accent-ink : Theme.ink;
+            }
+        }
+        if root.text != "" : Text {
+            text: root.text;
+            color: !root.enabled ? Theme.muted : root.accent ? #ffffff : root.danger ? Theme.danger : root.selected ? Theme.accent-ink : Theme.ink;
+            font-size: 14px;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+    }
+    pointer := TouchArea { enabled: root.available; mouse-cursor: MouseCursor.pointer; clicked => { keyboard.focus(); root.clicked(); } }
+    keyboard := FocusScope {
+        enabled: root.available;
+        width: 0px;
+        key-pressed(event) => {
+            if root.available && (event.text == " " || event.text == "\n") { root.clicked(); return accept; }
+            return reject;
+        }
+    }
+}
+
+export component NavItem inherits Rectangle {
+    in property <string> text;
+    in property <image> icon;
+    in property <bool> selected;
+    callback clicked;
+    height: 46px;
+    vertical-stretch: 0;
+    background: root.selected ? Theme.accent-soft : pointer.has-hover ? Theme.hover : transparent;
+    border-radius: 5px;
+    border-width: keyboard.has-focus ? 2px : 0px;
+    border-color: Theme.accent;
+    forward-focus: keyboard;
+    accessible-role: button;
+    accessible-label: root.text;
+    accessible-enabled: !Theme.modal-open;
+    accessible-action-default => { if !Theme.modal-open { root.clicked(); } }
+    HorizontalLayout {
+        padding-left: 14px;
+        padding-right: 12px;
+        spacing: 14px;
+        Rectangle { width: 23px; Image { width: 23px; height: 23px; y: (parent.height - self.height) / 2; source: root.icon; colorize: root.selected ? Theme.accent-ink : Theme.ink; } }
+        Text { text: root.text; color: root.selected ? Theme.accent-ink : Theme.ink; font-size: 16px; vertical-alignment: center; }
+    }
+    pointer := TouchArea { enabled: !Theme.modal-open; mouse-cursor: MouseCursor.pointer; clicked => { keyboard.focus(); root.clicked(); } }
+    keyboard := FocusScope { width: 0px; enabled: !Theme.modal-open; key-pressed(event) => { if !Theme.modal-open && (event.text == " " || event.text == "\n") { root.clicked(); return accept; } return reject; } }
+}
+
+export component DetailRow inherits Rectangle {
+    in property <string> label;
+    in property <string> value;
+    height: 32px;
+    vertical-stretch: 0;
+    HorizontalLayout {
+        Label { text: root.label; font-size: 15px; vertical-alignment: center; }
+        Text { text: root.value; color: Theme.ink; font-size: 15px; horizontal-alignment: right; vertical-alignment: center; }
+    }
+}
+
+export component CheckBox inherits Rectangle {
+    in property <string> text;
+    in property <bool> enabled: true;
+    private property <bool> available: root.enabled && !Theme.modal-open;
+    in property <length> font-size: 14px;
+    in property <int> font-weight: 400;
+    in-out property <bool> checked;
+    out property <bool> has-focus: key.has-focus;
+    callback toggled;
+    height: max(34px, check-label.preferred-height + 6px);
+    vertical-stretch: 0;
+    min-width: 0px;
+    opacity: root.enabled ? 1 : 0.55;
+    forward-focus: key;
+    accessible-role: checkbox;
+    accessible-checkable: true;
+    accessible-enabled: root.available;
+    accessible-label: root.text;
+    accessible-checked <=> root.checked;
+    accessible-action-default => { if root.available { root.checked = !root.checked; root.toggled(); } }
+    Rectangle {
+        x: 0px; y: (parent.height - self.height) / 2; width: 18px; height: 18px;
+        border-radius: 3px; border-width: key.has-focus ? 2px : 1px;
+        border-color: key.has-focus || root.checked ? Theme.accent : Theme.muted;
+        background: root.checked ? Theme.accent : touch.has-hover ? Theme.hover : Theme.paper;
+        if root.checked : Image { x: 2px; y: 2px; width: 14px; height: 14px; source: @image-url("icons/check.svg"); colorize: #ffffff; }
+    }
+    check-label := Text { x: 30px; width: max(0px, parent.width - self.x); height: parent.height; text: root.text; color: Theme.ink; font-size: root.font-size; font-weight: root.font-weight; wrap: word-wrap; vertical-alignment: center; }
+    touch := TouchArea { enabled: root.available; mouse-cursor: pointer; clicked => { if root.available { key.focus(); root.checked = !root.checked; root.toggled(); } } }
+    key := FocusScope { width: 0px; enabled: root.available; key-pressed(event) => { if root.available && (event.text == " " || event.text == "\n") { root.checked = !root.checked; root.toggled(); return accept; } return reject; } }
+}
+
+export component StatusLine inherits Rectangle {
+    in property <string> text;
+    in property <bool> busy: false;
+    height: 54px;
+    vertical-stretch: 0;
+    Rule { y: 0px; }
+    ScrollView {
+        x: 0px; y: 12px; width: parent.width; height: parent.height - 12px;
+        horizontal-scrollbar-policy: always-off;
+        Note { x: 0px; y: 0px; width: parent.width; text: root.text; color: root.busy ? Theme.accent-ink : Theme.muted; }
+    }
+}
+
+export component ConfirmationDialog inherits Rectangle {
+    in property <string> title;
+    in property <string> explanation;
+    in property <string> detail;
+    in property <string> accept-text;
+    callback dismissed;
+    callback accepted;
+    background: #302c2859;
+    init => { cancel-button.focus(); }
+    TouchArea { }
+    FocusScope {
+        focus-on-tab-navigation: false;
+        focus-on-click: false;
+        capture-key-pressed(event) => {
+            if event.text == Key.Escape { root.dismissed(); return accept; }
+            if event.text == Key.Tab || event.text == Key.Backtab {
+                // With two actions, forward and reverse traversal both switch
+                // to the other action. Never let Window traverse the background.
+                if cancel-button.has-focus { accept-button.focus(); }
+                else { cancel-button.focus(); }
+                return accept;
+            }
+            return reject;
+        }
+        capture-key-released(event) => {
+            if event.text == Key.Tab || event.text == Key.Backtab || event.text == Key.Escape { return accept; }
+            return reject;
+        }
+        Rectangle {
+            width: 530px; height: 276px;
+            x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
+            background: Theme.paper; border-radius: 9px; border-width: 1px; border-color: Theme.line;
+            VerticalLayout {
+                padding: 26px; spacing: 18px;
+                SectionTitle { text: root.title; }
+                Note { text: root.explanation; }
+                Note { text: root.detail; }
+                Rectangle { vertical-stretch: 1; }
+                HorizontalLayout {
+                    spacing: 10px;
+                    Rectangle { horizontal-stretch: 1; }
+                    cancel-button := Action { width: 96px; text: "取消"; modal-action: true; clicked => { root.dismissed(); } }
+                    accept-button := Action { width: 132px; text: root.accept-text; modal-action: true; danger: true; clicked => { root.accepted(); } }
+                }
+            }
+        }
+    }
+}

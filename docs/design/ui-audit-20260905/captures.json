@@ -1,0 +1,69 @@
+{
+  "capturedOn": "2026-09-05",
+  "baselineCommit": "fa4a6b2b910d5985804ea7633a100772803c4e72",
+  "surface": "Windows native Rust and Slint",
+  "referenceWidth": 1122,
+  "referenceHeight": 752,
+  "fixture": "isolated synthetic applications and snapshot",
+  "collectionPaused": true,
+  "scheduledCaptureDisabled": true,
+  "externalAIRequests": 0,
+  "cleanupVerified": true,
+  "screenshots": [
+    {
+      "file": "01-overview.jpg",
+      "bytes": 65087,
+      "sha256": "3A743557F53515DC57C7B8507ABFB89520BA62432AFC1203C23019C80D97D19B"
+    },
+    {
+      "file": "02-window-detail.jpg",
+      "bytes": 65714,
+      "sha256": "01C397B7EA10F8D9771ADCB90A89CDFF827D746ADC252CE14CFA03621DF9656A"
+    },
+    {
+      "file": "03-ai-panel.jpg",
+      "bytes": 75110,
+      "sha256": "CD1A535E44ADD99396F192C557C3DFD414625FA28B8BBB77EA72B40E2C32502C"
+    },
+    {
+      "file": "04-ai-settings.jpg",
+      "bytes": 69317,
+      "sha256": "C194EAAD23647E1DF3466CF67C13C68C7827F31D76307013CE45121944B63019"
+    },
+    {
+      "file": "05-data-backup.jpg",
+      "bytes": 86971,
+      "sha256": "3470951D366B74C96CAB8DA8ED0C126BA774DABD1A286DCCEE80FD10651A0FA0"
+    },
+    {
+      "file": "06-collection.jpg",
+      "bytes": 80835,
+      "sha256": "D555F886F500CF50152FA66F605D510EF423ED21B67F662645491395F306F856"
+    },
+    {
+      "file": "07-keyboard-system.jpg",
+      "bytes": 81603,
+      "sha256": "25FFEDD5D5C840E1714DD3FCC33F9D13AA477714E1E7DBC7F03BF0BD0AEE671D"
+    },
+    {
+      "file": "08-snapshots.jpg",
+      "bytes": 50461,
+      "sha256": "2ACD3886CC21E3216EC9C063148E220CAC5EAE62DC196ADB9B26E4989860D903"
+    },
+    {
+      "file": "09-modal-background-click.jpg",
+      "bytes": 50020,
+      "sha256": "FEE836CD6C42984D97AE034DA89176E4A8B69175285C0FC86641F2EA384D0DE4"
+    },
+    {
+      "file": "10-local-report.jpg",
+      "bytes": 50342,
+      "sha256": "A00754BABF9175B1E894C3C01D2514FEB0A8ABF38E43723438EE0530D77AEA42"
+    },
+    {
+      "file": "11-clear-confirmation.jpg",
+      "bytes": 50052,
+      "sha256": "AA92DE5FC03C1FFAC5C1F51FC86649FD51710F3752491F1CFED40D3F3191B050"
+    }
+  ]
+}
