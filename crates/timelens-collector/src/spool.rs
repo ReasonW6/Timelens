@@ -79,18 +79,23 @@ impl PendingSpool {
     /// violation); only content that can never be decoded is set aside. The core
     /// records the undelivered span as a collector-restart gap.
     pub fn open_or_quarantine(data_directory: &Path) -> Result<Self> {
+        let error = match Self::open(data_directory) {
+            Err(error) if !is_io_error(&error) => error,
+            opened => return opened,
+        };
+        eprintln!(
+            "collector spool is unreadable and was moved aside; starting an empty spool: {error:#}"
+        );
+        // Keep the key and the tray seed when only the spool itself is damaged.
+        quarantine_file(&data_directory.join(SPOOL_FILE_NAME))?;
         match Self::open(data_directory) {
-            Ok(spool) => Ok(spool),
-            Err(error) if is_io_error(&error) => Err(error),
-            Err(error) => {
-                eprintln!(
-                    "collector spool is unreadable and was moved aside; starting an empty spool: {error:#}"
-                );
-                for name in [SPOOL_FILE_NAME, SPOOL_KEY_FILE_NAME, TRAY_STATE_FILE_NAME] {
+            Err(error) if !is_io_error(&error) => {
+                for name in [SPOOL_KEY_FILE_NAME, TRAY_STATE_FILE_NAME] {
                     quarantine_file(&data_directory.join(name))?;
                 }
                 Self::open(data_directory)
             }
+            opened => opened,
         }
     }
 
@@ -857,6 +862,31 @@ mod tests {
         let mut moved_aside = directory.path().join(SPOOL_FILE_NAME).into_os_string();
         moved_aside.push(COLLECTOR_QUARANTINE_SUFFIX);
         assert!(Path::new(&moved_aside).is_file());
+    }
+
+    #[test]
+    fn a_damaged_spool_is_moved_aside_without_losing_the_tray_seed() {
+        let directory = tempfile::tempdir().unwrap();
+        let transition = TrayTransition {
+            kind: TrayTransitionKind::Started as i32,
+            application_identity: "path:c:\\tray.exe".to_owned(),
+            process_id: 20,
+            process_started_at_100ns: 30,
+        };
+        let mut spool = PendingSpool::open(directory.path()).unwrap();
+        assert!(spool.push(&batch(1, "damaged-marker")).unwrap());
+        spool
+            .save_tray_state(std::slice::from_ref(&transition))
+            .unwrap();
+        drop(spool);
+        let spool_path = directory.path().join(SPOOL_FILE_NAME);
+        let mut bytes = fs::read(&spool_path).unwrap();
+        bytes[..2 * HEADER_SLOT_BYTES].fill(0xA5);
+        fs::write(&spool_path, bytes).unwrap();
+
+        let recovered = PendingSpool::open_or_quarantine(directory.path()).unwrap();
+        assert!(recovered.is_empty());
+        assert_eq!(recovered.load_tray_state().unwrap(), vec![transition]);
     }
 
     #[test]
