@@ -814,13 +814,15 @@ impl Storage {
             outcome.merge(self.cleanup_before(cutoff, "retention_time")?);
         }
 
-        // The size limit is measured in live pages: deleted rows free their pages at
-        // once, while the WAL and file sizes only shrink after a checkpoint and VACUUM.
-        while self.live_database_bytes()? > policy.max_bytes && self.clean_oldest_local_report()? {
+        let mut compacted = false;
+        while self.exceeds_size_limit(policy.max_bytes, &mut compacted)?
+            && self.clean_oldest_local_report()?
+        {
             outcome.report.report_items = outcome.report.report_items.saturating_add(1);
+            compacted = false;
         }
 
-        while self.live_database_bytes()? > policy.max_bytes {
+        while self.exceeds_size_limit(policy.max_bytes, &mut compacted)? {
             let Some(oldest) = oldest_detail_timestamp(&self.connection)? else {
                 break;
             };
@@ -830,13 +832,12 @@ impl Storage {
                 break;
             }
             outcome.merge(removed);
+            compacted = false;
         }
 
-        // One VACUUM at the end returns every freed page to the file system.
-        if outcome.has_database_cleanup() {
-            self.connection.execute_batch(
-                "PRAGMA wal_checkpoint(TRUNCATE); VACUUM; PRAGMA wal_checkpoint(TRUNCATE);",
-            )?;
+        // Return every freed page to the file system, unless the last step already did.
+        if outcome.has_database_cleanup() && !compacted {
+            self.compact()?;
         }
 
         if outcome.has_any_cleanup() {
@@ -851,6 +852,29 @@ impl Storage {
             }
         }
         Ok(outcome.report)
+    }
+
+    /// Whether the database stays over `max_bytes` once repacked. Deleted rows also
+    /// leave pages partly empty, so live pages are only an upper bound until the
+    /// database is repacked; it is repacked before that bound alone can delete history.
+    fn exceeds_size_limit(&self, max_bytes: u64, compacted: &mut bool) -> Result<bool> {
+        if self.live_database_bytes()? <= max_bytes {
+            return Ok(false);
+        }
+        if *compacted {
+            return Ok(true);
+        }
+        self.compact()?;
+        *compacted = true;
+        Ok(self.live_database_bytes()? > max_bytes)
+    }
+
+    /// Repack the database and fold the WAL back into it.
+    fn compact(&self) -> Result<()> {
+        self.connection.execute_batch(
+            "PRAGMA wal_checkpoint(TRUNCATE); VACUUM; PRAGMA wal_checkpoint(TRUNCATE);",
+        )?;
+        Ok(())
     }
 
     /// Bytes held by pages that still store data, excluding free pages and the WAL.
@@ -3527,6 +3551,81 @@ mod tests {
         assert!(live > 0);
         storage.checkpoint().unwrap();
         assert!(live <= fs::metadata(storage.database_path()).unwrap().len());
+    }
+
+    /// Three days of input minutes with every other row deleted. The rows were
+    /// inserted out of time order, so the deletions free almost no whole page: live
+    /// pages stay near their old count while a repacked database is about half as large.
+    fn fragmented_storage(directory: &Path) -> (Storage, i64) {
+        let storage = Storage::open(directory).unwrap();
+        let rows = 60_000_i64;
+        let transaction = storage.connection.unchecked_transaction().unwrap();
+        for row in 0..rows {
+            let minute = (row * 7_919) % rows % (3 * 1_440);
+            transaction
+                .execute(
+                    "INSERT INTO input_minute_buckets(
+                        minute_started_utc_ms, timezone_offset_minutes, local_date,
+                        focused_application_identity, keyboard_count, left_click_count,
+                        middle_click_count, right_click_count
+                     ) VALUES (?1, 0, '2023-11-14', NULL, ?2, 0, 0, 0)",
+                    params![FRAGMENTED_START + minute * 60_000, row],
+                )
+                .unwrap();
+        }
+        transaction.commit().unwrap();
+        storage
+            .connection
+            .execute(
+                "DELETE FROM input_minute_buckets WHERE bucket_id % 2 = 0",
+                [],
+            )
+            .unwrap();
+        let remaining = storage
+            .connection
+            .query_row("SELECT COUNT(*) FROM input_minute_buckets", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        (storage, remaining)
+    }
+
+    const FRAGMENTED_START: i64 = 1_699_920_000_000;
+
+    #[test]
+    fn space_retention_keeps_history_that_fits_once_repacked() {
+        let probe_directory = tempfile::tempdir().unwrap();
+        let (probe, _) = fragmented_storage(probe_directory.path());
+        probe.compact().unwrap();
+        let repacked = database_files_bytes(probe.database_path());
+
+        let directory = tempfile::tempdir().unwrap();
+        let (storage, remaining) = fragmented_storage(directory.path());
+        let live = storage.live_database_bytes().unwrap();
+        let max_bytes = ((repacked + live) / 2).max(1024 * 1024);
+        assert!(
+            repacked + 128 * 1024 < max_bytes && max_bytes < live,
+            "repacked={repacked} live={live}"
+        );
+        storage
+            .set_retention_policy(RetentionPolicy {
+                days: None,
+                max_bytes,
+            })
+            .unwrap();
+
+        storage
+            .apply_retention(FRAGMENTED_START + 4 * 86_400_000)
+            .unwrap();
+
+        let kept: i64 = storage
+            .connection
+            .query_row("SELECT COUNT(*) FROM input_minute_buckets", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(kept, remaining);
+        assert!(database_files_bytes(storage.database_path()) <= max_bytes);
     }
 
     #[test]
