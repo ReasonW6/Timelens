@@ -141,23 +141,8 @@ fn collect_window_events(pipe_name: &str, data_directory: PathBuf) -> Result<()>
         mono,
     )?;
     loop {
-        if let Some(fault) = take_delivery_fault(&delivery_faults)? {
-            let restart = {
-                let mut pending = spool
-                    .lock()
-                    .map_err(|_| anyhow::anyhow!("collector spool lock poisoned"))?;
-                match &fault {
-                    DeliveryFault::UnreadableSpool => {
-                        pending.reset()?;
-                        true
-                    }
-                    DeliveryFault::RejectedRun(run) => {
-                        pending.discard_run(run)?;
-                        *run == collector_run_id
-                    }
-                }
-            };
-            if restart {
+        if delivery_fault_pending(&delivery_faults) {
+            if repair_delivery_fault(&spool, &delivery_faults, &collector_run_id)? {
                 // The core closes the abandoned run and records the missing span as a
                 // collector-restart gap when the new run's first batch arrives.
                 let (now, mono) = observer.timestamp();
@@ -621,11 +606,36 @@ enum DeliveryFault {
 
 type DeliveryFaults = Arc<Mutex<Option<DeliveryFault>>>;
 
-fn take_delivery_fault(faults: &DeliveryFaults) -> Result<Option<DeliveryFault>> {
-    Ok(faults
+fn delivery_fault_pending(faults: &DeliveryFaults) -> bool {
+    faults.lock().map_or(true, |fault| fault.is_some())
+}
+
+/// Repair the spool for a reported fault and return whether the current run was
+/// abandoned. The fault is cleared only while the spool is locked for the repair,
+/// so the delivery worker cannot read the same front again and report it twice.
+fn repair_delivery_fault(
+    spool: &Mutex<PendingSpool>,
+    faults: &DeliveryFaults,
+    collector_run_id: &[u8],
+) -> Result<bool> {
+    let mut pending = spool
+        .lock()
+        .map_err(|_| anyhow::anyhow!("collector spool lock poisoned"))?;
+    let fault = faults
         .lock()
         .map_err(|_| anyhow::anyhow!("collector delivery fault lock poisoned"))?
-        .take())
+        .take();
+    match fault {
+        None => Ok(false),
+        Some(DeliveryFault::UnreadableSpool) => {
+            pending.reset()?;
+            Ok(true)
+        }
+        Some(DeliveryFault::RejectedRun(run)) => {
+            pending.discard_run(&run)?;
+            Ok(run == collector_run_id)
+        }
+    }
 }
 
 fn spawn_delivery_worker(
@@ -664,8 +674,10 @@ fn delivery_worker(
     loop {
         // While a fault waits for the collection loop, the spool front is known to
         // be undeliverable, so resending it would only repeat the failure.
-        let fault_pending = faults.lock().map_or(true, |fault| fault.is_some());
-        if reset_request_path.exists() || reset_paused_path.exists() || fault_pending {
+        if reset_request_path.exists()
+            || reset_paused_path.exists()
+            || delivery_fault_pending(faults)
+        {
             let _ = wake_receiver.recv_timeout(RESET_POLL_INTERVAL);
             continue;
         }
@@ -1473,6 +1485,47 @@ mod tests {
         );
         assert!(events.is_empty());
         assert!(aggregator.buckets.is_empty());
+    }
+
+    #[test]
+    fn a_delivery_fault_is_cleared_together_with_its_repair() {
+        let directory = tempfile::tempdir().unwrap();
+        let spool = Mutex::new(PendingSpool::open(directory.path()).unwrap());
+        let faults = DeliveryFaults::default();
+        let batch = |run: u8| EventBatch {
+            collector_run_id: vec![run; 16],
+            first_sequence: 1,
+            events: vec![CollectorEvent {
+                observed_at_utc_ms: 1_700_000_000_000,
+                monotonic_ms: 1,
+                body: Some(collector_event::Body::SystemInterval(
+                    timelens_ipc::SystemInterval {
+                        kind: "system_end".into(),
+                        started_utc_ms: 1_700_000_000_000,
+                        duration_ms: 0,
+                        timezone_offset_minutes: 0,
+                    },
+                )),
+            }],
+        };
+        for run in [1, 2] {
+            assert!(spool.lock().unwrap().push(&batch(run)).unwrap());
+        }
+
+        report_delivery_fault(&faults, DeliveryFault::RejectedRun(vec![1; 16]));
+        assert!(!repair_delivery_fault(&spool, &faults, &[2; 16]).unwrap());
+        assert!(!delivery_fault_pending(&faults));
+        assert_eq!(spool.lock().unwrap().front().unwrap(), Some(batch(2)));
+
+        report_delivery_fault(&faults, DeliveryFault::RejectedRun(vec![2; 16]));
+        assert!(repair_delivery_fault(&spool, &faults, &[2; 16]).unwrap());
+        assert!(spool.lock().unwrap().is_empty());
+
+        assert!(spool.lock().unwrap().push(&batch(3)).unwrap());
+        report_delivery_fault(&faults, DeliveryFault::UnreadableSpool);
+        assert!(repair_delivery_fault(&spool, &faults, &[3; 16]).unwrap());
+        assert!(spool.lock().unwrap().is_empty());
+        assert!(!repair_delivery_fault(&spool, &faults, &[3; 16]).unwrap());
     }
 
     #[test]
