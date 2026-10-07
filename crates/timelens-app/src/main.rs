@@ -327,10 +327,15 @@ fn run_window(
                 },
                 Err(error) => CollectorStatus::Failed(error.to_string()),
             };
+            // Recreate the pipe at once after a delivered batch so a backlog drains
+            // quickly; pause only after a failure to avoid spinning.
+            let failed = matches!(status, CollectorStatus::Failed(_));
             if status_sender.send(status).is_err() {
                 break;
             }
-            thread::sleep(Duration::from_millis(250));
+            if failed {
+                thread::sleep(Duration::from_millis(250));
+            }
         }
     });
 
