@@ -26,7 +26,7 @@ use windows_sys::Win32::{
     },
     Storage::FileSystem::{
         CreateFileW, FILE_FLAG_FIRST_PIPE_INSTANCE, FlushFileBuffers, OPEN_EXISTING,
-        PIPE_ACCESS_DUPLEX, ReadFile, WriteFile,
+        PIPE_ACCESS_DUPLEX, ReadFile, SECURITY_IDENTIFICATION, SECURITY_SQOS_PRESENT, WriteFile,
     },
     System::{
         Pipes::{
@@ -442,7 +442,8 @@ fn connect_client(pipe_name: &str) -> Result<OwnedHandle> {
                 0,
                 null(),
                 OPEN_EXISTING,
-                0,
+                // Never let the pipe server act as this process beyond identifying it.
+                SECURITY_SQOS_PRESENT | SECURITY_IDENTIFICATION,
                 null_mut(),
             )
         };

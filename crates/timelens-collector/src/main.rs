@@ -2,6 +2,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod collection;
+mod data_directory;
 mod spool;
 
 use std::{
@@ -9,6 +10,7 @@ use std::{
     env,
     fs::{self, OpenOptions},
     io::Write,
+    os::windows::fs::OpenOptionsExt,
     path::PathBuf,
     sync::{Arc, Mutex, mpsc},
     thread,
@@ -73,7 +75,8 @@ fn main() -> Result<()> {
 
     let _instance = SingleInstanceGuard::acquire_collector()
         .context("Timelens collector is already running")?;
-    collect_window_events(&pipe_name, options.data_directory()?)
+    let data_directory = data_directory::resolve(options.data_directory.clone())?;
+    collect_window_events(&pipe_name, data_directory.path().to_path_buf())
 }
 
 fn collect_window_events(pipe_name: &str, data_directory: PathBuf) -> Result<()> {
@@ -755,10 +758,12 @@ fn report_delivery_fault(faults: &DeliveryFaults, fault: DeliveryFault) {
 }
 
 fn acknowledge_collector_reset(path: &std::path::Path) -> Result<()> {
+    // A link planted at this name is overwritten itself, never followed.
     let mut file = OpenOptions::new()
         .write(true)
         .create(true)
         .truncate(true)
+        .custom_flags(windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT)
         .open(path)?;
     file.write_all(b"paused")?;
     file.sync_all()?;
@@ -1292,17 +1297,6 @@ impl Options {
             }
         }
         Ok(options)
-    }
-
-    fn data_directory(&self) -> Result<PathBuf> {
-        if let Some(path) = &self.data_directory {
-            return Ok(path.clone());
-        }
-        if let Some(path) = env::var_os("TIMELENS_DATA_DIR") {
-            return Ok(PathBuf::from(path));
-        }
-        let local_app_data = env::var_os("LOCALAPPDATA").context("LOCALAPPDATA is unavailable")?;
-        Ok(PathBuf::from(local_app_data).join("Timelens"))
     }
 }
 

@@ -4,6 +4,7 @@ use std::{
     io::{Read, Seek, SeekFrom, Write},
     mem::size_of,
     os::windows::ffi::OsStrExt,
+    os::windows::fs::OpenOptionsExt,
     path::{Path, PathBuf},
     ptr::{null, null_mut},
 };
@@ -20,7 +21,10 @@ use windows_sys::Win32::{
         BCRYPT_USE_SYSTEM_PREFERRED_RNG, BCryptGenRandom, CRYPT_INTEGER_BLOB,
         CRYPTPROTECT_UI_FORBIDDEN, CryptProtectData, CryptUnprotectData,
     },
-    Storage::FileSystem::{MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH, MoveFileExW},
+    Storage::FileSystem::{
+        FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_READ, FILE_SHARE_WRITE, MOVEFILE_REPLACE_EXISTING,
+        MOVEFILE_WRITE_THROUGH, MoveFileExW,
+    },
     System::Threading::GetCurrentProcessId,
 };
 use zeroize::Zeroizing;
@@ -117,11 +121,15 @@ impl PendingSpool {
             );
         }
         let key = load_or_create_key(key_path)?;
+        // No delete sharing: while the collector runs, its directory can never be
+        // emptied and turned into a junction behind it.
         let mut file = OpenOptions::new()
             .read(true)
             .write(true)
             .create(true)
             .truncate(false)
+            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
+            .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
             .open(spool_path)
             .with_context(|| format!("failed to open collector spool {}", spool_path.display()))?;
         let existing_length = file.metadata()?.len();
@@ -316,6 +324,7 @@ impl PendingSpool {
             .write(true)
             .create(true)
             .truncate(true)
+            .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
             .open(&temporary)?;
         file.write_all(TRAY_STATE_MAGIC)?;
         file.write_all(&(protected.len() as u32).to_le_bytes())?;
@@ -528,6 +537,7 @@ fn load_or_create_key(path: &Path) -> Result<Zeroizing<Vec<u8>>> {
     let mut file = OpenOptions::new()
         .write(true)
         .create_new(true)
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
         .open(&temporary)?;
     file.write_all(KEY_MAGIC)?;
     file.write_all(&(protected.len() as u32).to_le_bytes())?;
@@ -548,6 +558,7 @@ fn replace_key_file(path: &Path, key: &[u8]) -> Result<()> {
         .write(true)
         .create(true)
         .truncate(true)
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
         .open(&temporary)?;
     file.write_all(KEY_MAGIC)?;
     file.write_all(&(protected.len() as u32).to_le_bytes())?;
