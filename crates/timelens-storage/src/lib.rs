@@ -797,6 +797,9 @@ impl Storage {
 
     pub fn apply_retention(&self, now_utc_ms: i64) -> Result<RetentionReport> {
         let policy = self.retention_policy()?;
+        // Fold the WAL back first so the released-bytes figure does not count log
+        // pages that any checkpoint would reclaim anyway.
+        self.checkpoint()?;
         let before_bytes = database_files_bytes(&self.database_path);
         let mut outcome = CleanupOutcome::default();
         let activity_cutoff = policy
@@ -810,20 +813,13 @@ impl Storage {
             outcome.merge(self.cleanup_before(cutoff, "retention_time")?);
         }
 
-        if outcome.has_database_cleanup() {
-            self.connection
-                .execute_batch("PRAGMA wal_checkpoint(TRUNCATE); VACUUM;")?;
-        }
-
-        while database_files_bytes(&self.database_path) > policy.max_bytes
-            && self.clean_oldest_local_report()?
-        {
+        // The size limit is measured in live pages: deleted rows free their pages at
+        // once, while the WAL and file sizes only shrink after a checkpoint and VACUUM.
+        while self.live_database_bytes()? > policy.max_bytes && self.clean_oldest_local_report()? {
             outcome.report.report_items = outcome.report.report_items.saturating_add(1);
-            self.connection
-                .execute_batch("PRAGMA wal_checkpoint(TRUNCATE); VACUUM;")?;
         }
 
-        while database_files_bytes(&self.database_path) > policy.max_bytes {
+        while self.live_database_bytes()? > policy.max_bytes {
             let Some(oldest) = oldest_detail_timestamp(&self.connection)? else {
                 break;
             };
@@ -833,8 +829,13 @@ impl Storage {
                 break;
             }
             outcome.merge(removed);
-            self.connection
-                .execute_batch("PRAGMA wal_checkpoint(TRUNCATE); VACUUM;")?;
+        }
+
+        // One VACUUM at the end returns every freed page to the file system.
+        if outcome.has_database_cleanup() {
+            self.connection.execute_batch(
+                "PRAGMA wal_checkpoint(TRUNCATE); VACUUM; PRAGMA wal_checkpoint(TRUNCATE);",
+            )?;
         }
 
         if outcome.has_any_cleanup() {
@@ -849,6 +850,21 @@ impl Storage {
             }
         }
         Ok(outcome.report)
+    }
+
+    /// Bytes held by pages that still store data, excluding free pages and the WAL.
+    fn live_database_bytes(&self) -> Result<u64> {
+        // SQLCipher reports page_size as text, so every value is cast explicitly.
+        let pragma = |name: &str| -> Result<u64> {
+            let value: i64 = self.connection.query_row(
+                &format!("SELECT CAST({name} AS INTEGER) FROM pragma_{name}()"),
+                [],
+                |row| row.get(0),
+            )?;
+            Ok(value.max(0) as u64)
+        };
+        let live_pages = pragma("page_count")?.saturating_sub(pragma("freelist_count")?);
+        Ok(live_pages.saturating_mul(pragma("page_size")?))
     }
 
     fn cleanup_before(&self, cutoff_utc_ms: i64, reason: &str) -> Result<CleanupOutcome> {
@@ -869,6 +885,8 @@ impl Storage {
                 UNION ALL
                 SELECT ended_utc_ms FROM tray_background_intervals
                  WHERE ended_utc_ms IS NOT NULL AND ended_utc_ms < ?1
+                UNION ALL
+                SELECT ended_utc_ms FROM system_intervals WHERE ended_utc_ms < ?1
              )",
             params![cutoff_utc_ms],
             |row| row.get::<_, Option<i64>>(0),
@@ -898,6 +916,11 @@ impl Storage {
         activity_items += transaction.execute(
             "DELETE FROM tray_background_intervals
              WHERE ended_utc_ms IS NOT NULL AND ended_utc_ms < ?1",
+            params![cutoff_utc_ms],
+        )? as u64;
+        // Lock, sleep, exclusion and disconnect periods are activity history too.
+        activity_items += transaction.execute(
+            "DELETE FROM system_intervals WHERE ended_utc_ms < ?1",
             params![cutoff_utc_ms],
         )? as u64;
 
@@ -3421,6 +3444,18 @@ mod tests {
                         false,
                     ),
                     CollectorEvent {
+                        observed_at_utc_ms: base + 1_000,
+                        monotonic_ms: 1_010,
+                        body: Some(collector_event::Body::SystemInterval(
+                            timelens_ipc::SystemInterval {
+                                kind: "locked".to_owned(),
+                                started_utc_ms: base,
+                                duration_ms: 1_000,
+                                timezone_offset_minutes: 480,
+                            },
+                        )),
+                    },
+                    CollectorEvent {
                         observed_at_utc_ms: base + 60_000,
                         monotonic_ms: 60_010,
                         body: Some(collector_event::Body::InputMinute(InputMinute {
@@ -3471,9 +3506,26 @@ mod tests {
                 |row| row.get(0),
             )
             .unwrap();
+        let system_intervals: i64 = storage
+            .connection
+            .query_row("SELECT COUNT(*) FROM system_intervals", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
         assert_eq!(detailed_input, 0);
         assert_eq!(ledger, 1);
         assert_eq!(cleanup_records, 2);
+        assert_eq!(system_intervals, 0);
+    }
+
+    #[test]
+    fn live_bytes_count_only_pages_that_hold_data() {
+        let directory = tempfile::tempdir().unwrap();
+        let storage = Storage::open(directory.path()).unwrap();
+        let live = storage.live_database_bytes().unwrap();
+        assert!(live > 0);
+        storage.checkpoint().unwrap();
+        assert!(live <= fs::metadata(storage.database_path()).unwrap().len());
     }
 
     #[test]
