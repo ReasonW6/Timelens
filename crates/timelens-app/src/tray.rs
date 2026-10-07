@@ -279,6 +279,7 @@ pub fn install(
                             continue;
                         }
                         quitting = true;
+                        crate::collector_task::suspend();
                         w.set_action_status("正在保存最后的观察并停止采集…".into());
                         let storage = Arc::clone(&storage);
                         thread::spawn(move || {
@@ -326,6 +327,7 @@ pub fn install(
                     }
                     Event::QuitFailed(error) => {
                         quitting = false;
+                        crate::collector_task::resume();
                         w.set_action_status(format!("退出未完成：{error}").into());
                     }
                 }

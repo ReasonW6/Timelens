@@ -11,8 +11,9 @@ use std::{
 
 use windows_sys::Win32::{
     Foundation::{
-        CloseHandle, ERROR_ALREADY_EXISTS, ERROR_PIPE_CONNECTED, GENERIC_READ, GENERIC_WRITE,
-        GetLastError, HANDLE, INVALID_HANDLE_VALUE, LocalFree,
+        CloseHandle, ERROR_ACCESS_DENIED, ERROR_ALREADY_EXISTS, ERROR_FILE_NOT_FOUND,
+        ERROR_PIPE_CONNECTED, GENERIC_READ, GENERIC_WRITE, GetLastError, HANDLE,
+        INVALID_HANDLE_VALUE, LocalFree,
     },
     Security::{
         Authorization::{
@@ -35,8 +36,9 @@ use windows_sys::Win32::{
         },
         RemoteDesktop::ProcessIdToSessionId,
         Threading::{
-            CreateMutexW, GetCurrentProcessId, OpenProcess, OpenProcessToken,
+            CreateMutexW, GetCurrentProcessId, OpenMutexW, OpenProcess, OpenProcessToken,
             PROCESS_QUERY_LIMITED_INFORMATION, QueryFullProcessImageNameW,
+            SYNCHRONIZATION_SYNCHRONIZE,
         },
     },
 };
@@ -74,10 +76,27 @@ impl SingleInstanceGuard {
         Self::acquire("Collector")
     }
 
+    /// Whether a collector holds its single-instance mutex in this user session.
+    /// The mutex is only opened, never created, so checking cannot make a collector
+    /// that is starting at the same moment believe another one is running.
+    pub fn collector_running() -> Result<bool> {
+        let name = instance_mutex_name("Collector")?;
+        let handle = unsafe { OpenMutexW(SYNCHRONIZATION_SYNCHRONIZE, 0, name.as_ptr()) };
+        if !handle.is_null() {
+            unsafe { CloseHandle(handle) };
+            return Ok(true);
+        }
+        match unsafe { GetLastError() } {
+            ERROR_FILE_NOT_FOUND => Ok(false),
+            // An elevated collector's mutex denies this process, which still proves
+            // that it exists.
+            ERROR_ACCESS_DENIED => Ok(true),
+            status => Err(io::Error::from_raw_os_error(status as i32).into()),
+        }
+    }
+
     fn acquire(component: &str) -> Result<Self> {
-        let sid = current_user_sid()?;
-        let session = current_session_id()?;
-        let name = wide(format!("Local\\Timelens.{component}.{sid}.{session}.v1"));
+        let name = instance_mutex_name(component)?;
         let handle = unsafe { CreateMutexW(null(), 0, name.as_ptr()) };
         let handle = OwnedHandle::new(handle)?;
         if unsafe { GetLastError() } == ERROR_ALREADY_EXISTS {
@@ -92,6 +111,14 @@ impl SingleInstanceGuard {
     pub fn raw_handle(&self) -> HANDLE {
         self.handle.0
     }
+}
+
+fn instance_mutex_name(component: &str) -> Result<Vec<u16>> {
+    let sid = current_user_sid()?;
+    let session = current_session_id()?;
+    Ok(wide(format!(
+        "Local\\Timelens.{component}.{sid}.{session}.v1"
+    )))
 }
 
 pub fn current_pipe_name() -> Result<String> {
@@ -861,6 +888,20 @@ mod tests {
             IpcError::BatchRejectedPermanently(_)
         ));
         assert!(server_error.to_string().contains("not contiguous"));
+    }
+
+    #[test]
+    fn collector_running_reflects_the_instance_mutex_without_creating_it() {
+        let Ok(guard) = SingleInstanceGuard::acquire_collector() else {
+            // A real collector owns this session, so it is running by definition.
+            assert!(SingleInstanceGuard::collector_running().unwrap());
+            return;
+        };
+        assert!(SingleInstanceGuard::collector_running().unwrap());
+        drop(guard);
+        assert!(!SingleInstanceGuard::collector_running().unwrap());
+        // Checking must not leave a mutex behind that blocks a starting collector.
+        drop(SingleInstanceGuard::acquire_collector().unwrap());
     }
 
     #[test]

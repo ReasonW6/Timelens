@@ -5,6 +5,7 @@ mod ai;
 mod ai_ui;
 mod app_icon;
 mod collection_ui;
+mod collector_task;
 mod data_ui;
 mod local_config;
 mod recovery;
@@ -122,6 +123,7 @@ fn main() -> Result<()> {
         );
     }
     storage.record_component_health("core", PROTOCOL_VERSION, None)?;
+    let collector_task = options.collector_task();
     let pipe_name = options.pipe_name.unwrap_or(current_pipe_name()?);
 
     if options.handshake_once {
@@ -148,6 +150,9 @@ fn main() -> Result<()> {
         return Ok(());
     }
     snapshot::spawn_scheduler(Arc::clone(&storage), data_directory.clone());
+    if let Some(task) = collector_task {
+        collector_task::spawn_watchdog(task);
+    }
     let ai_service = ai::spawn(Arc::clone(&storage));
     let maintenance_storage = Arc::clone(&storage);
     thread::spawn(move || {
@@ -1610,6 +1615,7 @@ struct Options {
     snapshot_once: bool,
     pipe_name: Option<String>,
     data_directory: Option<PathBuf>,
+    collector_task: Option<String>,
 }
 
 impl Options {
@@ -1638,6 +1644,17 @@ impl Options {
                         arguments.next().context("--data-dir requires a value")?,
                     ));
                 }
+                "--collector-task" => {
+                    let task = arguments
+                        .next()
+                        .context("--collector-task requires a value")?
+                        .to_string_lossy()
+                        .into_owned();
+                    if !collector_task::valid_task_path(&task) {
+                        bail!("--collector-task must name a Timelens collector task");
+                    }
+                    options.collector_task = Some(task);
+                }
                 unknown => bail!("unknown argument: {unknown}"),
             }
         }
@@ -1646,6 +1663,22 @@ impl Options {
 
     fn data_directory(&self) -> Result<PathBuf> {
         local_config::resolve(&self.control_directory()?)
+    }
+
+    /// The scheduled task that runs this core's collector. A custom dataset or pipe
+    /// has no known task unless one is named; starting the regular collector would
+    /// feed it into the wrong dataset.
+    fn collector_task(&self) -> Option<String> {
+        if self.collector_task.is_some() {
+            return self.collector_task.clone();
+        }
+        if self.data_directory.is_some()
+            || self.pipe_name.is_some()
+            || env::var_os("TIMELENS_DATA_DIR").is_some()
+        {
+            return None;
+        }
+        Some(collector_task::DEFAULT_TASK.to_owned())
     }
 
     fn control_directory(&self) -> Result<PathBuf> {
