@@ -1,0 +1,38 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  # SQLCipher's vendored OpenSSL needs a native Perl; Git for Windows' Perl is not enough.
+  OPENSSL_SRC_PERL: C:\Strawberry\perl\bin\perl.exe
+
+jobs:
+  windows:
+    name: Windows (fmt, clippy, test)
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install toolchain from rust-toolchain.toml
+        run: rustup show
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: cargo fmt
+        run: cargo fmt --all -- --check
+
+      - name: cargo clippy
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+
+      - name: cargo test
+        run: cargo test --workspace --release -- --test-threads=2
