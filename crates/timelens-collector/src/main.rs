@@ -183,6 +183,8 @@ fn collect_window_events(pipe_name: &str, data_directory: PathBuf) -> Result<()>
                 &filter.policy,
                 filter.blocked,
             )?;
+            // Nothing after this point is counted, so release the input hooks now.
+            drop(input_monitor);
             let (now, mono) = observer.timestamp();
             // The final batch still belongs to this run, so it must not go backwards.
             let now = now.max(last_now);
