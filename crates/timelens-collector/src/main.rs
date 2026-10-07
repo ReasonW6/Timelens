@@ -18,7 +18,7 @@ use std::{
 use anyhow::{Context, Result, bail};
 use timelens_ipc::{
     COLLECTOR_RESET_PAUSED_FILE, COLLECTOR_RESET_REQUEST_FILE, CollectorEvent, EventBatch,
-    IdentitySource as ProtocolIdentitySource, InputMinute, MAX_INPUT_KEYS_PER_MINUTE,
+    IdentitySource as ProtocolIdentitySource, InputMinute, IpcError, MAX_INPUT_KEYS_PER_MINUTE,
     MonitoringGap, MonitoringGapReason, PhysicalKeyCount, SingleInstanceGuard,
     TrayTransition as ProtocolTrayTransition, TrayTransitionKind as ProtocolTrayTransitionKind,
     WindowObservation as ProtocolWindowObservation, WindowTransition as ProtocolWindowTransition,
@@ -45,6 +45,9 @@ const RESET_POLL_INTERVAL: Duration = Duration::from_millis(100);
 const RESET_REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
 const MINUTE_MS: i64 = 60_000;
 const MAX_INPUT_BUCKETS_PER_MINUTE: usize = 4096;
+/// Backward clock steps up to this size, such as routine time-sync corrections, are
+/// absorbed by holding the run's clock still. Larger steps start a new run.
+const CLOCK_ROLLBACK_TOLERANCE_MS: i64 = 2_000;
 
 fn main() -> Result<()> {
     let options = Options::parse(env::args_os().skip(1))?;
@@ -82,17 +85,31 @@ fn collect_window_events(pipe_name: &str, data_directory: PathBuf) -> Result<()>
     if reset_paused_path.exists() && !reset_request_path.exists() {
         fs::remove_file(&reset_paused_path)?;
     }
-    let pending = PendingSpool::open(&data_directory)?;
-    let policy = timelens_ipc::privacy::Policy::load(&data_directory)?;
-    let seeds = pending
-        .load_tray_state()?
+    let pending = PendingSpool::open_or_quarantine(&data_directory)?;
+    // Same fallback as `Filter`: an unreadable policy collects nothing rather than
+    // stopping the collector.
+    let policy = timelens_ipc::privacy::Policy::load(&data_directory).unwrap_or_else(|error| {
+        eprintln!("collection policy is unreadable; collection stays paused: {error:#}");
+        timelens_ipc::privacy::Policy {
+            paused: true,
+            ..Default::default()
+        }
+    });
+    let saved_tray = pending.load_tray_state().unwrap_or_else(|error| {
+        eprintln!("collector tray restart state is unreadable; starting without it: {error:#}");
+        Vec::new()
+    });
+    let seeds = saved_tray
         .into_iter()
         .filter(|t| !policy.paused && !policy.activity.contains(&t.application_identity))
-        .map(observer_tray_seed)
-        .collect::<Result<Vec<_>>>()?;
+        .filter_map(|transition| {
+            observer_tray_seed(transition)
+                .inspect_err(|error| eprintln!("skipping a saved tray application: {error:#}"))
+                .ok()
+        });
     observer.seed_tray_presence(seeds);
     let spool = Arc::new(Mutex::new(pending));
-    let delivery_wake = spawn_delivery_worker(
+    let (delivery_wake, delivery_faults) = spawn_delivery_worker(
         pipe_name.to_owned(),
         spool.clone(),
         reset_request_path.clone(),
@@ -104,6 +121,7 @@ fn collect_window_events(pipe_name: &str, data_directory: PathBuf) -> Result<()>
     let mut raw = initial.current;
     let mut raw_tray = observer.current_tray_presence();
     let (now, mono) = observer.timestamp();
+    let mut last_now = now;
     let mut filter = collection::Filter::new(&data_directory, now, mono);
     let mut input = InputAggregator::default();
     let mut identities = window_identities(&raw);
@@ -120,6 +138,42 @@ fn collect_window_events(pipe_name: &str, data_directory: PathBuf) -> Result<()>
         mono,
     )?;
     loop {
+        if let Some(fault) = take_delivery_fault(&delivery_faults)? {
+            let restart = {
+                let mut pending = spool
+                    .lock()
+                    .map_err(|_| anyhow::anyhow!("collector spool lock poisoned"))?;
+                match &fault {
+                    DeliveryFault::UnreadableSpool => {
+                        pending.reset()?;
+                        true
+                    }
+                    DeliveryFault::RejectedRun(run) => {
+                        pending.discard_run(run)?;
+                        *run == collector_run_id
+                    }
+                }
+            };
+            if restart {
+                // The core closes the abandoned run and records the missing span as a
+                // collector-restart gap when the new run's first batch arrives.
+                let (now, mono) = observer.timestamp();
+                last_now = now;
+                queue_restart_snapshot(
+                    &spool,
+                    &mut collector_run_id,
+                    &mut next_sequence,
+                    None,
+                    now,
+                    mono,
+                    CurrentSnapshot {
+                        windows: &filter.windows,
+                        tray: &filter.tray,
+                    },
+                )?;
+            }
+            let _ = delivery_wake.send(());
+        }
         let stop = data_directory.join("collector-stop.request");
         if stop.is_file() {
             fs::remove_file(stop)?;
@@ -130,6 +184,8 @@ fn collect_window_events(pipe_name: &str, data_directory: PathBuf) -> Result<()>
                 filter.blocked,
             )?;
             let (now, mono) = observer.timestamp();
+            // The final batch still belongs to this run, so it must not go backwards.
+            let now = now.max(last_now);
             let mut events = input.take_completed(
                 now,
                 mono,
@@ -219,6 +275,7 @@ fn collect_window_events(pipe_name: &str, data_directory: PathBuf) -> Result<()>
             raw_tray = observer.current_tray_presence();
             identities = window_identities(&raw);
             let (now, mono) = observer.timestamp();
+            last_now = now;
             filter = collection::Filter::new(&data_directory, now, mono);
             publish_collection(
                 &spool,
@@ -250,7 +307,73 @@ fn collect_window_events(pipe_name: &str, data_directory: PathBuf) -> Result<()>
             identities.extend(window_identities(&raw));
             last_reconcile = Instant::now();
         }
-        let (now, mono) = observer.timestamp();
+        let (observed_now, mono) = observer.timestamp();
+        let now = match continue_run_clock(last_now, observed_now) {
+            Some(now) => now,
+            None => {
+                // The core rejects a run whose timestamps go backwards, so a clock that
+                // moved back starts a new run. Input counted so far is sealed into the
+                // old run first, at the last time that run reported.
+                eprintln!(
+                    "system clock moved back {} ms; starting a new collector run",
+                    last_now - observed_now
+                );
+                input.add_private(
+                    input_monitor.drain(),
+                    &identities,
+                    &filter.policy,
+                    filter.blocked,
+                )?;
+                let sealed = input.take_completed(
+                    last_now,
+                    mono,
+                    LocalTimeFacts {
+                        minute_started_at_utc_ms: i64::MAX,
+                        ..local_time_facts(last_now)?
+                    },
+                );
+                queue_events(
+                    &spool,
+                    &delivery_wake,
+                    &mut collector_run_id,
+                    &mut next_sequence,
+                    &sealed,
+                    CurrentSnapshot {
+                        windows: &filter.windows,
+                        tray: &filter.tray,
+                    },
+                )?;
+                input = InputAggregator::default();
+                collector_run_id = new_collector_run_id()?;
+                next_sequence = 1;
+                filter = collection::Filter::new(&data_directory, observed_now, mono);
+                queue_events(
+                    &spool,
+                    &delivery_wake,
+                    &mut collector_run_id,
+                    &mut next_sequence,
+                    &[CollectorEvent {
+                        observed_at_utc_ms: observed_now,
+                        monotonic_ms: mono,
+                        body: Some(collector_event::Body::SystemInterval(
+                            timelens_ipc::SystemInterval {
+                                kind: "clock_discontinuity".into(),
+                                started_utc_ms: observed_now,
+                                duration_ms: 0,
+                                timezone_offset_minutes: local_time_facts(observed_now)?
+                                    .timezone_offset_minutes,
+                            },
+                        )),
+                    }],
+                    CurrentSnapshot {
+                        windows: &[],
+                        tray: &[],
+                    },
+                )?;
+                observed_now
+            }
+        };
+        last_now = now;
         publish_collection(
             &spool,
             &delivery_wake,
@@ -379,11 +502,11 @@ fn queue_events(
                 .unwrap_or_else(|| chunk[0].observed_at_utc_ms);
             pending.reset()?;
             drop(pending);
-            queue_overflow_snapshot(
+            queue_restart_snapshot(
                 spool,
                 collector_run_id,
                 next_sequence,
-                gap_started_at_utc_ms,
+                Some(gap_started_at_utc_ms),
                 chunk
                     .last()
                     .map_or(gap_started_at_utc_ms, |event| event.observed_at_utc_ms),
@@ -402,11 +525,14 @@ fn queue_events(
     Ok(())
 }
 
-fn queue_overflow_snapshot(
+/// Start a new run that opens with the current windows and tray applications. An
+/// overflow passes the start of the dropped span as an explicit gap; without one the
+/// core records the span since the old run's last event as a collector restart.
+fn queue_restart_snapshot(
     spool: &Arc<Mutex<PendingSpool>>,
     collector_run_id: &mut Vec<u8>,
     next_sequence: &mut u64,
-    gap_started_at_utc_ms: i64,
+    overflow_gap_started_at_utc_ms: Option<i64>,
     observed_at_utc_ms: i64,
     monotonic_ms: u64,
     current: CurrentSnapshot<'_>,
@@ -414,14 +540,16 @@ fn queue_overflow_snapshot(
     *collector_run_id = new_collector_run_id().context("failed to rotate collector run ID")?;
     *next_sequence = 1;
     let mut events = Vec::with_capacity(current.windows.len() + current.tray.len() + 1);
-    events.push(CollectorEvent {
-        observed_at_utc_ms,
-        monotonic_ms,
-        body: Some(collector_event::Body::MonitoringGap(MonitoringGap {
-            started_at_utc_ms: gap_started_at_utc_ms.min(observed_at_utc_ms),
-            reason: MonitoringGapReason::BufferOverflow as i32,
-        })),
-    });
+    if let Some(gap_started_at_utc_ms) = overflow_gap_started_at_utc_ms {
+        events.push(CollectorEvent {
+            observed_at_utc_ms,
+            monotonic_ms,
+            body: Some(collector_event::Body::MonitoringGap(MonitoringGap {
+                started_at_utc_ms: gap_started_at_utc_ms.min(observed_at_utc_ms),
+                reason: MonitoringGapReason::BufferOverflow as i32,
+            })),
+        });
+    }
     events.extend(current.windows.iter().map(|window| CollectorEvent {
         observed_at_utc_ms,
         monotonic_ms,
@@ -456,18 +584,43 @@ fn queue_overflow_snapshot(
         };
         let last_sequence = batch.last_sequence()?;
         if !pending.push(&batch)? {
-            bail!("collector spool cannot fit the overflow gap and newest window snapshot");
+            bail!("collector spool cannot fit the restart gap and newest window snapshot");
         }
         *next_sequence = last_sequence
             .checked_add(1)
             .context("collector event sequence overflow")?;
     }
     eprintln!(
-        "collector spool overflowed; queued an explicit monitoring gap, {} current windows and {} tray applications",
+        "collector started a new run{}; queued {} current windows and {} tray applications",
+        if overflow_gap_started_at_utc_ms.is_some() {
+            " after the spool overflowed"
+        } else {
+            ""
+        },
         current.windows.len(),
         current.tray.len()
     );
     Ok(())
+}
+
+/// A delivery problem that only the collection loop can repair, because repairing
+/// it may start a new collector run.
+#[derive(Debug, PartialEq)]
+enum DeliveryFault {
+    /// The oldest spooled batch can no longer be decoded, so nothing behind it can
+    /// be replayed in order.
+    UnreadableSpool,
+    /// The core will never accept the next batch of this run, nor any after it.
+    RejectedRun(Vec<u8>),
+}
+
+type DeliveryFaults = Arc<Mutex<Option<DeliveryFault>>>;
+
+fn take_delivery_fault(faults: &DeliveryFaults) -> Result<Option<DeliveryFault>> {
+    Ok(faults
+        .lock()
+        .map_err(|_| anyhow::anyhow!("collector delivery fault lock poisoned"))?
+        .take())
 }
 
 fn spawn_delivery_worker(
@@ -475,23 +628,27 @@ fn spawn_delivery_worker(
     spool: Arc<Mutex<PendingSpool>>,
     reset_request_path: PathBuf,
     reset_paused_path: PathBuf,
-) -> mpsc::Sender<()> {
+) -> (mpsc::Sender<()>, DeliveryFaults) {
     let (wake_sender, wake_receiver) = mpsc::channel();
+    let faults = DeliveryFaults::default();
+    let worker_faults = faults.clone();
     thread::spawn(move || {
         delivery_worker(
             &pipe_name,
             &spool,
+            &worker_faults,
             &wake_receiver,
             &reset_request_path,
             &reset_paused_path,
         )
     });
-    wake_sender
+    (wake_sender, faults)
 }
 
 fn delivery_worker(
     pipe_name: &str,
     spool: &Arc<Mutex<PendingSpool>>,
+    faults: &DeliveryFaults,
     wake_receiver: &mpsc::Receiver<()>,
     reset_request_path: &std::path::Path,
     reset_paused_path: &std::path::Path,
@@ -500,31 +657,39 @@ fn delivery_worker(
         .checked_sub(RECONCILE_INTERVAL)
         .unwrap_or_else(Instant::now);
     loop {
-        if reset_request_path.exists() || reset_paused_path.exists() {
+        // While a fault waits for the collection loop, the spool front is known to
+        // be undeliverable, so resending it would only repeat the failure.
+        let fault_pending = faults.lock().map_or(true, |fault| fault.is_some());
+        if reset_request_path.exists() || reset_paused_path.exists() || fault_pending {
             let _ = wake_receiver.recv_timeout(RESET_POLL_INTERVAL);
             continue;
         }
         let front = match spool.lock() {
-            Ok(mut pending) => match pending.front() {
-                Ok(front) => front,
-                Err(error) => {
-                    eprintln!("collector spool replay failed: {error}");
-                    return;
-                }
-            },
+            Ok(mut pending) => pending.front(),
             Err(_) => {
                 eprintln!("collector spool replay failed: lock poisoned");
                 return;
             }
         };
+        let front = match front {
+            Ok(front) => front,
+            Err(error) if crate::spool::is_io_error(&error) => {
+                eprintln!("collector spool replay deferred: {error:#}");
+                let _ = wake_receiver.recv_timeout(DELIVERY_RETRY_INTERVAL);
+                continue;
+            }
+            Err(error) => {
+                eprintln!("collector spool front is unreadable; discarding the spool: {error:#}");
+                report_delivery_fault(faults, DeliveryFault::UnreadableSpool);
+                continue;
+            }
+        };
 
         if let Some(batch) = front {
-            let last_sequence = match batch.last_sequence() {
-                Ok(sequence) => sequence,
-                Err(error) => {
-                    eprintln!("collector spool replay batch is invalid: {error}");
-                    return;
-                }
+            let Ok(last_sequence) = batch.last_sequence() else {
+                // `front` already validated the range; treat a failure as corruption.
+                report_delivery_fault(faults, DeliveryFault::UnreadableSpool);
+                continue;
             };
             if reset_request_path.exists() || reset_paused_path.exists() {
                 continue;
@@ -542,6 +707,18 @@ fn delivery_worker(
                             batch.first_sequence, last_sequence, report.peer_process_id
                         );
                     }
+                    continue;
+                }
+                Err(IpcError::BatchRejectedPermanently(reason)) => {
+                    eprintln!(
+                        "core can never accept collector event batch first={} last={}; abandoning the rest of its run: {reason}",
+                        batch.first_sequence, last_sequence
+                    );
+                    report_delivery_fault(
+                        faults,
+                        DeliveryFault::RejectedRun(batch.collector_run_id),
+                    );
+                    let _ = wake_receiver.recv_timeout(RESET_POLL_INTERVAL);
                     continue;
                 }
                 Err(error) => eprintln!(
@@ -566,6 +743,12 @@ fn delivery_worker(
         }
         let wait = RECONCILE_INTERVAL.saturating_sub(last_probe.elapsed());
         let _ = wake_receiver.recv_timeout(wait.max(Duration::from_millis(100)));
+    }
+}
+
+fn report_delivery_fault(faults: &DeliveryFaults, fault: DeliveryFault) {
+    if let Ok(mut slot) = faults.lock() {
+        *slot = Some(fault);
     }
 }
 
@@ -843,6 +1026,12 @@ impl InputAggregator {
                 .buckets
                 .remove(&key)
                 .expect("completed input bucket disappeared");
+            // The core rejects a minute that has not ended by the event carrying it.
+            // Only a clock that moved backwards produces one, and its counts are dropped.
+            if !key.anonymous_only && key.local_time.minute_started_at_utc_ms >= observed_at_utc_ms
+            {
+                continue;
+            }
             let Some(minute) = input_minute(key, counts) else {
                 self.overflowed = true;
                 continue;
@@ -945,6 +1134,18 @@ fn civil_from_days(days_since_unix_epoch: i64) -> (i32, u32, u32) {
     let month = month_prime + if month_prime < 10 { 3 } else { -9 };
     year += i64::from(month <= 2);
     (year as i32, month as u32, day as u32)
+}
+
+/// The timestamp to use for the next event of a run whose latest event was at
+/// `last_utc_ms`, or `None` when the clock moved back too far to continue the run.
+fn continue_run_clock(last_utc_ms: i64, now: i64) -> Option<i64> {
+    if now >= last_utc_ms {
+        Some(now)
+    } else if last_utc_ms - now <= CLOCK_ROLLBACK_TOLERANCE_MS {
+        Some(last_utc_ms)
+    } else {
+        None
+    }
 }
 
 fn unix_time_ms() -> i64 {
@@ -1229,6 +1430,53 @@ mod tests {
         assert_eq!(bucket.key_counts.len(), 1);
         assert_eq!(bucket.key_counts[0].scan_code, 0x1e);
         assert_eq!(bucket.key_counts[0].count, 3);
+    }
+
+    #[test]
+    fn a_run_clock_absorbs_small_backward_steps_and_restarts_on_large_ones() {
+        assert_eq!(continue_run_clock(10_000, 12_000), Some(12_000));
+        assert_eq!(continue_run_clock(10_000, 10_000), Some(10_000));
+        assert_eq!(
+            continue_run_clock(10_000, 10_000 - CLOCK_ROLLBACK_TOLERANCE_MS),
+            Some(10_000)
+        );
+        assert_eq!(
+            continue_run_clock(10_000, 10_000 - CLOCK_ROLLBACK_TOLERANCE_MS - 1),
+            None
+        );
+    }
+
+    #[test]
+    fn input_minutes_that_have_not_ended_by_their_event_are_not_emitted() {
+        let minute = local_time_facts(1_700_000_040_000).unwrap();
+        let identities = HashMap::from([(42, "path:c:\\apps\\focused.exe".to_owned())]);
+        let mut aggregator = InputAggregator::default();
+        aggregator
+            .add(
+                InputDrain {
+                    samples: vec![InputSample {
+                        minute_started_at_utc_ms: minute.minute_started_at_utc_ms,
+                        window_id: 42,
+                        kind: InputSampleKind::Mouse(MouseButton::Left),
+                        count: 1,
+                    }],
+                    overflowed: false,
+                },
+                &identities,
+            )
+            .unwrap();
+
+        // The wall clock moved back before the minute was sealed.
+        let events = aggregator.take_completed(
+            minute.minute_started_at_utc_ms - 5_000,
+            90_000,
+            LocalTimeFacts {
+                minute_started_at_utc_ms: i64::MAX,
+                ..minute
+            },
+        );
+        assert!(events.is_empty());
+        assert!(aggregator.buckets.is_empty());
     }
 
     #[test]

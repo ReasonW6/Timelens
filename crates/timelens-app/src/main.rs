@@ -32,7 +32,7 @@ use std::{
 use anyhow::{Context, Result, bail};
 use slint::{Image, ModelRc, Rgba8Pixel, SharedPixelBuffer, Timer, TimerMode, VecModel};
 use timelens_ipc::{
-    COLLECTOR_RESET_PAUSED_FILE, COLLECTOR_RESET_REQUEST_FILE, PROTOCOL_VERSION,
+    BatchRejection, COLLECTOR_RESET_PAUSED_FILE, COLLECTOR_RESET_REQUEST_FILE, PROTOCOL_VERSION,
     SingleInstanceGuard, current_pipe_name, run_server_collector_message, run_server_probe,
 };
 use timelens_storage::{
@@ -300,6 +300,7 @@ fn run_window(
         loop {
             let status = match run_server_collector_message(&pipe_name, COLLECTOR_NAMES, |batch| {
                 ingest_if_not_resetting(&server_storage, &server_data_directory, batch)
+                    .map_err(batch_rejection)
             }) {
                 Ok(report) => match server_storage
                     .lock()
@@ -565,6 +566,16 @@ fn ingest_if_not_resetting(
         ));
     }
     storage.ingest_event_batch(batch).map(|_| ())
+}
+
+/// A batch that contradicts durable state can never be stored by resending it, so
+/// the collector is told to abandon that run instead of retrying it forever.
+fn batch_rejection(error: timelens_storage::StorageError) -> BatchRejection {
+    if error.contradicts_durable_state() {
+        BatchRejection::permanent(error.to_string())
+    } else {
+        BatchRejection::transient(error.to_string())
+    }
 }
 
 fn collector_reset_active(data_directory: &Path) -> bool {

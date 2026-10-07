@@ -116,6 +116,7 @@ pub fn run_server_probe(pipe_name: &str, expected_peer_names: &[&str]) -> Result
         &Envelope::new(envelope::Body::Ack(Ack {
             through_sequence: sequence,
             accepted: true,
+            permanent: false,
         })),
     )?;
     Ok(report)
@@ -135,6 +136,7 @@ pub fn run_client_probe(pipe_name: &str, expected_peer_names: &[&str]) -> Result
         Some(envelope::Body::Ack(Ack {
             through_sequence: 1,
             accepted: true,
+            ..
         })) => Ok(report),
         _ => Err(IpcError::InvalidMessage(
             "server did not acknowledge the heartbeat".to_owned(),
@@ -142,14 +144,37 @@ pub fn run_client_probe(pipe_name: &str, expected_peer_names: &[&str]) -> Result
     }
 }
 
-pub fn run_server_collector_message<F, E>(
+/// Why the core did not persist an authenticated batch.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BatchRejection {
+    pub message: String,
+    /// The batch contradicts durable state, so resending it can never succeed.
+    pub permanent: bool,
+}
+
+impl BatchRejection {
+    pub fn transient(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+            permanent: false,
+        }
+    }
+
+    pub fn permanent(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+            permanent: true,
+        }
+    }
+}
+
+pub fn run_server_collector_message<F>(
     pipe_name: &str,
     expected_peer_names: &[&str],
     persist: F,
 ) -> Result<HandshakeReport>
 where
-    F: FnOnce(&EventBatch) -> std::result::Result<(), E>,
-    E: std::fmt::Display,
+    F: FnOnce(&EventBatch) -> std::result::Result<(), BatchRejection>,
 {
     let (mut pipe, report) = accept_authenticated_server(pipe_name, expected_peer_names)?;
     let message = protocol::read_frame(&mut pipe)?;
@@ -160,6 +185,7 @@ where
                 &Envelope::new(envelope::Body::Ack(Ack {
                     through_sequence: sequence,
                     accepted: true,
+                    permanent: false,
                 })),
             )?;
             return Ok(report);
@@ -172,21 +198,23 @@ where
         }
     };
     let through_sequence = batch.last_sequence()?;
-    if let Err(error) = persist(&batch) {
+    if let Err(rejection) = persist(&batch) {
         protocol::write_frame(
             &mut pipe,
             &Envelope::new(envelope::Body::Ack(Ack {
                 through_sequence,
                 accepted: false,
+                permanent: rejection.permanent,
             })),
         )?;
-        return Err(IpcError::BatchRejected(error.to_string()));
+        return Err(IpcError::BatchRejected(rejection.message));
     }
     protocol::write_frame(
         &mut pipe,
         &Envelope::new(envelope::Body::Ack(Ack {
             through_sequence,
             accepted: true,
+            permanent: false,
         })),
     )?;
     Ok(report)
@@ -208,10 +236,19 @@ pub fn run_client_event_batch(
         Some(envelope::Body::Ack(Ack {
             through_sequence: acknowledged,
             accepted: true,
+            ..
         })) if acknowledged == through_sequence => Ok(report),
         Some(envelope::Body::Ack(Ack {
             through_sequence: acknowledged,
             accepted: false,
+            permanent: true,
+        })) if acknowledged == through_sequence => Err(IpcError::BatchRejectedPermanently(
+            "the Timelens core can never persist the batch".to_owned(),
+        )),
+        Some(envelope::Body::Ack(Ack {
+            through_sequence: acknowledged,
+            accepted: false,
+            permanent: false,
         })) if acknowledged == through_sequence => Err(IpcError::BatchRejected(
             "the Timelens core did not persist the batch".to_owned(),
         )),
@@ -749,7 +786,7 @@ mod tests {
             run_server_collector_message(
                 &server_pipe,
                 &[server_name.as_str()],
-                |_| -> std::result::Result<(), &'static str> {
+                |_| -> std::result::Result<(), BatchRejection> {
                     panic!("a heartbeat must not invoke event persistence")
                 },
             )
@@ -768,7 +805,7 @@ mod tests {
         let server = thread::spawn(move || {
             run_server_collector_message(&server_pipe, &[server_name.as_str()], |batch| {
                 assert_eq!(batch.first_sequence, 1);
-                Ok::<_, &'static str>(())
+                Ok(())
             })
         });
 
@@ -788,7 +825,7 @@ mod tests {
         let server_name = current_name.clone();
         let server = thread::spawn(move || {
             run_server_collector_message(&server_pipe, &[server_name.as_str()], |_| {
-                Err::<(), _>("storage unavailable")
+                Err(BatchRejection::transient("storage unavailable"))
             })
         });
 
@@ -797,8 +834,33 @@ mod tests {
                 .unwrap_err();
         let server_error = server.join().unwrap().unwrap_err();
 
+        assert!(matches!(client_error, IpcError::BatchRejected(_)));
         assert!(client_error.to_string().contains("did not persist"));
         assert!(server_error.to_string().contains("storage unavailable"));
+    }
+
+    #[test]
+    fn permanently_rejected_event_batch_is_reported_as_unrecoverable() {
+        let current_name = current_executable_name();
+        let pipe_name = test_pipe_name();
+        let server_pipe = pipe_name.clone();
+        let server_name = current_name.clone();
+        let server = thread::spawn(move || {
+            run_server_collector_message(&server_pipe, &[server_name.as_str()], |_| {
+                Err(BatchRejection::permanent("sequence is not contiguous"))
+            })
+        });
+
+        let client_error =
+            run_client_event_batch(&pipe_name, &[current_name.as_str()], &test_batch())
+                .unwrap_err();
+        let server_error = server.join().unwrap().unwrap_err();
+
+        assert!(matches!(
+            client_error,
+            IpcError::BatchRejectedPermanently(_)
+        ));
+        assert!(server_error.to_string().contains("not contiguous"));
     }
 
     #[test]

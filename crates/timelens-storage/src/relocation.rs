@@ -254,6 +254,7 @@ impl Storage {
         ] {
             remove_file_if_present(&directory.join(name))?;
         }
+        remove_quarantined_collector_state(&directory)?;
         let _ = fs::remove_dir(directory);
         Ok(())
     }

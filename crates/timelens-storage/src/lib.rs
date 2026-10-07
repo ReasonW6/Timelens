@@ -38,9 +38,9 @@ use rusqlite::{
     Connection, OpenFlags, OptionalExtension, Transaction, TransactionBehavior, params,
 };
 use timelens_ipc::{
-    COLLECTOR_RESET_PAUSED_FILE, COLLECTOR_RESET_REQUEST_FILE, COLLECTOR_SPOOL_FILE,
-    COLLECTOR_SPOOL_KEY_FILE, COLLECTOR_TRAY_STATE_FILE, CollectorEvent, EventBatch,
-    IdentitySource, InputMinute, MonitoringGap, MonitoringGapReason, TrayTransition,
+    COLLECTOR_QUARANTINE_SUFFIX, COLLECTOR_RESET_PAUSED_FILE, COLLECTOR_RESET_REQUEST_FILE,
+    COLLECTOR_SPOOL_FILE, COLLECTOR_SPOOL_KEY_FILE, COLLECTOR_TRAY_STATE_FILE, CollectorEvent,
+    EventBatch, IdentitySource, InputMinute, MonitoringGap, MonitoringGapReason, TrayTransition,
     TrayTransitionKind, WindowObservation, WindowTransitionKind, collector_event,
 };
 use windows_sys::Win32::{
@@ -87,6 +87,20 @@ pub enum StorageError {
 }
 
 pub type Result<T> = std::result::Result<T, StorageError>;
+
+impl StorageError {
+    /// True when an ingest failure is deterministic for this batch and the stored
+    /// state, so resending the same batch can never succeed.
+    pub fn contradicts_durable_state(&self) -> bool {
+        match self {
+            Self::InvalidBatch(_) => true,
+            Self::Sqlite(error) => {
+                error.sqlite_error_code() == Some(rusqlite::ErrorCode::ConstraintViolation)
+            }
+            _ => false,
+        }
+    }
+}
 
 /// Before the next database access, latch corruption reported by any statement.
 /// All storage entrypoints use this connection, including UI and AI operations.
@@ -1020,10 +1034,14 @@ impl Storage {
             remove_file_if_present(&self.control_directory.join(COLLECTOR_SPOOL_FILE))?;
             remove_file_if_present(&self.control_directory.join(COLLECTOR_SPOOL_KEY_FILE))?;
             remove_file_if_present(&self.control_directory.join(COLLECTOR_TRAY_STATE_FILE))?;
+            remove_quarantined_collector_state(&self.control_directory)?;
             return self.clear_all();
         }
 
-        let clear_result = self.clear_all();
+        let clear_result = self.clear_all().and_then(|report| {
+            remove_quarantined_collector_state(&self.control_directory)?;
+            Ok(report)
+        });
         remove_file_if_present(&request_path)?;
         let resumed_at = Instant::now();
         while paused_path.exists() && resumed_at.elapsed() < timeout {
@@ -2694,6 +2712,18 @@ fn remove_file_if_present(path: &Path) -> Result<()> {
     }
 }
 
+/// Remove collector state the collector moved aside after finding it unreadable.
+fn remove_quarantined_collector_state(directory: &Path) -> Result<()> {
+    for name in [
+        COLLECTOR_SPOOL_FILE,
+        COLLECTOR_SPOOL_KEY_FILE,
+        COLLECTOR_TRAY_STATE_FILE,
+    ] {
+        remove_file_if_present(&directory.join(format!("{name}{COLLECTOR_QUARANTINE_SUFFIX}")))?;
+    }
+    Ok(())
+}
+
 fn wal_path(database_path: &Path) -> PathBuf {
     PathBuf::from(format!("{}-wal", database_path.display()))
 }
@@ -2947,6 +2977,45 @@ mod tests {
         let bytes = fs::read(database_path).unwrap();
         assert!(!contains_bytes(&bytes, b"private-marker"));
         assert!(!contains_bytes(&bytes, b"desktop-one"));
+    }
+
+    #[test]
+    fn a_run_that_goes_backwards_is_permanently_rejected_but_a_new_run_is_not() {
+        let directory = tempfile::tempdir().unwrap();
+        let storage = Storage::open(directory.path()).unwrap();
+        let opened = window_event(
+            WindowTransitionKind::Opened,
+            1_700_000_100_000,
+            10,
+            true,
+            true,
+        );
+        storage
+            .ingest_event_batch(&event_batch(1, 1, vec![opened.clone()]))
+            .unwrap();
+
+        let rolled_back = window_event(
+            WindowTransitionKind::Updated,
+            1_700_000_000_000,
+            20,
+            true,
+            false,
+        );
+        let error = storage
+            .ingest_event_batch(&event_batch(1, 2, vec![rolled_back]))
+            .unwrap_err();
+        assert!(error.contradicts_durable_state());
+        let skipped = storage
+            .ingest_event_batch(&event_batch(1, 3, vec![opened.clone()]))
+            .unwrap_err();
+        assert!(skipped.contradicts_durable_state());
+        assert!(!StorageError::Integrity("paused".into()).contradicts_durable_state());
+
+        let mut restarted = opened;
+        restarted.observed_at_utc_ms = 1_700_000_000_000;
+        storage
+            .ingest_event_batch(&event_batch(2, 1, vec![restarted]))
+            .unwrap();
     }
 
     #[test]

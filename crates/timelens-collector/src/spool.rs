@@ -11,8 +11,8 @@ use std::{
 use anyhow::{Context, Result, bail};
 use prost::Message;
 use timelens_ipc::{
-    COLLECTOR_SPOOL_FILE, COLLECTOR_SPOOL_KEY_FILE, COLLECTOR_TRAY_STATE_FILE, EventBatch,
-    TrayTransition,
+    COLLECTOR_QUARANTINE_SUFFIX, COLLECTOR_SPOOL_FILE, COLLECTOR_SPOOL_KEY_FILE,
+    COLLECTOR_TRAY_STATE_FILE, EventBatch, TrayTransition,
 };
 use windows_sys::Win32::{
     Foundation::{GetLastError, LocalFree},
@@ -70,6 +70,26 @@ struct Header {
 }
 
 impl PendingSpool {
+    /// Open the spool, or move an unreadable one aside and start empty. I/O errors
+    /// are returned unchanged because they may be transient (for example a sharing
+    /// violation); only content that can never be decoded is set aside. The core
+    /// records the undelivered span as a collector-restart gap.
+    pub fn open_or_quarantine(data_directory: &Path) -> Result<Self> {
+        match Self::open(data_directory) {
+            Ok(spool) => Ok(spool),
+            Err(error) if is_io_error(&error) => Err(error),
+            Err(error) => {
+                eprintln!(
+                    "collector spool is unreadable and was moved aside; starting an empty spool: {error:#}"
+                );
+                for name in [SPOOL_FILE_NAME, SPOOL_KEY_FILE_NAME, TRAY_STATE_FILE_NAME] {
+                    quarantine_file(&data_directory.join(name))?;
+                }
+                Self::open(data_directory)
+            }
+        }
+    }
+
     pub fn open(data_directory: &Path) -> Result<Self> {
         fs::create_dir_all(data_directory).with_context(|| {
             format!(
@@ -225,6 +245,29 @@ impl PendingSpool {
         }
         self.commit_header()?;
         Ok(true)
+    }
+
+    /// Drop every batch at the front that belongs to `run_id`. Runs are queued in
+    /// order, so this removes exactly the undeliverable remainder of that run.
+    pub fn discard_run(&mut self, run_id: &[u8]) -> Result<u64> {
+        let mut discarded = 0;
+        while let Some((front, total)) = self.read_front()? {
+            if front.collector_run_id != run_id {
+                break;
+            }
+            self.header.head = (self.header.head + total) % self.data_capacity;
+            self.header.used -= total;
+            self.header.count -= 1;
+            discarded += 1;
+        }
+        if discarded > 0 {
+            if self.header.count == 0 {
+                self.header.head = self.header.tail;
+                self.header.used = 0;
+            }
+            self.commit_header()?;
+        }
+        Ok(discarded)
     }
 
     pub fn reset(&mut self) -> Result<()> {
@@ -392,6 +435,27 @@ impl PendingSpool {
         self.active_header_slot = next_slot;
         Ok(())
     }
+}
+
+/// I/O failures may clear on retry; anything else means the stored bytes are unusable.
+pub fn is_io_error(error: &anyhow::Error) -> bool {
+    error
+        .chain()
+        .any(|cause| cause.downcast_ref::<std::io::Error>().is_some())
+}
+
+fn quarantine_file(path: &Path) -> Result<()> {
+    if !path.exists() {
+        return Ok(());
+    }
+    let mut target = path.as_os_str().to_owned();
+    target.push(COLLECTOR_QUARANTINE_SUFFIX);
+    fs::rename(path, &target).with_context(|| {
+        format!(
+            "failed to move unreadable collector state aside: {}",
+            path.display()
+        )
+    })
 }
 
 fn write_header_slot(file: &mut File, slot: usize, header: &Header) -> Result<()> {
@@ -739,6 +803,44 @@ mod tests {
         drop(spool);
         let reopened = PendingSpool::open_paths(&spool_path, &key_path, 64 * 1024).unwrap();
         assert!(reopened.is_empty());
+    }
+
+    #[test]
+    fn discarding_a_run_keeps_later_runs_in_order() {
+        let directory = tempfile::tempdir().unwrap();
+        let spool_path = directory.path().join(SPOOL_FILE_NAME);
+        let key_path = directory.path().join(SPOOL_KEY_FILE_NAME);
+        let mut spool = PendingSpool::open_paths(&spool_path, &key_path, 64 * 1024).unwrap();
+        let rejected = [batch(1, "rejected-one"), batch(2, "rejected-two")];
+        let mut next_run = batch(1, "next-run");
+        next_run.collector_run_id = vec![8; 16];
+        for item in rejected.iter().chain(std::iter::once(&next_run)) {
+            assert!(spool.push(item).unwrap());
+        }
+
+        assert_eq!(spool.discard_run(&[7; 16]).unwrap(), 2);
+        assert_eq!(spool.discard_run(&[7; 16]).unwrap(), 0);
+        assert_eq!(spool.front().unwrap(), Some(next_run.clone()));
+        drop(spool);
+        let mut reopened = PendingSpool::open_paths(&spool_path, &key_path, 64 * 1024).unwrap();
+        assert_eq!(reopened.len(), 1);
+        assert_eq!(reopened.front().unwrap(), Some(next_run));
+    }
+
+    #[test]
+    fn an_undecodable_spool_is_moved_aside_instead_of_blocking_startup() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut spool = PendingSpool::open(directory.path()).unwrap();
+        assert!(spool.push(&batch(1, "lost-marker")).unwrap());
+        drop(spool);
+        fs::remove_file(directory.path().join(SPOOL_KEY_FILE_NAME)).unwrap();
+        assert!(PendingSpool::open(directory.path()).is_err());
+
+        let recovered = PendingSpool::open_or_quarantine(directory.path()).unwrap();
+        assert!(recovered.is_empty());
+        let mut moved_aside = directory.path().join(SPOOL_FILE_NAME).into_os_string();
+        moved_aside.push(COLLECTOR_QUARANTINE_SUFFIX);
+        assert!(Path::new(&moved_aside).is_file());
     }
 
     fn contains_bytes(haystack: &[u8], needle: &[u8]) -> bool {
