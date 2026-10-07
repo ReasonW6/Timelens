@@ -815,14 +815,17 @@ impl Storage {
         }
 
         let mut compacted = false;
-        while self.exceeds_size_limit(policy.max_bytes, &mut compacted)?
+        while self
+            .exceeds_size_limit(policy.max_bytes, &mut compacted, || self.has_local_report())?
             && self.clean_oldest_local_report()?
         {
             outcome.report.report_items = outcome.report.report_items.saturating_add(1);
             compacted = false;
         }
 
-        while self.exceeds_size_limit(policy.max_bytes, &mut compacted)? {
+        while self.exceeds_size_limit(policy.max_bytes, &mut compacted, || {
+            Ok(oldest_detail_timestamp(&self.connection)?.is_some())
+        })? {
             let Some(oldest) = oldest_detail_timestamp(&self.connection)? else {
                 break;
             };
@@ -857,12 +860,22 @@ impl Storage {
     /// Whether the database stays over `max_bytes` once repacked. Deleted rows also
     /// leave pages partly empty, so live pages are only an upper bound until the
     /// database is repacked; it is repacked before that bound alone can delete history.
-    fn exceeds_size_limit(&self, max_bytes: u64, compacted: &mut bool) -> Result<bool> {
+    /// A database with nothing left to remove is not repacked, because retention runs
+    /// often and repacking holds the storage lock.
+    fn exceeds_size_limit(
+        &self,
+        max_bytes: u64,
+        compacted: &mut bool,
+        removable: impl FnOnce() -> Result<bool>,
+    ) -> Result<bool> {
         if self.live_database_bytes()? <= max_bytes {
             return Ok(false);
         }
         if *compacted {
             return Ok(true);
+        }
+        if !removable()? {
+            return Ok(false);
         }
         self.compact()?;
         *compacted = true;
@@ -1244,6 +1257,8 @@ fn oldest_detail_timestamp(connection: &Connection) -> Result<Option<i64>> {
                  WHERE ended_utc_ms IS NOT NULL
                 UNION ALL
                 SELECT minute_started_utc_ms FROM input_minute_buckets
+                UNION ALL
+                SELECT ended_utc_ms FROM system_intervals
              )",
             [],
             |row| row.get(0),
@@ -3700,6 +3715,79 @@ mod tests {
             .unwrap();
         assert_eq!(kept, remaining);
         assert!(database_files_bytes(storage.database_path()) <= max_bytes);
+    }
+
+    #[test]
+    fn a_database_over_its_limit_with_nothing_to_remove_is_not_repacked() {
+        let directory = tempfile::tempdir().unwrap();
+        let storage = Storage::open(directory.path()).unwrap();
+        let transaction = storage.connection.unchecked_transaction().unwrap();
+        for row in 0..40_000_i64 {
+            transaction
+                .execute(
+                    "INSERT INTO applications(
+                        identity, identity_source, first_observed_utc_ms, last_observed_utc_ms
+                     ) VALUES (?1, 1, 0, 0)",
+                    params![format!(r"path:c:\apps\an-application-{row:08}.exe")],
+                )
+                .unwrap();
+        }
+        transaction.commit().unwrap();
+        storage
+            .connection
+            .execute("DELETE FROM applications WHERE rowid > 30000", [])
+            .unwrap();
+        let free_pages = || -> i64 {
+            storage
+                .connection
+                .query_row(
+                    "SELECT CAST(freelist_count AS INTEGER) FROM pragma_freelist_count()",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap()
+        };
+        assert!(free_pages() > 0);
+        assert!(storage.live_database_bytes().unwrap() > 1024 * 1024);
+        storage
+            .set_retention_policy(RetentionPolicy {
+                days: None,
+                max_bytes: 1024 * 1024,
+            })
+            .unwrap();
+
+        let report = storage.apply_retention(1_700_000_000_000).unwrap();
+
+        assert_eq!(
+            report.report_items + report.activity_items + report.input_items,
+            0
+        );
+        assert!(free_pages() > 0);
+    }
+
+    #[test]
+    fn space_retention_counts_system_intervals_as_the_oldest_detail() {
+        let directory = tempfile::tempdir().unwrap();
+        let storage = Storage::open(directory.path()).unwrap();
+        let day = 86_400_000_i64;
+        storage
+            .connection
+            .execute(
+                "INSERT INTO system_intervals(
+                    kind, started_utc_ms, ended_utc_ms, duration_ms, timezone_offset_minutes
+                 ) VALUES ('locked', ?1, ?2, ?3, 0)",
+                params![FRAGMENTED_START, FRAGMENTED_START + 60_000, 60_000],
+            )
+            .unwrap();
+        assert_eq!(
+            oldest_detail_timestamp(&storage.connection).unwrap(),
+            Some(FRAGMENTED_START + 60_000)
+        );
+        let removed = storage
+            .cleanup_before(FRAGMENTED_START + 60_000 + day, "retention_space")
+            .unwrap();
+        assert!(removed.report.activity_items > 0);
+        assert_eq!(oldest_detail_timestamp(&storage.connection).unwrap(), None);
     }
 
     #[test]

@@ -1026,6 +1026,14 @@ impl Storage {
         Ok(())
     }
 
+    pub(crate) fn has_local_report(&self) -> Result<bool> {
+        self.connection
+            .query_row("SELECT EXISTS(SELECT 1 FROM local_reports)", [], |row| {
+                row.get(0)
+            })
+            .map_err(Into::into)
+    }
+
     pub(crate) fn clean_oldest_local_report(&self) -> Result<bool> {
         let report_id = self
             .connection
