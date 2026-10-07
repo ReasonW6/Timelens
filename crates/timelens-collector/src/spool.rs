@@ -279,6 +279,8 @@ impl PendingSpool {
     }
 
     pub fn reset(&mut self) -> Result<()> {
+        // A spool truncated behind the collector's back gets its full size back.
+        self.file.set_len(DATA_OFFSET + self.data_capacity)?;
         self.header.head = self.header.tail;
         self.header.used = 0;
         self.header.count = 0;
@@ -447,10 +449,13 @@ impl PendingSpool {
 }
 
 /// I/O failures may clear on retry; anything else means the stored bytes are unusable.
+/// Running out of bytes is not transient: the file is shorter than its header says.
 pub fn is_io_error(error: &anyhow::Error) -> bool {
-    error
-        .chain()
-        .any(|cause| cause.downcast_ref::<std::io::Error>().is_some())
+    error.chain().any(|cause| {
+        cause
+            .downcast_ref::<std::io::Error>()
+            .is_some_and(|error| error.kind() != std::io::ErrorKind::UnexpectedEof)
+    })
 }
 
 fn quarantine_file(path: &Path) -> Result<()> {
@@ -852,6 +857,47 @@ mod tests {
         let mut moved_aside = directory.path().join(SPOOL_FILE_NAME).into_os_string();
         moved_aside.push(COLLECTOR_QUARANTINE_SUFFIX);
         assert!(Path::new(&moved_aside).is_file());
+    }
+
+    #[test]
+    fn a_later_corruption_replaces_the_earlier_quarantine() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut moved_aside = directory.path().join(SPOOL_FILE_NAME).into_os_string();
+        moved_aside.push(COLLECTOR_QUARANTINE_SUFFIX);
+        for marker in ["first-marker", "second-marker"] {
+            let mut spool = PendingSpool::open_or_quarantine(directory.path()).unwrap();
+            assert!(spool.push(&batch(1, marker)).unwrap());
+            drop(spool);
+            let corrupted = fs::read(directory.path().join(SPOOL_FILE_NAME)).unwrap();
+            fs::remove_file(directory.path().join(SPOOL_KEY_FILE_NAME)).unwrap();
+
+            let recovered = PendingSpool::open_or_quarantine(directory.path()).unwrap();
+            assert!(recovered.is_empty());
+            assert_eq!(fs::read(&moved_aside).unwrap(), corrupted);
+        }
+    }
+
+    #[test]
+    fn a_spool_truncated_while_open_is_unreadable_and_recovers_on_reset() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut spool = PendingSpool::open(directory.path()).unwrap();
+        assert!(spool.push(&batch(1, "truncated-marker")).unwrap());
+        OpenOptions::new()
+            .write(true)
+            .open(directory.path().join(SPOOL_FILE_NAME))
+            .unwrap()
+            .set_len(DATA_OFFSET)
+            .unwrap();
+
+        let error = spool.front().unwrap_err();
+        assert!(!is_io_error(&error), "{error:#}");
+
+        spool.reset().unwrap();
+        let next = batch(2, "after-reset");
+        assert!(spool.push(&next).unwrap());
+        drop(spool);
+        let mut reopened = PendingSpool::open(directory.path()).unwrap();
+        assert_eq!(reopened.front().unwrap(), Some(next));
     }
 
     fn contains_bytes(haystack: &[u8], needle: &[u8]) -> bool {
