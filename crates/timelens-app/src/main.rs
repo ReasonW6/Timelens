@@ -22,7 +22,7 @@ use std::{
     path::{Path, PathBuf},
     rc::Rc,
     sync::{
-        Arc, Mutex,
+        Arc, Mutex, MutexGuard, TryLockError,
         atomic::{AtomicBool, Ordering},
         mpsc,
     },
@@ -283,14 +283,19 @@ fn run_window(
             .window()
             .set_size(slint::LogicalSize::new(width as f32, height as f32));
     }
-    let storage_status = {
+    // The collector control directory never moves, so the UI thread can read it
+    // without taking the storage lock.
+    let (storage_status, control_directory) = {
         let storage = storage
             .lock()
             .map_err(|_| anyhow::anyhow!("storage lock poisoned"))?;
-        format!(
-            "SQLCipher {} · schema v{}",
-            storage.cipher_version(),
-            storage.schema_version()?
+        (
+            format!(
+                "SQLCipher {} · schema v{}",
+                storage.cipher_version(),
+                storage.schema_version()?
+            ),
+            storage.control_directory().to_path_buf(),
         )
     };
     window.set_storage_status(storage_status.into());
@@ -493,10 +498,7 @@ fn run_window(
             match status {
                 CollectorStatus::Connected(message) => window.set_collector_status(message.into()),
                 CollectorStatus::Failed(error) => {
-                    if timer_storage
-                        .lock()
-                        .is_ok_and(|storage| collector_reset_active(storage.control_directory()))
-                    {
+                    if collector_reset_active(&control_directory) {
                         window.set_collector_status("正在安全暂停采集器…".into());
                     } else {
                         window.set_collector_status(format!("握手失败：{error}").into());
@@ -537,8 +539,8 @@ fn run_window(
             && (refresh_requested
                 || timer_last_refresh.borrow().elapsed() >= Duration::from_secs(2))
         {
-            match refresh_timeline(&window, &timer_storage, &timer_state).and_then(|_| {
-                if window.get_snapshot_open() {
+            match refresh_timeline(&window, &timer_storage, &timer_state).and_then(|refreshed| {
+                if refreshed && window.get_snapshot_open() {
                     refresh_snapshot_panel(
                         &window,
                         &timer_storage,
@@ -546,9 +548,11 @@ fn run_window(
                         &timer_snapshot_state,
                     )?;
                 }
-                Ok(())
+                Ok(refreshed)
             }) {
-                Ok(()) => *timer_last_refresh.borrow_mut() = Instant::now(),
+                Ok(true) => *timer_last_refresh.borrow_mut() = Instant::now(),
+                // Storage is busy with a long task; try again on a later tick.
+                Ok(false) => {}
                 Err(error) => window.set_action_status(format!("刷新失败：{error}").into()),
             }
         }
@@ -593,11 +597,23 @@ fn collector_reset_active(data_directory: &Path) -> bool {
         || data_directory.join(COLLECTOR_RESET_PAUSED_FILE).exists()
 }
 
+/// Lock storage from the UI thread without waiting. `None` means a long task such
+/// as a backup, relocation or retention cleanup holds it; the caller skips this
+/// round instead of freezing the window.
+fn try_lock_storage(storage: &Arc<Mutex<Storage>>) -> Result<Option<MutexGuard<'_, Storage>>> {
+    match storage.try_lock() {
+        Ok(guard) => Ok(Some(guard)),
+        Err(TryLockError::WouldBlock) => Ok(None),
+        Err(TryLockError::Poisoned(_)) => bail!("storage lock poisoned"),
+    }
+}
+
+/// Returns `false` without changing the view when storage is busy.
 fn refresh_timeline(
     window: &AppWindow,
     storage: &Arc<Mutex<Storage>>,
     ui_state: &Rc<RefCell<UiState>>,
-) -> Result<()> {
+) -> Result<bool> {
     let (range_started, range_ended, horizon_started, horizon_ended) = {
         let mut state = ui_state.borrow_mut();
         if state.follow_now && state.calendar_day.is_some() {
@@ -621,9 +637,9 @@ fn refresh_timeline(
         )
     };
     let (snapshot, overview, policy, paused) = {
-        let storage = storage
-            .lock()
-            .map_err(|_| anyhow::anyhow!("storage lock poisoned"))?;
+        let Some(storage) = try_lock_storage(storage)? else {
+            return Ok(false);
+        };
         (
             storage.timeline_snapshot(range_started, range_ended)?,
             storage.timeline_snapshot(horizon_started, horizon_ended.max(horizon_started + 1))?,
@@ -634,7 +650,7 @@ fn refresh_timeline(
     window.global::<CollectionState>().set_paused(paused);
     render_snapshot(window, ui_state, snapshot, policy);
     timeline_ui::render_overview(window, &ui_state.borrow(), &overview);
-    Ok(())
+    Ok(true)
 }
 
 fn render_snapshot(
@@ -1273,7 +1289,7 @@ fn refresh_snapshot_panel(
     storage: &Arc<Mutex<Storage>>,
     ui_state: &Rc<RefCell<UiState>>,
     snapshot_state: &Rc<RefCell<SnapshotUiState>>,
-) -> Result<()> {
+) -> Result<bool> {
     let (range_started, range_ended, selected_identity) = {
         let state = ui_state.borrow();
         (
@@ -1283,9 +1299,9 @@ fn refresh_snapshot_panel(
         )
     };
     let (policy, exclusions, slots) = {
-        let storage = storage
-            .lock()
-            .map_err(|_| anyhow::anyhow!("storage lock poisoned"))?;
+        let Some(storage) = try_lock_storage(storage)? else {
+            return Ok(false);
+        };
         (
             storage.snapshot_policy()?,
             storage.snapshot_exclusions()?,
@@ -1358,7 +1374,7 @@ fn refresh_snapshot_panel(
         None => "先在主界面选择应用".to_owned(),
     };
     window.set_snapshot_exclusion_label(exclusion_label.into());
-    Ok(())
+    Ok(true)
 }
 
 fn install_report_callback(
