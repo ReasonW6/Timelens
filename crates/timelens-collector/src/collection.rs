@@ -54,6 +54,17 @@ impl Filter {
             last_offset: 0,
         }
     }
+    /// The system state still in progress, ended at `now`, for a run that stops here.
+    pub fn current_system_interval(&self, now: i64, mono: u64, offset: i32) -> CollectorEvent {
+        system(
+            &self.system_kind,
+            self.system_start.min(now),
+            now,
+            mono,
+            mono.saturating_sub(self.system_mono),
+            offset,
+        )
+    }
     pub fn refresh(&mut self, directory: &Path) -> bool {
         if self.checked.elapsed() < Duration::from_secs(1) {
             return false;
@@ -308,6 +319,20 @@ fn session_kind() -> Option<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn the_system_state_in_progress_can_end_a_run() {
+        let directory = tempfile::tempdir().unwrap();
+        let filter = Filter::new(directory.path(), 1_000, 5);
+        let event = filter.current_system_interval(21_000, 25, 60);
+        assert_eq!((event.observed_at_utc_ms, event.monotonic_ms), (21_000, 25));
+        let Some(collector_event::Body::SystemInterval(interval)) = event.body else {
+            panic!("expected a system interval");
+        };
+        assert_eq!(interval.kind, "active");
+        assert_eq!(interval.started_utc_ms, 1_000);
+        assert_eq!(interval.duration_ms, 20);
+        assert_eq!(interval.timezone_offset_minutes, 60);
+    }
     #[test]
     fn wall_clock_edits_are_distinct_from_measured_suspend_time() {
         assert_eq!(clock_gap(21_000, 1_000, 1_000), (false, true));

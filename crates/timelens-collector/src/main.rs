@@ -314,7 +314,7 @@ fn collect_window_events(pipe_name: &str, data_directory: PathBuf) -> Result<()>
                     &filter.policy,
                     filter.blocked,
                 )?;
-                let sealed = input.take_completed(
+                let mut sealed = input.take_completed(
                     last_now,
                     mono,
                     LocalTimeFacts {
@@ -322,6 +322,13 @@ fn collect_window_events(pipe_name: &str, data_directory: PathBuf) -> Result<()>
                         ..local_time_facts(last_now)?
                     },
                 );
+                // End the old run where it last observed, even with no input pending,
+                // so the core does not count the rest of that run as unobserved.
+                sealed.push(filter.current_system_interval(
+                    last_now,
+                    mono,
+                    local_time_facts(last_now)?.timezone_offset_minutes,
+                ));
                 queue_events(
                     &spool,
                     &delivery_wake,

@@ -3205,6 +3205,73 @@ mod tests {
     }
 
     #[test]
+    fn an_active_state_ending_a_run_keeps_a_small_rollback_from_looking_like_a_gap() {
+        let directory = tempfile::tempdir().unwrap();
+        let storage = Storage::open(directory.path()).unwrap();
+        let ended = CollectorEvent {
+            observed_at_utc_ms: 1_700_000_020_000,
+            monotonic_ms: 20_010,
+            body: Some(collector_event::Body::SystemInterval(
+                timelens_ipc::SystemInterval {
+                    kind: "active".into(),
+                    started_utc_ms: 1_700_000_000_000,
+                    duration_ms: 20_000,
+                    timezone_offset_minutes: 0,
+                },
+            )),
+        };
+        storage
+            .ingest_event_batch(&event_batch(
+                1,
+                1,
+                vec![
+                    window_event(
+                        WindowTransitionKind::Opened,
+                        1_700_000_000_000,
+                        10,
+                        true,
+                        true,
+                    ),
+                    ended,
+                ],
+            ))
+            .unwrap();
+        // The clock went back three seconds after the run's last event.
+        storage
+            .ingest_event_batch(&event_batch(
+                2,
+                1,
+                vec![window_event(
+                    WindowTransitionKind::Opened,
+                    1_700_000_017_000,
+                    20_020,
+                    true,
+                    true,
+                )],
+            ))
+            .unwrap();
+
+        let gaps: i64 = storage
+            .connection
+            .query_row(
+                "SELECT COUNT(*) FROM data_availability WHERE reason = 'collector_restart'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(gaps, 0);
+        let closed: i64 = storage
+            .connection
+            .query_row(
+                "SELECT closed_utc_ms FROM window_instances WHERE run_id = ?1",
+                params![vec![1_u8; 16]],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(closed, 1_700_000_017_000);
+    }
+
+    #[test]
     fn current_window_state_lookup_uses_the_partial_index() {
         let directory = tempfile::tempdir().unwrap();
         let storage = Storage::open(directory.path()).unwrap();
