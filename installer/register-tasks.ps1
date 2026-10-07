@@ -125,10 +125,11 @@ if ($DataDirectory) {
     if ($data.Contains('"') -or $data.Length -le 3) { throw 'Invalid isolated data directory.' }
     $arguments += ' --data-dir "' + $data + '"'
 }
-# The core restarts the collector through its task, so an isolated install names
-# its own task. The collector itself never receives this argument.
+# The core restarts the collector through its task. It only assumes the default
+# task when nothing is isolated, so an isolated install names its task explicitly.
+# The collector itself never receives this argument.
 $coreArguments = $arguments
-if ($TaskPath -ne '\Timelens\') {
+if ($DataDirectory -or $TaskPath -ne '\Timelens\') {
     $coreArguments += ' --collector-task "' + $TaskPath + 'Collector"'
 }
 $coreTask = New-ScheduledTask `
