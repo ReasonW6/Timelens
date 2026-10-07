@@ -924,7 +924,7 @@ impl Storage {
                 SELECT ended_utc_ms FROM tray_background_intervals
                  WHERE ended_utc_ms IS NOT NULL AND ended_utc_ms < ?1
                 UNION ALL
-                SELECT ended_utc_ms FROM system_intervals WHERE ended_utc_ms < ?1
+                SELECT started_utc_ms FROM system_intervals WHERE ended_utc_ms < ?1
              )",
             params![cutoff_utc_ms],
             |row| row.get::<_, Option<i64>>(0),
@@ -1756,11 +1756,15 @@ fn close_stale_runs(
     resumed_at_utc_ms: i64,
     record_restart_gap: bool,
 ) -> Result<()> {
-    let last_reliable = transaction.query_row(
-        "SELECT MAX(last_observed_utc_ms) FROM collector_runs",
-        [],
-        |row| row.get::<_, Option<i64>>(0),
-    )?;
+    // The gap starts where the latest run stopped. After a clock rollback an older
+    // run can hold a later timestamp, which would hide a gap behind it.
+    let last_reliable = transaction
+        .query_row(
+            "SELECT last_observed_utc_ms FROM collector_runs ORDER BY rowid DESC LIMIT 1",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .optional()?;
     let Some(last_reliable) = last_reliable else {
         return Ok(());
     };
@@ -3156,6 +3160,51 @@ mod tests {
     }
 
     #[test]
+    fn a_restart_after_a_clock_rollback_still_records_its_gap() {
+        let directory = tempfile::tempdir().unwrap();
+        let storage = Storage::open(directory.path()).unwrap();
+        let opened = |at: i64, monotonic: u64| {
+            window_event(WindowTransitionKind::Opened, at, monotonic, true, true)
+        };
+        storage
+            .ingest_event_batch(&event_batch(1, 1, vec![opened(1_700_000_100_000, 10)]))
+            .unwrap();
+        // The clock went back, then that run stopped before reaching the old time.
+        storage
+            .ingest_event_batch(&event_batch(2, 1, vec![opened(1_700_000_050_000, 20)]))
+            .unwrap();
+        storage
+            .ingest_event_batch(&event_batch(
+                2,
+                2,
+                vec![window_event(
+                    WindowTransitionKind::Updated,
+                    1_700_000_060_000,
+                    10_020,
+                    true,
+                    false,
+                )],
+            ))
+            .unwrap();
+        storage
+            .ingest_event_batch(&event_batch(3, 1, vec![opened(1_700_000_070_000, 30)]))
+            .unwrap();
+
+        let gaps = storage
+            .connection
+            .prepare(
+                "SELECT started_utc_ms, ended_utc_ms FROM data_availability
+                 WHERE reason = 'collector_restart' ORDER BY started_utc_ms",
+            )
+            .unwrap()
+            .query_map([], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)))
+            .unwrap()
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .unwrap();
+        assert_eq!(gaps, vec![(1_700_000_060_000, 1_700_000_070_000)]);
+    }
+
+    #[test]
     fn current_window_state_lookup_uses_the_partial_index() {
         let directory = tempfile::tempdir().unwrap();
         let storage = Storage::open(directory.path()).unwrap();
@@ -3788,6 +3837,17 @@ mod tests {
             .unwrap();
         assert!(removed.report.activity_items > 0);
         assert_eq!(oldest_detail_timestamp(&storage.connection).unwrap(), None);
+        // The cleaned range starts where the deleted interval started, not where it ended.
+        let cleaned_from: i64 = storage
+            .connection
+            .query_row(
+                "SELECT started_utc_ms FROM data_availability
+                 WHERE data_class = 'activity' AND reason = 'retention_space'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(cleaned_from, FRAGMENTED_START);
     }
 
     #[test]
