@@ -14,6 +14,12 @@ env:
   CARGO_TERM_COLOR: always
   # SQLCipher's vendored OpenSSL needs a native Perl; Git for Windows' Perl is not enough.
   OPENSSL_SRC_PERL: C:\Strawberry\perl\bin\perl.exe
+  # The AI worker refuses to run elevated, and hosted runners are elevated, so these
+  # tests run separately as a standard user (see the last step).
+  NON_ELEVATED_TESTS: >-
+    --skip ordinary_worker_streams_all_three_protocols_over_real_loopback_http
+    --skip canceling_worker_closes_a_stalled_stream_without_waiting_for_provider
+    --skip worker_preserves_retry_after_and_redacts_credential_errors
 
 jobs:
   windows:
@@ -27,6 +33,8 @@ jobs:
         run: rustup show
 
       - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
 
       - name: cargo fmt
         run: cargo fmt --all -- --check
@@ -35,4 +43,47 @@ jobs:
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
       - name: cargo test
-        run: cargo test --workspace --release --no-fail-fast -- --test-threads=2
+        # The default TEMP uses the 8.3 short name (RUNNER~1), which canonicalized paths never match.
+        env:
+          TEMP: ${{ runner.temp }}
+          TMP: ${{ runner.temp }}
+        run: cargo test --workspace --release --no-fail-fast -- --test-threads=2 ${{ env.NON_ELEVATED_TESTS }}
+
+      - name: cargo test (AI worker, standard user)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $exe = cargo test --release -p timelens-ai-worker --test worker_boundary --no-run --message-format=json |
+            ForEach-Object { $_ | ConvertFrom-Json } |
+            Where-Object { $_.reason -eq 'compiler-artifact' -and $_.target.name -eq 'worker_boundary' -and $_.executable } |
+            Select-Object -Last 1 -ExpandProperty executable
+          if (-not $exe) { throw 'worker_boundary test executable not found' }
+
+          # A throwaway standard account; Performance Log Users grants the batch logon a scheduled task needs.
+          $user = 'timelens-ci'
+          $password = "Aa1!$([guid]::NewGuid().ToString('N'))"
+          New-LocalUser -Name $user -Password (ConvertTo-SecureString $password -AsPlainText -Force) -PasswordNeverExpires | Out-Null
+          Add-LocalGroupMember -Group 'Users' -Member $user
+          Add-LocalGroupMember -Group 'Performance Log Users' -Member $user
+          icacls $env:GITHUB_WORKSPACE /grant "${user}:(OI)(CI)RX" /Q | Out-Null
+
+          $dir = Join-Path $env:RUNNER_TEMP 'standard-user-tests'
+          New-Item -ItemType Directory -Force $dir | Out-Null
+          icacls $dir /grant "${user}:(OI)(CI)F" /Q | Out-Null
+          $log = Join-Path $dir 'output.log'
+          $code = Join-Path $dir 'exit-code.txt'
+          $script = Join-Path $dir 'run.cmd'
+          Set-Content -Encoding ascii $script "@echo off`r`n`"$exe`" --test-threads=2 > `"$log`" 2>&1`r`n> `"$code`" echo %ERRORLEVEL%"
+
+          $action = New-ScheduledTaskAction -Execute 'cmd.exe' -Argument "/c `"$script`""
+          Register-ScheduledTask -TaskName 'timelens-worker-tests' -Action $action -User $user -Password $password -RunLevel Limited | Out-Null
+          Start-ScheduledTask -TaskName 'timelens-worker-tests'
+
+          $deadline = (Get-Date).AddMinutes(10)
+          while (-not (Test-Path $code) -and (Get-Date) -lt $deadline) { Start-Sleep -Seconds 2 }
+          if (Test-Path $log) { Get-Content $log }
+          if (-not (Test-Path $code)) {
+            Get-ScheduledTaskInfo -TaskName 'timelens-worker-tests' | Format-List
+            throw 'standard-user test run did not finish'
+          }
+          exit [int](Get-Content $code).Trim()
