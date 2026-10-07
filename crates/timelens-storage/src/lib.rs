@@ -1750,48 +1750,53 @@ fn close_stale_runs(
         return Ok(());
     };
 
+    // Open activity ends at its run's last event. A new run that begins earlier than
+    // that means the clock went back; ending the old activity where the new run
+    // begins keeps the repeated span from being counted twice.
     transaction.execute(
         "UPDATE window_state_intervals AS states SET
-            ended_utc_ms = (
+            ended_utc_ms = MAX(states.started_utc_ms, MIN(?1, (
                 SELECT runs.last_observed_utc_ms
                 FROM window_instances AS instances
                 JOIN collector_runs AS runs ON runs.run_id = instances.run_id
                 WHERE instances.instance_id = states.window_instance_id
-            ),
-            ended_monotonic_ms = (
-                SELECT runs.last_monotonic_ms
+            ))),
+            ended_monotonic_ms = MAX(states.started_monotonic_ms, (
+                SELECT runs.last_monotonic_ms - MAX(0, runs.last_observed_utc_ms - ?1)
                 FROM window_instances AS instances
                 JOIN collector_runs AS runs ON runs.run_id = instances.run_id
                 WHERE instances.instance_id = states.window_instance_id
-            )
+            ))
          WHERE ended_utc_ms IS NULL",
-        [],
+        params![resumed_at_utc_ms],
     )?;
     transaction.execute(
         "UPDATE window_instances SET
-            closed_utc_ms = (
+            closed_utc_ms = MAX(opened_utc_ms, MIN(?1, (
                 SELECT last_observed_utc_ms FROM collector_runs
                 WHERE collector_runs.run_id = window_instances.run_id
-            ),
-            closed_monotonic_ms = (
-                SELECT last_monotonic_ms FROM collector_runs
+            ))),
+            closed_monotonic_ms = MAX(opened_monotonic_ms, (
+                SELECT last_monotonic_ms - MAX(0, last_observed_utc_ms - ?1)
+                FROM collector_runs
                 WHERE collector_runs.run_id = window_instances.run_id
-            )
+            ))
          WHERE closed_utc_ms IS NULL",
-        [],
+        params![resumed_at_utc_ms],
     )?;
     transaction.execute(
         "UPDATE tray_background_intervals AS tray SET
-            ended_utc_ms = (
+            ended_utc_ms = MAX(tray.started_utc_ms, MIN(?1, (
                 SELECT last_observed_utc_ms FROM collector_runs
                 WHERE collector_runs.run_id = tray.start_run_id
-            ),
-            ended_monotonic_ms = (
-                SELECT last_monotonic_ms FROM collector_runs
+            ))),
+            ended_monotonic_ms = MAX(tray.started_monotonic_ms, (
+                SELECT last_monotonic_ms - MAX(0, last_observed_utc_ms - ?1)
+                FROM collector_runs
                 WHERE collector_runs.run_id = tray.start_run_id
-            )
+            ))
          WHERE ended_utc_ms IS NULL",
-        [],
+        params![resumed_at_utc_ms],
     )?;
     if record_restart_gap && resumed_at_utc_ms > last_reliable {
         transaction.execute(
@@ -3064,6 +3069,75 @@ mod tests {
         storage
             .ingest_event_batch(&event_batch(2, 1, vec![restarted]))
             .unwrap();
+    }
+
+    #[test]
+    fn a_run_after_a_clock_rollback_ends_the_previous_runs_activity_where_it_begins() {
+        let directory = tempfile::tempdir().unwrap();
+        let storage = Storage::open(directory.path()).unwrap();
+        storage
+            .ingest_event_batch(&event_batch(
+                1,
+                1,
+                vec![
+                    window_event(
+                        WindowTransitionKind::Opened,
+                        1_700_000_000_000,
+                        10,
+                        true,
+                        true,
+                    ),
+                    window_event(
+                        WindowTransitionKind::Updated,
+                        1_700_000_100_000,
+                        100_010,
+                        true,
+                        false,
+                    ),
+                ],
+            ))
+            .unwrap();
+
+        // The clock went back 50 seconds before the next run started.
+        storage
+            .ingest_event_batch(&event_batch(
+                2,
+                1,
+                vec![window_event(
+                    WindowTransitionKind::Opened,
+                    1_700_000_050_000,
+                    100_020,
+                    true,
+                    true,
+                )],
+            ))
+            .unwrap();
+
+        let (closed, closed_monotonic): (i64, i64) = storage
+            .connection
+            .query_row(
+                "SELECT closed_utc_ms, closed_monotonic_ms FROM window_instances
+                 WHERE run_id = ?1",
+                params![vec![1_u8; 16]],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!((closed, closed_monotonic), (1_700_000_050_000, 50_010));
+        // The state that began after the new run's start is left with no length.
+        let last_state: (i64, i64) = storage
+            .connection
+            .query_row(
+                "SELECT states.started_utc_ms, states.ended_utc_ms
+                 FROM window_state_intervals AS states
+                 JOIN window_instances AS instances
+                   ON instances.instance_id = states.window_instance_id
+                 WHERE instances.run_id = ?1
+                 ORDER BY states.started_utc_ms DESC LIMIT 1",
+                params![vec![1_u8; 16]],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(last_state, (1_700_000_100_000, 1_700_000_100_000));
     }
 
     #[test]
