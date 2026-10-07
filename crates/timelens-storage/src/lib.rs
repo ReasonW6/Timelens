@@ -798,8 +798,9 @@ impl Storage {
     pub fn apply_retention(&self, now_utc_ms: i64) -> Result<RetentionReport> {
         let policy = self.retention_policy()?;
         // Fold the WAL back first so the released-bytes figure does not count log
-        // pages that any checkpoint would reclaim anyway.
-        self.checkpoint()?;
+        // pages that any checkpoint would reclaim anyway. This only sharpens that
+        // figure, so a read-only (quarantined) database still runs retention as before.
+        let _ = self.checkpoint();
         let before_bytes = database_files_bytes(&self.database_path);
         let mut outcome = CleanupOutcome::default();
         let activity_cutoff = policy
