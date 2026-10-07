@@ -537,7 +537,7 @@ impl Storage {
         let report = self.load_local_report(report_id)?;
         let apps=report.applications.iter().map(|app|{
             let mut item=serde_json::json!({"name":app.display_name,"opened_ms":app.opened_ms,"displayed_ms":app.displayed_ms,"focused_ms":app.focused_ms,"background_ms":app.background_ms,"windows":app.window_count,"keyboard":app.keyboard_count,"left_clicks":app.left_click_count,"middle_clicks":app.middle_click_count,"right_clicks":app.right_click_count});
-            if include_paths {let path=self.connection.query_row("SELECT executable_path FROM application_metadata_revisions WHERE application_identity=? ORDER BY effective_utc_ms DESC LIMIT 1",params![app.identity],|r|r.get::<_,String>(0)).optional()?.unwrap_or_default();item["executable_path"]=path.into();}Ok(item)
+            if include_paths {let path=self.connection.query_row("SELECT executable_path FROM application_metadata_revisions WHERE application_identity=? ORDER BY effective_utc_ms DESC LIMIT 1",params![app.identity],|r|r.get::<_,Option<String>>(0)).optional()?.flatten().unwrap_or_default();item["executable_path"]=path.into();}Ok(item)
         }).collect::<Result<Vec<_>>>()?;
         let value = serde_json::json!({"format_version":1,"rules_version":report.rules_version,"started_utc_ms":report.range_started_utc_ms,"ended_utc_ms":report.range_ended_utc_ms,"generated_utc_ms":report.generated_utc_ms,"covered_ms":report.covered_ms,"applications":apps,"gaps":report.gaps.iter().map(|g|serde_json::json!({"category":g.data_class,"reason":g.reason,"started_utc_ms":g.started_utc_ms,"ended_utc_ms":g.ended_utc_ms})).collect::<Vec<_>>()});
         let bytes = match format {
@@ -665,6 +665,23 @@ mod tests {
         let text = fs::read_to_string(exported).unwrap();
         assert!(!text.contains("identity"));
         assert!(!text.contains("private"));
+        // Packaged applications have no executable path.
+        source
+            .connection
+            .execute(
+                "UPDATE application_metadata_revisions SET executable_path = NULL",
+                [],
+            )
+            .unwrap();
+        let with_paths = folder.path().join("report-with-paths.csv");
+        source
+            .export_report(report.id, &with_paths, ExportFormat::Csv, true)
+            .unwrap();
+        assert!(
+            fs::read_to_string(with_paths)
+                .unwrap()
+                .contains("executable_path")
+        );
         let mut zip = ZipArchive::new(File::open(&archive).unwrap()).unwrap();
         let plain = read_entry(&mut zip, "database.sqlite3", None, MAX_DB).unwrap();
         assert_eq!(&plain[..16], b"SQLite format 3\0");
