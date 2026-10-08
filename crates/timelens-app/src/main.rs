@@ -83,8 +83,17 @@ fn main() -> Result<()> {
                 thread::sleep(Duration::from_millis(100));
             }
             Err(error) => {
-                if tray::activate_existing(false) {
-                    return Ok(());
+                // The running core may still be starting, for example right after
+                // install or logon; give its tray window a moment to appear.
+                let deadline = Instant::now() + Duration::from_secs(5);
+                loop {
+                    if tray::activate_existing(false) {
+                        return Ok(());
+                    }
+                    if Instant::now() >= deadline {
+                        break;
+                    }
+                    thread::sleep(Duration::from_millis(200));
                 }
                 return Err(error)
                     .context("Timelens is already running, but its window is not ready");
@@ -476,6 +485,8 @@ fn run_window(
     let timer = Timer::default();
     let mut recovery_shown = false;
     let mut data_generation = ai_ui::data_generation();
+    let started = Instant::now();
+    let mut collector_seen: Option<Instant> = None;
     timer.start(TimerMode::Repeated, Duration::from_millis(200), move || {
         let Some(window) = weak.upgrade() else {
             return;
@@ -496,7 +507,10 @@ fn run_window(
         }
         while let Ok(status) = status_receiver.try_recv() {
             match status {
-                CollectorStatus::Connected(message) => window.set_collector_status(message.into()),
+                CollectorStatus::Connected(message) => {
+                    collector_seen = Some(Instant::now());
+                    window.set_collector_status(message.into());
+                }
                 CollectorStatus::Failed(error) => {
                     if collector_reset_active(&control_directory) {
                         window.set_collector_status("正在安全暂停采集器…".into());
@@ -506,6 +520,11 @@ fn run_window(
                 }
             }
         }
+        window.set_collector_state(collector_state(
+            started.elapsed(),
+            collector_seen.map(|seen| seen.elapsed()),
+            collector_reset_active(&control_directory),
+        ));
         let mut refresh_requested = false;
         if ai_ui::data_generation() != data_generation {
             data_generation = ai_ui::data_generation();
@@ -589,6 +608,24 @@ fn batch_rejection(error: timelens_storage::StorageError) -> BatchRejection {
         BatchRejection::permanent(error.to_string())
     } else {
         BatchRejection::transient(error.to_string())
+    }
+}
+
+/// A healthy collector delivers a batch or heartbeat at least every 30 seconds.
+const COLLECTOR_SILENCE: Duration = Duration::from_secs(90);
+
+/// 0: delivering, 1: still waiting for the first delivery, 2: silent. A
+/// maintenance pause is intentional, so it never reads as a failure.
+fn collector_state(
+    since_start: Duration,
+    since_delivery: Option<Duration>,
+    resetting: bool,
+) -> i32 {
+    match since_delivery {
+        _ if resetting => 0,
+        Some(elapsed) if elapsed < COLLECTOR_SILENCE => 0,
+        None if since_start < COLLECTOR_SILENCE => 1,
+        _ => 2,
     }
 }
 
@@ -1730,6 +1767,16 @@ mod tests {
             activity_rows: Vec::new(),
             selected_activity: None,
         }
+    }
+
+    #[test]
+    fn collector_state_waits_then_reports_silence() {
+        let second = Duration::from_secs(1);
+        assert_eq!(collector_state(5 * second, None, false), 1);
+        assert_eq!(collector_state(120 * second, None, false), 2);
+        assert_eq!(collector_state(120 * second, Some(10 * second), false), 0);
+        assert_eq!(collector_state(600 * second, Some(100 * second), false), 2);
+        assert_eq!(collector_state(600 * second, None, true), 0);
     }
 
     #[test]

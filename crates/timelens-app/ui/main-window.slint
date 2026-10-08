@@ -97,6 +97,8 @@ export component AppWindow inherits Window {
 
     in property <string> storage-status;
     in property <string> collector-status;
+    // 0 delivering, 1 waiting for the first delivery after start, 2 silent.
+    in property <int> collector-state: 1;
     in property <string> data-path;
     in property <string> build-version;
     in property <string> range-label;
@@ -169,8 +171,13 @@ export component AppWindow inherits Window {
     private property <bool> range-options: false;
     private property <bool> clear-confirm-open: false;
     private property <bool> delete-snapshot-confirm: false;
-    changed clear-confirm-open => { Theme.modal-open = root.clear-confirm-open || root.delete-snapshot-confirm; }
-    changed delete-snapshot-confirm => { Theme.modal-open = root.clear-confirm-open || root.delete-snapshot-confirm; }
+    // A shorter retention deletes history at once, so it is confirmed first.
+    private property <int> pending-retention-days: -1;
+    private property <bool> pending-retention-snapshots: false;
+    private property <bool> retention-confirm-open: root.pending-retention-days >= 0;
+    private property <bool> any-modal-open: root.clear-confirm-open || root.delete-snapshot-confirm || root.retention-confirm-open;
+    changed any-modal-open => { Theme.modal-open = root.any-modal-open; }
+    private property <bool> recording-unavailable: !CollectionState.paused && root.collector-state == 2;
     in-out property <string> app-search;
     private property <bool> showing-activity: root.selected-is-activity && root.page == 0;
     in-out property <float> selection-left: 0;
@@ -207,16 +214,37 @@ export component AppWindow inherits Window {
     callback snapshot-toggle-exclusion;
     callback report-generate;
 
+    pure function shortens(current-days: int, next-days: int) -> bool {
+        // Zero means keep forever.
+        return next-days > 0 && (current-days == 0 || next-days < current-days);
+    }
+    function choose-retention(days: int) {
+        if root.shortens(root.retention-days, days) {
+            root.pending-retention-snapshots = false;
+            root.pending-retention-days = days;
+        } else {
+            root.retention-selected(days);
+        }
+    }
+    function choose-snapshot-retention(days: int) {
+        if root.shortens(root.snapshot-retention-days, days) {
+            root.pending-retention-snapshots = true;
+            root.pending-retention-days = days;
+        } else {
+            root.snapshot-retention-selected(days);
+        }
+    }
+
     body := FocusScope {
-        enabled: !root.clear-confirm-open && !root.delete-snapshot-confirm;
+        enabled: !root.any-modal-open;
         focus-on-tab-navigation: false;
         focus-on-click: false;
         capture-key-pressed(event) => {
-            if root.clear-confirm-open || root.delete-snapshot-confirm { return accept; }
+            if root.any-modal-open { return accept; }
             return reject;
         }
         capture-key-released(event) => {
-            if root.clear-confirm-open || root.delete-snapshot-confirm { return accept; }
+            if root.any-modal-open { return accept; }
             return reject;
         }
         HorizontalLayout {
@@ -240,10 +268,10 @@ export component AppWindow inherits Window {
                     Rectangle { vertical-stretch: 1; }
                     HorizontalLayout {
                         height: 35px; padding-left: 14px; spacing: 12px;
-                        Rectangle { width: 20px; Image { width: 20px; height: 20px; y: (parent.height - self.height) / 2; source: CollectionState.paused ? @image-url("icons/player-pause.svg") : @image-url("icons/clock.svg"); colorize: Theme.muted; } }
-                        Note { text: CollectionState.paused ? "已暂停记录" : "正在记录"; vertical-alignment: center; }
+                        Rectangle { width: 20px; Image { width: 20px; height: 20px; y: (parent.height - self.height) / 2; source: CollectionState.paused ? @image-url("icons/player-pause.svg") : root.recording-unavailable ? @image-url("icons/x.svg") : @image-url("icons/clock.svg"); colorize: root.recording-unavailable ? Theme.danger : Theme.muted; } }
+                        Note { text: CollectionState.paused ? "已暂停记录" : root.collector-state == 2 ? "采集器未连接" : root.collector-state == 1 ? "正在连接采集器…" : "正在记录"; color: root.recording-unavailable ? Theme.danger : Theme.muted; vertical-alignment: center; }
                     }
-                    Action { width: 156px; danger: true; text: CollectionState.paused ? "继续记录" : "暂停记录"; enabled: !CollectionState.busy && !root.action-busy; clicked => { CollectionState.paused = !CollectionState.paused; CollectionState.action(0); } }
+                    Action { width: 156px; accent: CollectionState.paused; text: CollectionState.paused ? "继续记录" : "暂停记录"; enabled: !CollectionState.busy && !root.action-busy; clicked => { CollectionState.paused = !CollectionState.paused; CollectionState.action(0); } }
                     Rectangle { height: 12px; }
                     Rule { }
                     settings-nav := NavItem { text: "设置"; icon: @image-url("icons/settings.svg"); selected: root.page == 5; clicked => { root.navigate(5); } }
@@ -266,7 +294,7 @@ export component AppWindow inherits Window {
                             Action { width: 36px; quiet: true; icon: @image-url("icons/chevron-left.svg"); accessible-label: "前一天"; clicked => { root.day-selected(-1); } }
                             Action { width: 64px; text: "今天"; clicked => { root.today-selected(); } }
                             Action { width: 36px; quiet: true; icon: @image-url("icons/chevron-right.svg"); accessible-label: "后一天"; enabled: root.can-next-day; clicked => { root.day-selected(1); } }
-                            Action { width: 100px; text: "生成总结"; accent: true; clicked => { root.navigate(4); } }
+                            Action { width: 100px; text: "生成总结"; accent: true; clicked => { AiState.page = 0; root.navigate(4); } }
                         }
                         Rule { }
                         HorizontalLayout {
@@ -330,7 +358,7 @@ export component AppWindow inherits Window {
                             spacing: 14px;
                             Rectangle { height: 36px; Image { width: 32px; height: 32px; x: (parent.width - self.width) / 2; y: 2px; source: @image-url("icons/clock.svg"); colorize: Theme.muted; } }
                             SectionTitle { text: root.apps.length == 0 ? "这一天还没有记录" : "这段时间没有聚焦活动"; horizontal-alignment: center; }
-                            Note { text: CollectionState.paused ? "记录已暂停。你可以回看其他日期，或从左下角继续记录。" : "应用活动会显示在这里。你也可以先回看其他日期。"; horizontal-alignment: center; }
+                            Note { text: CollectionState.paused ? "记录已暂停。你可以回看其他日期，或从左下角继续记录。" : root.recording-unavailable ? "采集器没有连接，新的活动暂时不会被记录。Timelens 会自动尝试重启它；如果一直这样，请重新登录 Windows 或重新运行安装程序。" : "应用活动会显示在这里。你也可以先回看其他日期。"; horizontal-alignment: center; }
                             HorizontalLayout { alignment: center; Action { width: 144px; text: "查看前一天"; clicked => { root.day-selected(-1); } } }
                         }
                     }
@@ -388,7 +416,7 @@ export component AppWindow inherits Window {
                             shot-touch := TouchArea { mouse-cursor: pointer; clicked => { shot-key.focus(); root.snapshot-row-selected(index); } }
                             shot-key := FocusScope { width: 0px; key-pressed(event) => { if event.text == " " || event.text == "\n" { root.snapshot-row-selected(index); return accept; } return reject; } }
                         } }
-                        if root.snapshots.length == 0 : Note { text: "当前时段没有快照。快照记录默认关闭，可在右侧配置。"; }
+                        if root.snapshots.length == 0 : Note { text: root.snapshot-enabled ? "当前时段没有快照。定时快照已开启，新的快照会按右侧的间隔出现在这里。" : "当前时段没有快照。定时快照已关闭，可在右侧开启。"; }
                     }
                     if root.page == 3 : VerticalLayout {
                         spacing: 14px;
@@ -457,9 +485,9 @@ export component AppWindow inherits Window {
                             Note { text: "当前策略 " + root.retention-value; }
                             HorizontalLayout {
                                 spacing: 8px;
-                                Action { width: 80px; text: "7 天"; selected: root.retention-days == 7; clicked => { root.retention-selected(7); } }
-                                Action { width: 80px; text: "30 天"; selected: root.retention-days == 30; clicked => { root.retention-selected(30); } }
-                                Action { width: 80px; text: "90 天"; selected: root.retention-days == 90; clicked => { root.retention-selected(90); } }
+                                Action { width: 80px; text: "7 天"; selected: root.retention-days == 7; clicked => { root.choose-retention(7); } }
+                                Action { width: 80px; text: "30 天"; selected: root.retention-days == 30; clicked => { root.choose-retention(30); } }
+                                Action { width: 80px; text: "90 天"; selected: root.retention-days == 90; clicked => { root.choose-retention(90); } }
                                 Action { width: 80px; text: "永久"; selected: root.retention-days == 0; clicked => { root.retention-selected(0); } }
                                 Rectangle { horizontal-stretch: 1; }
                             }
@@ -560,7 +588,7 @@ export component AppWindow inherits Window {
                         Rectangle { height: 14px; }
                         Rule { }
                         Action { text: "查看时段快照"; icon: @image-url("icons/photo.svg"); quiet: true; clicked => { root.navigate(2); } }
-                        Action { text: "生成本地报告"; icon: @image-url("icons/file-description.svg"); quiet: true; clicked => { root.navigate(3); root.report-generate(); } }
+                        Action { text: "生成本地报告"; icon: @image-url("icons/file-description.svg"); quiet: true; clicked => { root.stats-tab = 0; root.navigate(3); root.report-generate(); } }
                     }
                     if root.page == 2 : VerticalLayout {
                         spacing: 14px;
@@ -570,17 +598,18 @@ export component AppWindow inherits Window {
                         Rule { }
                         Label { text: "拍摄间隔"; }
                         HorizontalLayout { Action { text: "1 分钟"; selected: root.snapshot-interval-minutes == 1; clicked => { root.snapshot-interval-selected(1); } } Action { text: "3 分钟"; selected: root.snapshot-interval-minutes == 3; clicked => { root.snapshot-interval-selected(3); } } Action { text: "5 分钟"; selected: root.snapshot-interval-minutes == 5; clicked => { root.snapshot-interval-selected(5); } } }
-                        HorizontalLayout { for minutes in [10, 15, 30, 60] : Action { text: minutes + " 分"; min-width: 54px; selected: root.snapshot-interval-minutes == minutes; clicked => { root.snapshot-interval-selected(minutes); } } }
-Label { text: "拍摄屏幕"; }
+                        HorizontalLayout { for minutes in [10, 15, 30, 60] : Action { text: minutes + " 分钟"; min-width: 54px; selected: root.snapshot-interval-minutes == minutes; clicked => { root.snapshot-interval-selected(minutes); } } }
+                        Label { text: "拍摄屏幕"; }
                         Action { text: root.snapshot-all-displays ? "全部显示器" : "当前活动显示器"; clicked => { root.snapshot-toggle-target(); } }
                         Note { text: "单屏拍摄优先选择聚焦窗口所在的显示器。"; }
                         Rule { }
                         Label { text: "图片保留 · 上限 " + root.snapshot-capacity; }
-                        HorizontalLayout { Action { text: "7 天"; selected: root.snapshot-retention-days == 7; clicked => { root.snapshot-retention-selected(7); } } Action { text: "30 天"; selected: root.snapshot-retention-days == 30; clicked => { root.snapshot-retention-selected(30); } } }
-                        HorizontalLayout { Action { text: "90 天"; selected: root.snapshot-retention-days == 90; clicked => { root.snapshot-retention-selected(90); } } Action { text: "365 天"; selected: root.snapshot-retention-days == 365; clicked => { root.snapshot-retention-selected(365); } } Action { text: "永久"; selected: root.snapshot-retention-days == 0; clicked => { root.snapshot-retention-selected(0); } } }
+                        HorizontalLayout { Action { text: "7 天"; selected: root.snapshot-retention-days == 7; clicked => { root.choose-snapshot-retention(7); } } Action { text: "30 天"; selected: root.snapshot-retention-days == 30; clicked => { root.choose-snapshot-retention(30); } } }
+                        HorizontalLayout { Action { text: "90 天"; selected: root.snapshot-retention-days == 90; clicked => { root.choose-snapshot-retention(90); } } Action { text: "365 天"; selected: root.snapshot-retention-days == 365; clicked => { root.choose-snapshot-retention(365); } } Action { text: "永久"; selected: root.snapshot-retention-days == 0; clicked => { root.snapshot-retention-selected(0); } } }
                         Rule { }
                         Label { text: "应用截图排除"; }
                         Note { text: root.snapshot-exclusion-label; }
+                        Note { text: "对象是时间线或应用页中当前选中的应用。"; }
                         Action { text: "切换此应用的截图排除"; enabled: root.selected-index >= 0; clicked => { root.snapshot-toggle-exclusion(); } }
                         Note { text: "排除应用出现在屏幕上时，该屏幕跳过拍摄。图片不会自动发送给 AI。"; }
                         Rule { }
@@ -617,5 +646,27 @@ Label { text: "拍摄屏幕"; }
         accept-text: "删除图片";
         dismissed => { root.delete-snapshot-confirm = false; Theme.modal-open = false; snapshots-nav.focus(); }
         accepted => { root.delete-snapshot-confirm = false; Theme.modal-open = false; root.snapshot-delete-selected(); snapshots-nav.focus(); }
+    }
+    if root.retention-confirm-open : ConfirmationDialog {
+        z: 100;
+        title: root.pending-retention-snapshots ? "缩短快照图片保留期？" : "缩短活动数据保留期？";
+        explanation: root.pending-retention-snapshots
+            ? "早于 " + root.pending-retention-days + " 天的快照图片会立即删除，无法恢复。时间线中保留对应的清理记录。"
+            : "早于 " + root.pending-retention-days + " 天的应用活动、输入明细和本地报告会立即删除，无法恢复。";
+        detail: root.pending-retention-snapshots
+            ? "活动记录与 AI 内容使用各自的保留策略，不受影响。外部备份和导出文件不会删除。"
+            : "永久累计的输入总数保留。快照与 AI 内容使用各自的保留策略。外部备份和导出文件不会删除。";
+        accept-text: "删除并缩短";
+        dismissed => {
+            root.pending-retention-days = -1;
+            Theme.modal-open = false;
+            if root.page == 2 { snapshots-nav.focus(); } else { settings-nav.focus(); }
+        }
+        accepted => {
+            if root.pending-retention-snapshots { root.snapshot-retention-selected(root.pending-retention-days); } else { root.retention-selected(root.pending-retention-days); }
+            root.pending-retention-days = -1;
+            Theme.modal-open = false;
+            if root.page == 2 { snapshots-nav.focus(); } else { settings-nav.focus(); }
+        }
     }
 }

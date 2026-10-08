@@ -31,14 +31,19 @@ pub fn choose_file(save: bool, extension: &str) -> Result<Option<PathBuf>> {
             path[index] = c;
         }
     }
-    let filter: Vec<u16> = format!("Timelens files\0*.{extension}\0\0")
+    let (kind, open_title) = if extension == "exe" {
+        ("应用程序", "选择要设置规则的应用程序")
+    } else {
+        ("Timelens 文件", "选择 Timelens 备份")
+    };
+    let filter: Vec<u16> = format!("{kind} (*.{extension})\0*.{extension}\0\0")
         .encode_utf16()
         .collect();
     let ext: Vec<u16> = extension.encode_utf16().chain(Some(0)).collect();
     let title: Vec<u16> = if save {
         "导出 Timelens 文件"
     } else {
-        "选择 Timelens 备份"
+        open_title
     }
     .encode_utf16()
     .chain(Some(0))
@@ -70,9 +75,14 @@ pub fn choose_file(save: bool, extension: &str) -> Result<Option<PathBuf>> {
         }
         return Ok(None);
     }
-    Ok(Some(PathBuf::from(String::from_utf16(
+    let chosen = PathBuf::from(String::from_utf16(
         &path[..path.iter().position(|c| *c == 0).unwrap_or(path.len())],
-    )?)))
+    )?);
+    // Exports never overwrite; say so before any work instead of failing after it.
+    if save && chosen.exists() {
+        bail!("目标文件已存在。Timelens 不会覆盖已有文件，请换一个文件名");
+    }
+    Ok(Some(chosen))
 }
 pub struct CollectorPause {
     request: PathBuf,

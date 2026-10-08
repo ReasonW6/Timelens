@@ -48,6 +48,13 @@ Source: "unregister-tasks.ps1"; DestDir: "{app}\internal"; Flags: ignoreversion
 [Icons]
 Name: "{autoprograms}\{#ProductName}"; Filename: "{app}\Timelens.exe"
 
+#if DataDirectory == ""
+; The core already runs in the background from its logon task; this only shows
+; its window, so a first-time user sees the app instead of a silent tray icon.
+[Run]
+Filename: "{app}\Timelens.exe"; Description: "打开 Timelens"; Flags: postinstall nowait skipifsilent runasoriginaluser
+#endif
+
 [Code]
 const
   DriveFixed = 3;
