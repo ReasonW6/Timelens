@@ -38,9 +38,9 @@ use rusqlite::{
     Connection, OpenFlags, OptionalExtension, Transaction, TransactionBehavior, params,
 };
 use timelens_ipc::{
-    COLLECTOR_RESET_PAUSED_FILE, COLLECTOR_RESET_REQUEST_FILE, COLLECTOR_SPOOL_FILE,
-    COLLECTOR_SPOOL_KEY_FILE, COLLECTOR_TRAY_STATE_FILE, CollectorEvent, EventBatch,
-    IdentitySource, InputMinute, MonitoringGap, MonitoringGapReason, TrayTransition,
+    COLLECTOR_QUARANTINE_SUFFIX, COLLECTOR_RESET_PAUSED_FILE, COLLECTOR_RESET_REQUEST_FILE,
+    COLLECTOR_SPOOL_FILE, COLLECTOR_SPOOL_KEY_FILE, COLLECTOR_TRAY_STATE_FILE, CollectorEvent,
+    EventBatch, IdentitySource, InputMinute, MonitoringGap, MonitoringGapReason, TrayTransition,
     TrayTransitionKind, WindowObservation, WindowTransitionKind, collector_event,
 };
 use windows_sys::Win32::{
@@ -87,6 +87,20 @@ pub enum StorageError {
 }
 
 pub type Result<T> = std::result::Result<T, StorageError>;
+
+impl StorageError {
+    /// True when an ingest failure is deterministic for this batch and the stored
+    /// state, so resending the same batch can never succeed.
+    pub fn contradicts_durable_state(&self) -> bool {
+        match self {
+            Self::InvalidBatch(_) => true,
+            Self::Sqlite(error) => {
+                error.sqlite_error_code() == Some(rusqlite::ErrorCode::ConstraintViolation)
+            }
+            _ => false,
+        }
+    }
+}
 
 /// Before the next database access, latch corruption reported by any statement.
 /// All storage entrypoints use this connection, including UI and AI operations.
@@ -783,6 +797,10 @@ impl Storage {
 
     pub fn apply_retention(&self, now_utc_ms: i64) -> Result<RetentionReport> {
         let policy = self.retention_policy()?;
+        // Fold the WAL back first so the released-bytes figure does not count log
+        // pages that any checkpoint would reclaim anyway. This only sharpens that
+        // figure, so a read-only (quarantined) database still runs retention as before.
+        let _ = self.checkpoint();
         let before_bytes = database_files_bytes(&self.database_path);
         let mut outcome = CleanupOutcome::default();
         let activity_cutoff = policy
@@ -796,20 +814,18 @@ impl Storage {
             outcome.merge(self.cleanup_before(cutoff, "retention_time")?);
         }
 
-        if outcome.has_database_cleanup() {
-            self.connection
-                .execute_batch("PRAGMA wal_checkpoint(TRUNCATE); VACUUM;")?;
-        }
-
-        while database_files_bytes(&self.database_path) > policy.max_bytes
+        let mut compacted = false;
+        while self
+            .exceeds_size_limit(policy.max_bytes, &mut compacted, || self.has_local_report())?
             && self.clean_oldest_local_report()?
         {
             outcome.report.report_items = outcome.report.report_items.saturating_add(1);
-            self.connection
-                .execute_batch("PRAGMA wal_checkpoint(TRUNCATE); VACUUM;")?;
+            compacted = false;
         }
 
-        while database_files_bytes(&self.database_path) > policy.max_bytes {
+        while self.exceeds_size_limit(policy.max_bytes, &mut compacted, || {
+            Ok(oldest_detail_timestamp(&self.connection)?.is_some())
+        })? {
             let Some(oldest) = oldest_detail_timestamp(&self.connection)? else {
                 break;
             };
@@ -819,8 +835,12 @@ impl Storage {
                 break;
             }
             outcome.merge(removed);
-            self.connection
-                .execute_batch("PRAGMA wal_checkpoint(TRUNCATE); VACUUM;")?;
+            compacted = false;
+        }
+
+        // Return every freed page to the file system, unless the last step already did.
+        if outcome.has_database_cleanup() && !compacted {
+            self.compact()?;
         }
 
         if outcome.has_any_cleanup() {
@@ -835,6 +855,54 @@ impl Storage {
             }
         }
         Ok(outcome.report)
+    }
+
+    /// Whether the database stays over `max_bytes` once repacked. Deleted rows also
+    /// leave pages partly empty, so live pages are only an upper bound until the
+    /// database is repacked; it is repacked before that bound alone can delete history.
+    /// A database with nothing left to remove is not repacked, because retention runs
+    /// often and repacking holds the storage lock.
+    fn exceeds_size_limit(
+        &self,
+        max_bytes: u64,
+        compacted: &mut bool,
+        removable: impl FnOnce() -> Result<bool>,
+    ) -> Result<bool> {
+        if self.live_database_bytes()? <= max_bytes {
+            return Ok(false);
+        }
+        if *compacted {
+            return Ok(true);
+        }
+        if !removable()? {
+            return Ok(false);
+        }
+        self.compact()?;
+        *compacted = true;
+        Ok(self.live_database_bytes()? > max_bytes)
+    }
+
+    /// Repack the database and fold the WAL back into it.
+    fn compact(&self) -> Result<()> {
+        self.connection.execute_batch(
+            "PRAGMA wal_checkpoint(TRUNCATE); VACUUM; PRAGMA wal_checkpoint(TRUNCATE);",
+        )?;
+        Ok(())
+    }
+
+    /// Bytes held by pages that still store data, excluding free pages and the WAL.
+    fn live_database_bytes(&self) -> Result<u64> {
+        // SQLCipher reports page_size as text, so every value is cast explicitly.
+        let pragma = |name: &str| -> Result<u64> {
+            let value: i64 = self.connection.query_row(
+                &format!("SELECT CAST({name} AS INTEGER) FROM pragma_{name}()"),
+                [],
+                |row| row.get(0),
+            )?;
+            Ok(value.max(0) as u64)
+        };
+        let live_pages = pragma("page_count")?.saturating_sub(pragma("freelist_count")?);
+        Ok(live_pages.saturating_mul(pragma("page_size")?))
     }
 
     fn cleanup_before(&self, cutoff_utc_ms: i64, reason: &str) -> Result<CleanupOutcome> {
@@ -855,6 +923,8 @@ impl Storage {
                 UNION ALL
                 SELECT ended_utc_ms FROM tray_background_intervals
                  WHERE ended_utc_ms IS NOT NULL AND ended_utc_ms < ?1
+                UNION ALL
+                SELECT started_utc_ms FROM system_intervals WHERE ended_utc_ms < ?1
              )",
             params![cutoff_utc_ms],
             |row| row.get::<_, Option<i64>>(0),
@@ -884,6 +954,11 @@ impl Storage {
         activity_items += transaction.execute(
             "DELETE FROM tray_background_intervals
              WHERE ended_utc_ms IS NOT NULL AND ended_utc_ms < ?1",
+            params![cutoff_utc_ms],
+        )? as u64;
+        // Lock, sleep, exclusion and disconnect periods are activity history too.
+        activity_items += transaction.execute(
+            "DELETE FROM system_intervals WHERE ended_utc_ms < ?1",
             params![cutoff_utc_ms],
         )? as u64;
 
@@ -1020,10 +1095,14 @@ impl Storage {
             remove_file_if_present(&self.control_directory.join(COLLECTOR_SPOOL_FILE))?;
             remove_file_if_present(&self.control_directory.join(COLLECTOR_SPOOL_KEY_FILE))?;
             remove_file_if_present(&self.control_directory.join(COLLECTOR_TRAY_STATE_FILE))?;
+            remove_quarantined_collector_state(&self.control_directory)?;
             return self.clear_all();
         }
 
-        let clear_result = self.clear_all();
+        let clear_result = self.clear_all().and_then(|report| {
+            remove_quarantined_collector_state(&self.control_directory)?;
+            Ok(report)
+        });
         remove_file_if_present(&request_path)?;
         let resumed_at = Instant::now();
         while paused_path.exists() && resumed_at.elapsed() < timeout {
@@ -1178,6 +1257,8 @@ fn oldest_detail_timestamp(connection: &Connection) -> Result<Option<i64>> {
                  WHERE ended_utc_ms IS NOT NULL
                 UNION ALL
                 SELECT minute_started_utc_ms FROM input_minute_buckets
+                UNION ALL
+                SELECT ended_utc_ms FROM system_intervals
              )",
             [],
             |row| row.get(0),
@@ -1675,57 +1756,66 @@ fn close_stale_runs(
     resumed_at_utc_ms: i64,
     record_restart_gap: bool,
 ) -> Result<()> {
-    let last_reliable = transaction.query_row(
-        "SELECT MAX(last_observed_utc_ms) FROM collector_runs",
-        [],
-        |row| row.get::<_, Option<i64>>(0),
-    )?;
+    // The gap starts where the latest run stopped. After a clock rollback an older
+    // run can hold a later timestamp, which would hide a gap behind it.
+    let last_reliable = transaction
+        .query_row(
+            "SELECT last_observed_utc_ms FROM collector_runs ORDER BY rowid DESC LIMIT 1",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .optional()?;
     let Some(last_reliable) = last_reliable else {
         return Ok(());
     };
 
+    // Open activity ends at its run's last event. A new run that begins earlier than
+    // that means the clock went back; ending the old activity where the new run
+    // begins keeps the repeated span from being counted twice.
     transaction.execute(
         "UPDATE window_state_intervals AS states SET
-            ended_utc_ms = (
+            ended_utc_ms = MAX(states.started_utc_ms, MIN(?1, (
                 SELECT runs.last_observed_utc_ms
                 FROM window_instances AS instances
                 JOIN collector_runs AS runs ON runs.run_id = instances.run_id
                 WHERE instances.instance_id = states.window_instance_id
-            ),
-            ended_monotonic_ms = (
-                SELECT runs.last_monotonic_ms
+            ))),
+            ended_monotonic_ms = MAX(states.started_monotonic_ms, (
+                SELECT runs.last_monotonic_ms - MAX(0, runs.last_observed_utc_ms - ?1)
                 FROM window_instances AS instances
                 JOIN collector_runs AS runs ON runs.run_id = instances.run_id
                 WHERE instances.instance_id = states.window_instance_id
-            )
+            ))
          WHERE ended_utc_ms IS NULL",
-        [],
+        params![resumed_at_utc_ms],
     )?;
     transaction.execute(
         "UPDATE window_instances SET
-            closed_utc_ms = (
+            closed_utc_ms = MAX(opened_utc_ms, MIN(?1, (
                 SELECT last_observed_utc_ms FROM collector_runs
                 WHERE collector_runs.run_id = window_instances.run_id
-            ),
-            closed_monotonic_ms = (
-                SELECT last_monotonic_ms FROM collector_runs
+            ))),
+            closed_monotonic_ms = MAX(opened_monotonic_ms, (
+                SELECT last_monotonic_ms - MAX(0, last_observed_utc_ms - ?1)
+                FROM collector_runs
                 WHERE collector_runs.run_id = window_instances.run_id
-            )
+            ))
          WHERE closed_utc_ms IS NULL",
-        [],
+        params![resumed_at_utc_ms],
     )?;
     transaction.execute(
         "UPDATE tray_background_intervals AS tray SET
-            ended_utc_ms = (
+            ended_utc_ms = MAX(tray.started_utc_ms, MIN(?1, (
                 SELECT last_observed_utc_ms FROM collector_runs
                 WHERE collector_runs.run_id = tray.start_run_id
-            ),
-            ended_monotonic_ms = (
-                SELECT last_monotonic_ms FROM collector_runs
+            ))),
+            ended_monotonic_ms = MAX(tray.started_monotonic_ms, (
+                SELECT last_monotonic_ms - MAX(0, last_observed_utc_ms - ?1)
+                FROM collector_runs
                 WHERE collector_runs.run_id = tray.start_run_id
-            )
+            ))
          WHERE ended_utc_ms IS NULL",
-        [],
+        params![resumed_at_utc_ms],
     )?;
     if record_restart_gap && resumed_at_utc_ms > last_reliable {
         transaction.execute(
@@ -2694,6 +2784,18 @@ fn remove_file_if_present(path: &Path) -> Result<()> {
     }
 }
 
+/// Remove collector state the collector moved aside after finding it unreadable.
+fn remove_quarantined_collector_state(directory: &Path) -> Result<()> {
+    for name in [
+        COLLECTOR_SPOOL_FILE,
+        COLLECTOR_SPOOL_KEY_FILE,
+        COLLECTOR_TRAY_STATE_FILE,
+    ] {
+        remove_file_if_present(&directory.join(format!("{name}{COLLECTOR_QUARANTINE_SUFFIX}")))?;
+    }
+    Ok(())
+}
+
 fn wal_path(database_path: &Path) -> PathBuf {
     PathBuf::from(format!("{}-wal", database_path.display()))
 }
@@ -2947,6 +3049,226 @@ mod tests {
         let bytes = fs::read(database_path).unwrap();
         assert!(!contains_bytes(&bytes, b"private-marker"));
         assert!(!contains_bytes(&bytes, b"desktop-one"));
+    }
+
+    #[test]
+    fn a_run_that_goes_backwards_is_permanently_rejected_but_a_new_run_is_not() {
+        let directory = tempfile::tempdir().unwrap();
+        let storage = Storage::open(directory.path()).unwrap();
+        let opened = window_event(
+            WindowTransitionKind::Opened,
+            1_700_000_100_000,
+            10,
+            true,
+            true,
+        );
+        storage
+            .ingest_event_batch(&event_batch(1, 1, vec![opened.clone()]))
+            .unwrap();
+
+        let rolled_back = window_event(
+            WindowTransitionKind::Updated,
+            1_700_000_000_000,
+            20,
+            true,
+            false,
+        );
+        let error = storage
+            .ingest_event_batch(&event_batch(1, 2, vec![rolled_back]))
+            .unwrap_err();
+        assert!(error.contradicts_durable_state());
+        let skipped = storage
+            .ingest_event_batch(&event_batch(1, 3, vec![opened.clone()]))
+            .unwrap_err();
+        assert!(skipped.contradicts_durable_state());
+        assert!(!StorageError::Integrity("paused".into()).contradicts_durable_state());
+
+        let mut restarted = opened;
+        restarted.observed_at_utc_ms = 1_700_000_000_000;
+        storage
+            .ingest_event_batch(&event_batch(2, 1, vec![restarted]))
+            .unwrap();
+    }
+
+    #[test]
+    fn a_run_after_a_clock_rollback_ends_the_previous_runs_activity_where_it_begins() {
+        let directory = tempfile::tempdir().unwrap();
+        let storage = Storage::open(directory.path()).unwrap();
+        storage
+            .ingest_event_batch(&event_batch(
+                1,
+                1,
+                vec![
+                    window_event(
+                        WindowTransitionKind::Opened,
+                        1_700_000_000_000,
+                        10,
+                        true,
+                        true,
+                    ),
+                    window_event(
+                        WindowTransitionKind::Updated,
+                        1_700_000_100_000,
+                        100_010,
+                        true,
+                        false,
+                    ),
+                ],
+            ))
+            .unwrap();
+
+        // The clock went back 50 seconds before the next run started.
+        storage
+            .ingest_event_batch(&event_batch(
+                2,
+                1,
+                vec![window_event(
+                    WindowTransitionKind::Opened,
+                    1_700_000_050_000,
+                    100_020,
+                    true,
+                    true,
+                )],
+            ))
+            .unwrap();
+
+        let (closed, closed_monotonic): (i64, i64) = storage
+            .connection
+            .query_row(
+                "SELECT closed_utc_ms, closed_monotonic_ms FROM window_instances
+                 WHERE run_id = ?1",
+                params![vec![1_u8; 16]],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!((closed, closed_monotonic), (1_700_000_050_000, 50_010));
+        // The state that began after the new run's start is left with no length.
+        let last_state: (i64, i64) = storage
+            .connection
+            .query_row(
+                "SELECT states.started_utc_ms, states.ended_utc_ms
+                 FROM window_state_intervals AS states
+                 JOIN window_instances AS instances
+                   ON instances.instance_id = states.window_instance_id
+                 WHERE instances.run_id = ?1
+                 ORDER BY states.started_utc_ms DESC LIMIT 1",
+                params![vec![1_u8; 16]],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(last_state, (1_700_000_100_000, 1_700_000_100_000));
+    }
+
+    #[test]
+    fn a_restart_after_a_clock_rollback_still_records_its_gap() {
+        let directory = tempfile::tempdir().unwrap();
+        let storage = Storage::open(directory.path()).unwrap();
+        let opened = |at: i64, monotonic: u64| {
+            window_event(WindowTransitionKind::Opened, at, monotonic, true, true)
+        };
+        storage
+            .ingest_event_batch(&event_batch(1, 1, vec![opened(1_700_000_100_000, 10)]))
+            .unwrap();
+        // The clock went back, then that run stopped before reaching the old time.
+        storage
+            .ingest_event_batch(&event_batch(2, 1, vec![opened(1_700_000_050_000, 20)]))
+            .unwrap();
+        storage
+            .ingest_event_batch(&event_batch(
+                2,
+                2,
+                vec![window_event(
+                    WindowTransitionKind::Updated,
+                    1_700_000_060_000,
+                    10_020,
+                    true,
+                    false,
+                )],
+            ))
+            .unwrap();
+        storage
+            .ingest_event_batch(&event_batch(3, 1, vec![opened(1_700_000_070_000, 30)]))
+            .unwrap();
+
+        let gaps = storage
+            .connection
+            .prepare(
+                "SELECT started_utc_ms, ended_utc_ms FROM data_availability
+                 WHERE reason = 'collector_restart' ORDER BY started_utc_ms",
+            )
+            .unwrap()
+            .query_map([], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)))
+            .unwrap()
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .unwrap();
+        assert_eq!(gaps, vec![(1_700_000_060_000, 1_700_000_070_000)]);
+    }
+
+    #[test]
+    fn an_active_state_ending_a_run_keeps_a_small_rollback_from_looking_like_a_gap() {
+        let directory = tempfile::tempdir().unwrap();
+        let storage = Storage::open(directory.path()).unwrap();
+        let ended = CollectorEvent {
+            observed_at_utc_ms: 1_700_000_020_000,
+            monotonic_ms: 20_010,
+            body: Some(collector_event::Body::SystemInterval(
+                timelens_ipc::SystemInterval {
+                    kind: "active".into(),
+                    started_utc_ms: 1_700_000_000_000,
+                    duration_ms: 20_000,
+                    timezone_offset_minutes: 0,
+                },
+            )),
+        };
+        storage
+            .ingest_event_batch(&event_batch(
+                1,
+                1,
+                vec![
+                    window_event(
+                        WindowTransitionKind::Opened,
+                        1_700_000_000_000,
+                        10,
+                        true,
+                        true,
+                    ),
+                    ended,
+                ],
+            ))
+            .unwrap();
+        // The clock went back three seconds after the run's last event.
+        storage
+            .ingest_event_batch(&event_batch(
+                2,
+                1,
+                vec![window_event(
+                    WindowTransitionKind::Opened,
+                    1_700_000_017_000,
+                    20_020,
+                    true,
+                    true,
+                )],
+            ))
+            .unwrap();
+
+        let gaps: i64 = storage
+            .connection
+            .query_row(
+                "SELECT COUNT(*) FROM data_availability WHERE reason = 'collector_restart'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(gaps, 0);
+        let closed: i64 = storage
+            .connection
+            .query_row(
+                "SELECT closed_utc_ms FROM window_instances WHERE run_id = ?1",
+                params![vec![1_u8; 16]],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(closed, 1_700_000_017_000);
     }
 
     #[test]
@@ -3352,6 +3674,18 @@ mod tests {
                         false,
                     ),
                     CollectorEvent {
+                        observed_at_utc_ms: base + 1_000,
+                        monotonic_ms: 1_010,
+                        body: Some(collector_event::Body::SystemInterval(
+                            timelens_ipc::SystemInterval {
+                                kind: "locked".to_owned(),
+                                started_utc_ms: base,
+                                duration_ms: 1_000,
+                                timezone_offset_minutes: 480,
+                            },
+                        )),
+                    },
+                    CollectorEvent {
                         observed_at_utc_ms: base + 60_000,
                         monotonic_ms: 60_010,
                         body: Some(collector_event::Body::InputMinute(InputMinute {
@@ -3402,9 +3736,185 @@ mod tests {
                 |row| row.get(0),
             )
             .unwrap();
+        let system_intervals: i64 = storage
+            .connection
+            .query_row("SELECT COUNT(*) FROM system_intervals", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
         assert_eq!(detailed_input, 0);
         assert_eq!(ledger, 1);
         assert_eq!(cleanup_records, 2);
+        assert_eq!(system_intervals, 0);
+    }
+
+    #[test]
+    fn live_bytes_count_only_pages_that_hold_data() {
+        let directory = tempfile::tempdir().unwrap();
+        let storage = Storage::open(directory.path()).unwrap();
+        let live = storage.live_database_bytes().unwrap();
+        assert!(live > 0);
+        storage.checkpoint().unwrap();
+        assert!(live <= fs::metadata(storage.database_path()).unwrap().len());
+    }
+
+    /// Three days of input minutes with every other row deleted. The rows were
+    /// inserted out of time order, so the deletions free almost no whole page: live
+    /// pages stay near their old count while a repacked database is about half as large.
+    fn fragmented_storage(directory: &Path) -> (Storage, i64) {
+        let storage = Storage::open(directory).unwrap();
+        let rows = 60_000_i64;
+        let transaction = storage.connection.unchecked_transaction().unwrap();
+        for row in 0..rows {
+            let minute = (row * 7_919) % rows % (3 * 1_440);
+            transaction
+                .execute(
+                    "INSERT INTO input_minute_buckets(
+                        minute_started_utc_ms, timezone_offset_minutes, local_date,
+                        focused_application_identity, keyboard_count, left_click_count,
+                        middle_click_count, right_click_count
+                     ) VALUES (?1, 0, '2023-11-14', NULL, ?2, 0, 0, 0)",
+                    params![FRAGMENTED_START + minute * 60_000, row],
+                )
+                .unwrap();
+        }
+        transaction.commit().unwrap();
+        storage
+            .connection
+            .execute(
+                "DELETE FROM input_minute_buckets WHERE bucket_id % 2 = 0",
+                [],
+            )
+            .unwrap();
+        let remaining = storage
+            .connection
+            .query_row("SELECT COUNT(*) FROM input_minute_buckets", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        (storage, remaining)
+    }
+
+    const FRAGMENTED_START: i64 = 1_699_920_000_000;
+
+    #[test]
+    fn space_retention_keeps_history_that_fits_once_repacked() {
+        let probe_directory = tempfile::tempdir().unwrap();
+        let (probe, _) = fragmented_storage(probe_directory.path());
+        probe.compact().unwrap();
+        let repacked = database_files_bytes(probe.database_path());
+
+        let directory = tempfile::tempdir().unwrap();
+        let (storage, remaining) = fragmented_storage(directory.path());
+        let live = storage.live_database_bytes().unwrap();
+        let max_bytes = ((repacked + live) / 2).max(1024 * 1024);
+        assert!(
+            repacked + 128 * 1024 < max_bytes && max_bytes < live,
+            "repacked={repacked} live={live}"
+        );
+        storage
+            .set_retention_policy(RetentionPolicy {
+                days: None,
+                max_bytes,
+            })
+            .unwrap();
+
+        storage
+            .apply_retention(FRAGMENTED_START + 4 * 86_400_000)
+            .unwrap();
+
+        let kept: i64 = storage
+            .connection
+            .query_row("SELECT COUNT(*) FROM input_minute_buckets", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(kept, remaining);
+        assert!(database_files_bytes(storage.database_path()) <= max_bytes);
+    }
+
+    #[test]
+    fn a_database_over_its_limit_with_nothing_to_remove_is_not_repacked() {
+        let directory = tempfile::tempdir().unwrap();
+        let storage = Storage::open(directory.path()).unwrap();
+        let transaction = storage.connection.unchecked_transaction().unwrap();
+        for row in 0..40_000_i64 {
+            transaction
+                .execute(
+                    "INSERT INTO applications(
+                        identity, identity_source, first_observed_utc_ms, last_observed_utc_ms
+                     ) VALUES (?1, 1, 0, 0)",
+                    params![format!(r"path:c:\apps\an-application-{row:08}.exe")],
+                )
+                .unwrap();
+        }
+        transaction.commit().unwrap();
+        storage
+            .connection
+            .execute("DELETE FROM applications WHERE rowid > 30000", [])
+            .unwrap();
+        let free_pages = || -> i64 {
+            storage
+                .connection
+                .query_row(
+                    "SELECT CAST(freelist_count AS INTEGER) FROM pragma_freelist_count()",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap()
+        };
+        assert!(free_pages() > 0);
+        assert!(storage.live_database_bytes().unwrap() > 1024 * 1024);
+        storage
+            .set_retention_policy(RetentionPolicy {
+                days: None,
+                max_bytes: 1024 * 1024,
+            })
+            .unwrap();
+
+        let report = storage.apply_retention(1_700_000_000_000).unwrap();
+
+        assert_eq!(
+            report.report_items + report.activity_items + report.input_items,
+            0
+        );
+        assert!(free_pages() > 0);
+    }
+
+    #[test]
+    fn space_retention_counts_system_intervals_as_the_oldest_detail() {
+        let directory = tempfile::tempdir().unwrap();
+        let storage = Storage::open(directory.path()).unwrap();
+        let day = 86_400_000_i64;
+        storage
+            .connection
+            .execute(
+                "INSERT INTO system_intervals(
+                    kind, started_utc_ms, ended_utc_ms, duration_ms, timezone_offset_minutes
+                 ) VALUES ('locked', ?1, ?2, ?3, 0)",
+                params![FRAGMENTED_START, FRAGMENTED_START + 60_000, 60_000],
+            )
+            .unwrap();
+        assert_eq!(
+            oldest_detail_timestamp(&storage.connection).unwrap(),
+            Some(FRAGMENTED_START + 60_000)
+        );
+        let removed = storage
+            .cleanup_before(FRAGMENTED_START + 60_000 + day, "retention_space")
+            .unwrap();
+        assert!(removed.report.activity_items > 0);
+        assert_eq!(oldest_detail_timestamp(&storage.connection).unwrap(), None);
+        // The cleaned range starts where the deleted interval started, not where it ended.
+        let cleaned_from: i64 = storage
+            .connection
+            .query_row(
+                "SELECT started_utc_ms FROM data_availability
+                 WHERE data_class = 'activity' AND reason = 'retention_space'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(cleaned_from, FRAGMENTED_START);
     }
 
     #[test]

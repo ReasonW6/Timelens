@@ -11,7 +11,7 @@ pub use protocol::{
     WindowTransitionKind, collector_event, envelope,
 };
 pub use windows::{
-    HandshakeReport, PeerVerification, SingleInstanceGuard, current_pipe_name,
+    BatchRejection, HandshakeReport, PeerVerification, SingleInstanceGuard, current_pipe_name,
     new_collector_run_id, run_client_event_batch, run_client_probe, run_server_collector_message,
     run_server_probe,
 };
@@ -32,6 +32,9 @@ pub const COLLECTOR_RESET_PAUSED_FILE: &str = "collector-reset.paused";
 pub const COLLECTOR_SPOOL_FILE: &str = "collector.spool";
 pub const COLLECTOR_SPOOL_KEY_FILE: &str = "collector-spool-key.dpapi";
 pub const COLLECTOR_TRAY_STATE_FILE: &str = "collector-tray-state.dpapi";
+/// Appended to the spool, spool key and tray state when the collector finds them
+/// unreadable at startup and moves them aside. Clearing data removes these copies.
+pub const COLLECTOR_QUARANTINE_SUFFIX: &str = ".corrupt";
 
 #[derive(Debug, thiserror::Error)]
 pub enum IpcError {
@@ -47,6 +50,8 @@ pub enum IpcError {
     PeerAuthentication(String),
     #[error("authenticated event batch was rejected: {0}")]
     BatchRejected(String),
+    #[error("authenticated event batch can never be persisted: {0}")]
+    BatchRejectedPermanently(String),
 }
 
 pub type Result<T> = std::result::Result<T, IpcError>;

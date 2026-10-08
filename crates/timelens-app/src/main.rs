@@ -5,6 +5,7 @@ mod ai;
 mod ai_ui;
 mod app_icon;
 mod collection_ui;
+mod collector_task;
 mod data_ui;
 mod local_config;
 mod recovery;
@@ -21,7 +22,7 @@ use std::{
     path::{Path, PathBuf},
     rc::Rc,
     sync::{
-        Arc, Mutex,
+        Arc, Mutex, MutexGuard, TryLockError,
         atomic::{AtomicBool, Ordering},
         mpsc,
     },
@@ -32,7 +33,7 @@ use std::{
 use anyhow::{Context, Result, bail};
 use slint::{Image, ModelRc, Rgba8Pixel, SharedPixelBuffer, Timer, TimerMode, VecModel};
 use timelens_ipc::{
-    COLLECTOR_RESET_PAUSED_FILE, COLLECTOR_RESET_REQUEST_FILE, PROTOCOL_VERSION,
+    BatchRejection, COLLECTOR_RESET_PAUSED_FILE, COLLECTOR_RESET_REQUEST_FILE, PROTOCOL_VERSION,
     SingleInstanceGuard, current_pipe_name, run_server_collector_message, run_server_probe,
 };
 use timelens_storage::{
@@ -122,6 +123,7 @@ fn main() -> Result<()> {
         );
     }
     storage.record_component_health("core", PROTOCOL_VERSION, None)?;
+    let collector_task = options.collector_task();
     let pipe_name = options.pipe_name.unwrap_or(current_pipe_name()?);
 
     if options.handshake_once {
@@ -148,6 +150,9 @@ fn main() -> Result<()> {
         return Ok(());
     }
     snapshot::spawn_scheduler(Arc::clone(&storage), data_directory.clone());
+    if let Some(task) = collector_task {
+        collector_task::spawn_watchdog(task);
+    }
     let ai_service = ai::spawn(Arc::clone(&storage));
     let maintenance_storage = Arc::clone(&storage);
     thread::spawn(move || {
@@ -278,14 +283,19 @@ fn run_window(
             .window()
             .set_size(slint::LogicalSize::new(width as f32, height as f32));
     }
-    let storage_status = {
+    // The collector control directory never moves, so the UI thread can read it
+    // without taking the storage lock.
+    let (storage_status, control_directory) = {
         let storage = storage
             .lock()
             .map_err(|_| anyhow::anyhow!("storage lock poisoned"))?;
-        format!(
-            "SQLCipher {} · schema v{}",
-            storage.cipher_version(),
-            storage.schema_version()?
+        (
+            format!(
+                "SQLCipher {} · schema v{}",
+                storage.cipher_version(),
+                storage.schema_version()?
+            ),
+            storage.control_directory().to_path_buf(),
         )
     };
     window.set_storage_status(storage_status.into());
@@ -300,6 +310,7 @@ fn run_window(
         loop {
             let status = match run_server_collector_message(&pipe_name, COLLECTOR_NAMES, |batch| {
                 ingest_if_not_resetting(&server_storage, &server_data_directory, batch)
+                    .map_err(batch_rejection)
             }) {
                 Ok(report) => match server_storage
                     .lock()
@@ -321,10 +332,15 @@ fn run_window(
                 },
                 Err(error) => CollectorStatus::Failed(error.to_string()),
             };
+            // Recreate the pipe at once after a delivered batch so a backlog drains
+            // quickly; pause only after a failure to avoid spinning.
+            let failed = matches!(status, CollectorStatus::Failed(_));
             if status_sender.send(status).is_err() {
                 break;
             }
-            thread::sleep(Duration::from_millis(250));
+            if failed {
+                thread::sleep(Duration::from_millis(250));
+            }
         }
     });
 
@@ -482,10 +498,7 @@ fn run_window(
             match status {
                 CollectorStatus::Connected(message) => window.set_collector_status(message.into()),
                 CollectorStatus::Failed(error) => {
-                    if timer_storage
-                        .lock()
-                        .is_ok_and(|storage| collector_reset_active(storage.control_directory()))
-                    {
+                    if collector_reset_active(&control_directory) {
                         window.set_collector_status("正在安全暂停采集器…".into());
                     } else {
                         window.set_collector_status(format!("握手失败：{error}").into());
@@ -526,8 +539,8 @@ fn run_window(
             && (refresh_requested
                 || timer_last_refresh.borrow().elapsed() >= Duration::from_secs(2))
         {
-            match refresh_timeline(&window, &timer_storage, &timer_state).and_then(|_| {
-                if window.get_snapshot_open() {
+            match refresh_timeline(&window, &timer_storage, &timer_state).and_then(|refreshed| {
+                if refreshed && window.get_snapshot_open() {
                     refresh_snapshot_panel(
                         &window,
                         &timer_storage,
@@ -535,9 +548,11 @@ fn run_window(
                         &timer_snapshot_state,
                     )?;
                 }
-                Ok(())
+                Ok(refreshed)
             }) {
-                Ok(()) => *timer_last_refresh.borrow_mut() = Instant::now(),
+                Ok(true) => *timer_last_refresh.borrow_mut() = Instant::now(),
+                // Storage is busy with a long task; try again on a later tick.
+                Ok(false) => {}
                 Err(error) => window.set_action_status(format!("刷新失败：{error}").into()),
             }
         }
@@ -567,16 +582,38 @@ fn ingest_if_not_resetting(
     storage.ingest_event_batch(batch).map(|_| ())
 }
 
+/// A batch that contradicts durable state can never be stored by resending it, so
+/// the collector is told to abandon that run instead of retrying it forever.
+fn batch_rejection(error: timelens_storage::StorageError) -> BatchRejection {
+    if error.contradicts_durable_state() {
+        BatchRejection::permanent(error.to_string())
+    } else {
+        BatchRejection::transient(error.to_string())
+    }
+}
+
 fn collector_reset_active(data_directory: &Path) -> bool {
     data_directory.join(COLLECTOR_RESET_REQUEST_FILE).exists()
         || data_directory.join(COLLECTOR_RESET_PAUSED_FILE).exists()
 }
 
+/// Lock storage from the UI thread without waiting. `None` means a long task such
+/// as a backup, relocation or retention cleanup holds it; the caller skips this
+/// round instead of freezing the window.
+fn try_lock_storage(storage: &Arc<Mutex<Storage>>) -> Result<Option<MutexGuard<'_, Storage>>> {
+    match storage.try_lock() {
+        Ok(guard) => Ok(Some(guard)),
+        Err(TryLockError::WouldBlock) => Ok(None),
+        Err(TryLockError::Poisoned(_)) => bail!("storage lock poisoned"),
+    }
+}
+
+/// Returns `false` without changing the view when storage is busy.
 fn refresh_timeline(
     window: &AppWindow,
     storage: &Arc<Mutex<Storage>>,
     ui_state: &Rc<RefCell<UiState>>,
-) -> Result<()> {
+) -> Result<bool> {
     let (range_started, range_ended, horizon_started, horizon_ended) = {
         let mut state = ui_state.borrow_mut();
         if state.follow_now && state.calendar_day.is_some() {
@@ -600,9 +637,9 @@ fn refresh_timeline(
         )
     };
     let (snapshot, overview, policy, paused) = {
-        let storage = storage
-            .lock()
-            .map_err(|_| anyhow::anyhow!("storage lock poisoned"))?;
+        let Some(storage) = try_lock_storage(storage)? else {
+            return Ok(false);
+        };
         (
             storage.timeline_snapshot(range_started, range_ended)?,
             storage.timeline_snapshot(horizon_started, horizon_ended.max(horizon_started + 1))?,
@@ -613,7 +650,7 @@ fn refresh_timeline(
     window.global::<CollectionState>().set_paused(paused);
     render_snapshot(window, ui_state, snapshot, policy);
     timeline_ui::render_overview(window, &ui_state.borrow(), &overview);
-    Ok(())
+    Ok(true)
 }
 
 fn render_snapshot(
@@ -1252,7 +1289,7 @@ fn refresh_snapshot_panel(
     storage: &Arc<Mutex<Storage>>,
     ui_state: &Rc<RefCell<UiState>>,
     snapshot_state: &Rc<RefCell<SnapshotUiState>>,
-) -> Result<()> {
+) -> Result<bool> {
     let (range_started, range_ended, selected_identity) = {
         let state = ui_state.borrow();
         (
@@ -1262,9 +1299,9 @@ fn refresh_snapshot_panel(
         )
     };
     let (policy, exclusions, slots) = {
-        let storage = storage
-            .lock()
-            .map_err(|_| anyhow::anyhow!("storage lock poisoned"))?;
+        let Some(storage) = try_lock_storage(storage)? else {
+            return Ok(false);
+        };
         (
             storage.snapshot_policy()?,
             storage.snapshot_exclusions()?,
@@ -1337,7 +1374,7 @@ fn refresh_snapshot_panel(
         None => "先在主界面选择应用".to_owned(),
     };
     window.set_snapshot_exclusion_label(exclusion_label.into());
-    Ok(())
+    Ok(true)
 }
 
 fn install_report_callback(
@@ -1599,6 +1636,7 @@ struct Options {
     snapshot_once: bool,
     pipe_name: Option<String>,
     data_directory: Option<PathBuf>,
+    collector_task: Option<String>,
 }
 
 impl Options {
@@ -1627,6 +1665,17 @@ impl Options {
                         arguments.next().context("--data-dir requires a value")?,
                     ));
                 }
+                "--collector-task" => {
+                    let task = arguments
+                        .next()
+                        .context("--collector-task requires a value")?
+                        .to_string_lossy()
+                        .into_owned();
+                    if !collector_task::valid_task_path(&task) {
+                        bail!("--collector-task must name a Timelens collector task");
+                    }
+                    options.collector_task = Some(task);
+                }
                 unknown => bail!("unknown argument: {unknown}"),
             }
         }
@@ -1635,6 +1684,22 @@ impl Options {
 
     fn data_directory(&self) -> Result<PathBuf> {
         local_config::resolve(&self.control_directory()?)
+    }
+
+    /// The scheduled task that runs this core's collector. A custom dataset or pipe
+    /// has no known task unless one is named; starting the regular collector would
+    /// feed it into the wrong dataset.
+    fn collector_task(&self) -> Option<String> {
+        if self.collector_task.is_some() {
+            return self.collector_task.clone();
+        }
+        if self.data_directory.is_some()
+            || self.pipe_name.is_some()
+            || env::var_os("TIMELENS_DATA_DIR").is_some()
+        {
+            return None;
+        }
+        Some(collector_task::DEFAULT_TASK.to_owned())
     }
 
     fn control_directory(&self) -> Result<PathBuf> {

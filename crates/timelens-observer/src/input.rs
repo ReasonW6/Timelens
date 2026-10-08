@@ -1,24 +1,26 @@
 use std::{
     collections::{HashMap, HashSet},
-    marker::PhantomData,
-    rc::Rc,
     sync::{
         Mutex, OnceLock,
         atomic::{AtomicBool, Ordering},
+        mpsc,
     },
+    thread::{self, JoinHandle},
     time::{SystemTime, UNIX_EPOCH},
 };
 
 use windows::{
     Win32::{
-        Foundation::{LPARAM, LRESULT, WPARAM},
+        Foundation::{E_FAIL, LPARAM, LRESULT, WPARAM},
+        System::Threading::GetCurrentThreadId,
         UI::{
             Input::KeyboardAndMouse::GetKeyboardLayout,
             WindowsAndMessaging::{
-                CallNextHookEx, GetForegroundWindow, GetWindowThreadProcessId, HHOOK,
-                KBDLLHOOKSTRUCT, LLKHF_EXTENDED, LLKHF_INJECTED, LLMHF_INJECTED, MSLLHOOKSTRUCT,
-                SetWindowsHookExW, UnhookWindowsHookEx, WH_KEYBOARD_LL, WH_MOUSE_LL, WM_KEYDOWN,
-                WM_KEYUP, WM_LBUTTONDOWN, WM_MBUTTONDOWN, WM_RBUTTONDOWN, WM_SYSKEYDOWN,
+                CallNextHookEx, GetForegroundWindow, GetMessageW, GetWindowThreadProcessId, HHOOK,
+                KBDLLHOOKSTRUCT, LLKHF_EXTENDED, LLKHF_INJECTED, LLMHF_INJECTED, MSG,
+                MSLLHOOKSTRUCT, PM_NOREMOVE, PeekMessageW, PostThreadMessageW, SetWindowsHookExW,
+                UnhookWindowsHookEx, WH_KEYBOARD_LL, WH_MOUSE_LL, WM_KEYDOWN, WM_KEYUP,
+                WM_LBUTTONDOWN, WM_MBUTTONDOWN, WM_QUIT, WM_RBUTTONDOWN, WM_SYSKEYDOWN,
                 WM_SYSKEYUP,
             },
         },
@@ -59,10 +61,15 @@ pub struct InputDrain {
     pub overflowed: bool,
 }
 
+/// Counts physical key presses and clicks through low-level hooks.
+///
+/// Windows runs low-level hook callbacks on the installing thread, and every input
+/// event system-wide waits for them. The hooks therefore live on a dedicated thread
+/// that does nothing but pump messages, so slow work elsewhere in the collector can
+/// never delay input or make Windows remove the hooks after repeated timeouts.
 pub struct InputMonitor {
-    keyboard_hook: HHOOK,
-    mouse_hook: HHOOK,
-    _not_send: PhantomData<Rc<()>>,
+    hook_thread_id: u32,
+    hook_thread: Option<JoinHandle<()>>,
 }
 
 impl InputMonitor {
@@ -71,21 +78,27 @@ impl InputMonitor {
             state.reset();
         }
         hook_contention().store(false, Ordering::Release);
-        let keyboard_hook =
-            unsafe { SetWindowsHookExW(WH_KEYBOARD_LL, Some(keyboard_hook_callback), None, 0)? };
-        let mouse_hook =
-            match unsafe { SetWindowsHookExW(WH_MOUSE_LL, Some(mouse_hook_callback), None, 0) } {
-                Ok(hook) => hook,
-                Err(error) => {
-                    let _ = unsafe { UnhookWindowsHookEx(keyboard_hook) };
-                    return Err(error);
-                }
-            };
-        Ok(Self {
-            keyboard_hook,
-            mouse_hook,
-            _not_send: PhantomData,
-        })
+        let (ready_sender, ready_receiver) = mpsc::sync_channel(1);
+        let hook_thread = thread::Builder::new()
+            .name("timelens-input-hooks".to_owned())
+            .spawn(move || run_hook_thread(&ready_sender))?;
+        match ready_receiver.recv() {
+            Ok(Ok(hook_thread_id)) => Ok(Self {
+                hook_thread_id,
+                hook_thread: Some(hook_thread),
+            }),
+            Ok(Err(error)) => {
+                let _ = hook_thread.join();
+                Err(error)
+            }
+            Err(_) => {
+                let _ = hook_thread.join();
+                Err(Error::new(
+                    E_FAIL,
+                    "the input hook thread exited during startup",
+                ))
+            }
+        }
     }
 
     pub fn drain(&self) -> InputDrain {
@@ -102,9 +115,48 @@ impl InputMonitor {
 
 impl Drop for InputMonitor {
     fn drop(&mut self) {
-        let _ = unsafe { UnhookWindowsHookEx(self.keyboard_hook) };
-        let _ = unsafe { UnhookWindowsHookEx(self.mouse_hook) };
+        // The thread's message queue exists before it reports ready, so the quit
+        // message cannot be lost; the thread removes both hooks before it exits.
+        if unsafe { PostThreadMessageW(self.hook_thread_id, WM_QUIT, WPARAM(0), LPARAM(0)) }.is_ok()
+            && let Some(thread) = self.hook_thread.take()
+        {
+            let _ = thread.join();
+        }
     }
+}
+
+fn run_hook_thread(ready: &mpsc::SyncSender<Result<u32, Error>>) {
+    let mut message = MSG::default();
+    // Create this thread's message queue before anyone can post WM_QUIT to it.
+    let _ = unsafe { PeekMessageW(&mut message, None, 0, 0, PM_NOREMOVE) };
+    let keyboard_hook =
+        match unsafe { SetWindowsHookExW(WH_KEYBOARD_LL, Some(keyboard_hook_callback), None, 0) } {
+            Ok(hook) => hook,
+            Err(error) => {
+                let _ = ready.send(Err(error));
+                return;
+            }
+        };
+    let mouse_hook =
+        match unsafe { SetWindowsHookExW(WH_MOUSE_LL, Some(mouse_hook_callback), None, 0) } {
+            Ok(hook) => hook,
+            Err(error) => {
+                unhook(keyboard_hook);
+                let _ = ready.send(Err(error));
+                return;
+            }
+        };
+    if ready.send(Ok(unsafe { GetCurrentThreadId() })).is_ok() {
+        // Hook callbacks are delivered while this thread waits here. Low-level hooks
+        // post no window messages, so there is nothing to dispatch.
+        while unsafe { GetMessageW(&mut message, None, 0, 0) }.0 > 0 {}
+    }
+    unhook(mouse_hook);
+    unhook(keyboard_hook);
+}
+
+fn unhook(hook: HHOOK) {
+    let _ = unsafe { UnhookWindowsHookEx(hook) };
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]

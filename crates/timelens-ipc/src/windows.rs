@@ -11,8 +11,9 @@ use std::{
 
 use windows_sys::Win32::{
     Foundation::{
-        CloseHandle, ERROR_ALREADY_EXISTS, ERROR_PIPE_CONNECTED, GENERIC_READ, GENERIC_WRITE,
-        GetLastError, HANDLE, INVALID_HANDLE_VALUE, LocalFree,
+        CloseHandle, ERROR_ACCESS_DENIED, ERROR_ALREADY_EXISTS, ERROR_FILE_NOT_FOUND,
+        ERROR_PIPE_CONNECTED, GENERIC_READ, GENERIC_WRITE, GetLastError, HANDLE,
+        INVALID_HANDLE_VALUE, LocalFree,
     },
     Security::{
         Authorization::{
@@ -25,7 +26,7 @@ use windows_sys::Win32::{
     },
     Storage::FileSystem::{
         CreateFileW, FILE_FLAG_FIRST_PIPE_INSTANCE, FlushFileBuffers, OPEN_EXISTING,
-        PIPE_ACCESS_DUPLEX, ReadFile, WriteFile,
+        PIPE_ACCESS_DUPLEX, ReadFile, SECURITY_IDENTIFICATION, SECURITY_SQOS_PRESENT, WriteFile,
     },
     System::{
         Pipes::{
@@ -35,8 +36,9 @@ use windows_sys::Win32::{
         },
         RemoteDesktop::ProcessIdToSessionId,
         Threading::{
-            CreateMutexW, GetCurrentProcessId, OpenProcess, OpenProcessToken,
+            CreateMutexW, GetCurrentProcessId, OpenMutexW, OpenProcess, OpenProcessToken,
             PROCESS_QUERY_LIMITED_INFORMATION, QueryFullProcessImageNameW,
+            SYNCHRONIZATION_SYNCHRONIZE,
         },
     },
 };
@@ -74,10 +76,27 @@ impl SingleInstanceGuard {
         Self::acquire("Collector")
     }
 
+    /// Whether a collector holds its single-instance mutex in this user session.
+    /// The mutex is only opened, never created, so checking cannot make a collector
+    /// that is starting at the same moment believe another one is running.
+    pub fn collector_running() -> Result<bool> {
+        let name = instance_mutex_name("Collector")?;
+        let handle = unsafe { OpenMutexW(SYNCHRONIZATION_SYNCHRONIZE, 0, name.as_ptr()) };
+        if !handle.is_null() {
+            unsafe { CloseHandle(handle) };
+            return Ok(true);
+        }
+        match unsafe { GetLastError() } {
+            ERROR_FILE_NOT_FOUND => Ok(false),
+            // An elevated collector's mutex denies this process, which still proves
+            // that it exists.
+            ERROR_ACCESS_DENIED => Ok(true),
+            status => Err(io::Error::from_raw_os_error(status as i32).into()),
+        }
+    }
+
     fn acquire(component: &str) -> Result<Self> {
-        let sid = current_user_sid()?;
-        let session = current_session_id()?;
-        let name = wide(format!("Local\\Timelens.{component}.{sid}.{session}.v1"));
+        let name = instance_mutex_name(component)?;
         let handle = unsafe { CreateMutexW(null(), 0, name.as_ptr()) };
         let handle = OwnedHandle::new(handle)?;
         if unsafe { GetLastError() } == ERROR_ALREADY_EXISTS {
@@ -92,6 +111,14 @@ impl SingleInstanceGuard {
     pub fn raw_handle(&self) -> HANDLE {
         self.handle.0
     }
+}
+
+fn instance_mutex_name(component: &str) -> Result<Vec<u16>> {
+    let sid = current_user_sid()?;
+    let session = current_session_id()?;
+    Ok(wide(format!(
+        "Local\\Timelens.{component}.{sid}.{session}.v1"
+    )))
 }
 
 pub fn current_pipe_name() -> Result<String> {
@@ -116,6 +143,7 @@ pub fn run_server_probe(pipe_name: &str, expected_peer_names: &[&str]) -> Result
         &Envelope::new(envelope::Body::Ack(Ack {
             through_sequence: sequence,
             accepted: true,
+            permanent: false,
         })),
     )?;
     Ok(report)
@@ -135,6 +163,7 @@ pub fn run_client_probe(pipe_name: &str, expected_peer_names: &[&str]) -> Result
         Some(envelope::Body::Ack(Ack {
             through_sequence: 1,
             accepted: true,
+            ..
         })) => Ok(report),
         _ => Err(IpcError::InvalidMessage(
             "server did not acknowledge the heartbeat".to_owned(),
@@ -142,14 +171,37 @@ pub fn run_client_probe(pipe_name: &str, expected_peer_names: &[&str]) -> Result
     }
 }
 
-pub fn run_server_collector_message<F, E>(
+/// Why the core did not persist an authenticated batch.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BatchRejection {
+    pub message: String,
+    /// The batch contradicts durable state, so resending it can never succeed.
+    pub permanent: bool,
+}
+
+impl BatchRejection {
+    pub fn transient(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+            permanent: false,
+        }
+    }
+
+    pub fn permanent(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+            permanent: true,
+        }
+    }
+}
+
+pub fn run_server_collector_message<F>(
     pipe_name: &str,
     expected_peer_names: &[&str],
     persist: F,
 ) -> Result<HandshakeReport>
 where
-    F: FnOnce(&EventBatch) -> std::result::Result<(), E>,
-    E: std::fmt::Display,
+    F: FnOnce(&EventBatch) -> std::result::Result<(), BatchRejection>,
 {
     let (mut pipe, report) = accept_authenticated_server(pipe_name, expected_peer_names)?;
     let message = protocol::read_frame(&mut pipe)?;
@@ -160,6 +212,7 @@ where
                 &Envelope::new(envelope::Body::Ack(Ack {
                     through_sequence: sequence,
                     accepted: true,
+                    permanent: false,
                 })),
             )?;
             return Ok(report);
@@ -172,21 +225,23 @@ where
         }
     };
     let through_sequence = batch.last_sequence()?;
-    if let Err(error) = persist(&batch) {
+    if let Err(rejection) = persist(&batch) {
         protocol::write_frame(
             &mut pipe,
             &Envelope::new(envelope::Body::Ack(Ack {
                 through_sequence,
                 accepted: false,
+                permanent: rejection.permanent,
             })),
         )?;
-        return Err(IpcError::BatchRejected(error.to_string()));
+        return Err(IpcError::BatchRejected(rejection.message));
     }
     protocol::write_frame(
         &mut pipe,
         &Envelope::new(envelope::Body::Ack(Ack {
             through_sequence,
             accepted: true,
+            permanent: false,
         })),
     )?;
     Ok(report)
@@ -208,10 +263,19 @@ pub fn run_client_event_batch(
         Some(envelope::Body::Ack(Ack {
             through_sequence: acknowledged,
             accepted: true,
+            ..
         })) if acknowledged == through_sequence => Ok(report),
         Some(envelope::Body::Ack(Ack {
             through_sequence: acknowledged,
             accepted: false,
+            permanent: true,
+        })) if acknowledged == through_sequence => Err(IpcError::BatchRejectedPermanently(
+            "the Timelens core can never persist the batch".to_owned(),
+        )),
+        Some(envelope::Body::Ack(Ack {
+            through_sequence: acknowledged,
+            accepted: false,
+            permanent: false,
         })) if acknowledged == through_sequence => Err(IpcError::BatchRejected(
             "the Timelens core did not persist the batch".to_owned(),
         )),
@@ -378,7 +442,8 @@ fn connect_client(pipe_name: &str) -> Result<OwnedHandle> {
                 0,
                 null(),
                 OPEN_EXISTING,
-                0,
+                // Never let the pipe server act as this process beyond identifying it.
+                SECURITY_SQOS_PRESENT | SECURITY_IDENTIFICATION,
                 null_mut(),
             )
         };
@@ -749,7 +814,7 @@ mod tests {
             run_server_collector_message(
                 &server_pipe,
                 &[server_name.as_str()],
-                |_| -> std::result::Result<(), &'static str> {
+                |_| -> std::result::Result<(), BatchRejection> {
                     panic!("a heartbeat must not invoke event persistence")
                 },
             )
@@ -768,7 +833,7 @@ mod tests {
         let server = thread::spawn(move || {
             run_server_collector_message(&server_pipe, &[server_name.as_str()], |batch| {
                 assert_eq!(batch.first_sequence, 1);
-                Ok::<_, &'static str>(())
+                Ok(())
             })
         });
 
@@ -788,7 +853,7 @@ mod tests {
         let server_name = current_name.clone();
         let server = thread::spawn(move || {
             run_server_collector_message(&server_pipe, &[server_name.as_str()], |_| {
-                Err::<(), _>("storage unavailable")
+                Err(BatchRejection::transient("storage unavailable"))
             })
         });
 
@@ -797,8 +862,47 @@ mod tests {
                 .unwrap_err();
         let server_error = server.join().unwrap().unwrap_err();
 
+        assert!(matches!(client_error, IpcError::BatchRejected(_)));
         assert!(client_error.to_string().contains("did not persist"));
         assert!(server_error.to_string().contains("storage unavailable"));
+    }
+
+    #[test]
+    fn permanently_rejected_event_batch_is_reported_as_unrecoverable() {
+        let current_name = current_executable_name();
+        let pipe_name = test_pipe_name();
+        let server_pipe = pipe_name.clone();
+        let server_name = current_name.clone();
+        let server = thread::spawn(move || {
+            run_server_collector_message(&server_pipe, &[server_name.as_str()], |_| {
+                Err(BatchRejection::permanent("sequence is not contiguous"))
+            })
+        });
+
+        let client_error =
+            run_client_event_batch(&pipe_name, &[current_name.as_str()], &test_batch())
+                .unwrap_err();
+        let server_error = server.join().unwrap().unwrap_err();
+
+        assert!(matches!(
+            client_error,
+            IpcError::BatchRejectedPermanently(_)
+        ));
+        assert!(server_error.to_string().contains("not contiguous"));
+    }
+
+    #[test]
+    fn collector_running_reflects_the_instance_mutex_without_creating_it() {
+        let Ok(guard) = SingleInstanceGuard::acquire_collector() else {
+            // A real collector owns this session, so it is running by definition.
+            assert!(SingleInstanceGuard::collector_running().unwrap());
+            return;
+        };
+        assert!(SingleInstanceGuard::collector_running().unwrap());
+        drop(guard);
+        assert!(!SingleInstanceGuard::collector_running().unwrap());
+        // Checking must not leave a mutex behind that blocks a starting collector.
+        drop(SingleInstanceGuard::acquire_collector().unwrap());
     }
 
     #[test]

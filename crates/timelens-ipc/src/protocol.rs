@@ -254,6 +254,9 @@ pub struct Ack {
     pub through_sequence: u64,
     #[prost(bool, tag = "2")]
     pub accepted: bool,
+    /// Set with `accepted = false` when resending the same batch can never succeed.
+    #[prost(bool, tag = "3")]
+    pub permanent: bool,
 }
 
 impl Envelope {
