@@ -76,6 +76,8 @@ pub fn install(
         match page {
             2 => window.invoke_snapshot_opened(),
             3 if window.get_stats_tab() == 1 => {
+                // The application rules page shares this panel; switch it back.
+                window.global::<CollectionState>().set_page(1);
                 window
                     .global::<CollectionState>()
                     .set_date(window.get_calendar_date());
@@ -168,14 +170,16 @@ pub fn install(
                 s.calendar_day
                     .unwrap_or(s.range_ended_utc_ms.saturating_sub(1))
             };
-            match local_time_range(anchor, &start, &end, unix_time_ms()) {
+            let now = unix_time_ms();
+            match local_time_range(anchor, &start, &end, now) {
                 Ok((start, end)) => {
                     let mut s = state.borrow_mut();
                     s.horizon_started_utc_ms = start;
                     s.horizon_ended_utc_ms = end;
                     s.range_started_utc_ms = start;
-                    s.range_ended_utc_ms = end;
-                    s.follow_now = false;
+                    // A range that has not ended yet grows with the clock, like today.
+                    s.range_ended_utc_ms = end.min(now);
+                    s.follow_now = s.calendar_day.is_some() && end > now;
                     s.selected_activity = None;
                     drop(s);
                     w.set_action_status("".into());
@@ -235,8 +239,8 @@ fn local_time_range(
     if end <= start {
         return Err("结束时间需要晚于开始时间");
     }
-    if end > now {
-        return Err("所选时段尚未结束，请将结束时间设为当前时刻之前");
+    if start >= now {
+        return Err("所选时段还没有开始，请选择当前时刻之前的开始时间");
     }
     Ok((start, end))
 }
@@ -527,7 +531,9 @@ mod tests {
         assert_eq!(local_label(end, "%H:%M"), "18:00");
         assert!(local_time_range(anchor, "18:00", "09:00", now).is_err());
         assert!(local_time_range(anchor, "oops", "18:00", now).is_err());
-        assert!(local_time_range(anchor, "09:00", "18:00", anchor).is_err());
+        // An unfinished range is allowed; one that has not started is not.
+        assert!(local_time_range(anchor, "09:00", "18:00", anchor).is_ok());
+        assert!(local_time_range(anchor, "13:00", "18:00", anchor).is_err());
         assert_eq!(
             local_time_range(anchor, "09:00", "24:00", now).unwrap().1,
             now

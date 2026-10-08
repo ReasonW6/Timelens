@@ -17,7 +17,15 @@ const STOP: u32 = WM_APP + 29;
 static WINDOW: std::sync::atomic::AtomicIsize = std::sync::atomic::AtomicIsize::new(0);
 static SHUTDOWN_READY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 static EVENTS: Mutex<Option<mpsc::Sender<Event>>> = Mutex::new(None);
-static NOTICE: Mutex<Option<(i64, String, bool)>> = Mutex::new(None);
+static NOTICE: Mutex<Option<Notice>> = Mutex::new(None);
+static HIDE_EXPLAINED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+struct Notice {
+    /// The AI job a click opens; general notices open nothing.
+    job: Option<i64>,
+    title: &'static str,
+    text: &'static str,
+    success: bool,
+}
 enum Event {
     Open,
     Summary(i64),
@@ -82,9 +90,9 @@ unsafe extern "system" fn procedure(hwnd: HWND, message: u32, w: WPARAM, l: LPAR
                 WM_LBUTTONUP | WM_LBUTTONDBLCLK | NIN_SELECT => emit(Event::Open),
                 NIN_BALLOONUSERCLICK => {
                     if let Ok(n) = NOTICE.lock()
-                        && let Some((id, _, _)) = &*n
+                        && let Some(notice) = &*n
                     {
-                        emit(Event::Summary(*id));
+                        emit(notice.job.map_or(Event::Open, Event::Summary));
                     }
                 }
                 WM_RBUTTONUP | WM_CONTEXTMENU => unsafe {
@@ -121,16 +129,17 @@ unsafe extern "system" fn procedure(hwnd: HWND, message: u32, w: WPARAM, l: LPAR
         }
         WM_APP => {
             if let Ok(n) = NOTICE.lock()
-                && let Some((_, text, success)) = &*n
+                && let Some(Notice {
+                    title,
+                    text,
+                    success,
+                    ..
+                }) = &*n
             {
                 let mut data = notification_data(hwnd);
                 data.uFlags = NIF_INFO;
                 data.dwInfoFlags = if *success { NIIF_INFO } else { NIIF_ERROR };
-                for (slot, c) in data
-                    .szInfoTitle
-                    .iter_mut()
-                    .zip("Timelens AI".encode_utf16())
-                {
+                for (slot, c) in data.szInfoTitle.iter_mut().zip(title.encode_utf16()) {
                     *slot = c;
                 }
                 for (slot, c) in data.szInfo.iter_mut().take(255).zip(text.encode_utf16()) {
@@ -172,17 +181,20 @@ pub fn activate_existing(stop: bool) -> bool {
     }
 }
 pub fn notify(id: i64, success: bool) {
+    show_notice(Notice {
+        job: Some(id),
+        title: "Timelens AI",
+        text: if success {
+            "总结已完成，点击查看。"
+        } else {
+            "AI 任务失败，点击查看原因与保留的内容。"
+        },
+        success,
+    });
+}
+fn show_notice(notice: Notice) {
     if let Ok(mut n) = NOTICE.lock() {
-        *n = Some((
-            id,
-            if success {
-                "总结已完成，点击查看。"
-            } else {
-                "AI 任务失败，点击查看原因与保留的内容。"
-            }
-            .into(),
-            success,
-        ));
+        *n = Some(notice);
     }
     let hwnd = WINDOW.load(std::sync::atomic::Ordering::Acquire) as HWND;
     if !hwnd.is_null() {
@@ -245,6 +257,16 @@ pub fn install(
     w.window().on_close_requested(move || {
         if let Some(w) = weak.upgrade() {
             let _ = w.hide();
+        }
+        // Closing the window only hides it; say so once so recording in the
+        // background is never a surprise.
+        if !HIDE_EXPLAINED.swap(true, std::sync::atomic::Ordering::AcqRel) {
+            show_notice(Notice {
+                job: None,
+                title: "Timelens 仍在后台记录",
+                text: "窗口已收起到通知区域。点击托盘图标可重新打开；右键选择“退出”会停止采集。",
+                success: true,
+            });
         }
         slint::CloseRequestResponse::KeepWindowShown
     });
