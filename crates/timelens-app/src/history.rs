@@ -585,6 +585,17 @@ pub fn refresh(
             load_until(storage, &mut state, until)?;
         }
     } else {
+        // A new day began while the app was open: every cached offset is now one
+        // day off, so start over before reloading any of them.
+        if state
+            .days
+            .get(&0)
+            .is_some_and(|d| d.date != Local::now().date_naive())
+        {
+            state.days.clear();
+            state.loaded = -1;
+            return Ok(());
+        }
         let Some(guard) = try_lock_storage(storage)? else {
             return Ok(());
         };
@@ -620,18 +631,6 @@ pub fn refresh(
                 state.loaded = state.loaded.min(horizon);
             }
         }
-        // A new day began while the app was open: everything shifts by one.
-        if state
-            .days
-            .get(&0)
-            .is_some_and(|d| d.date != Local::now().date_naive())
-        {
-            state.days.clear();
-            state.loaded = -1;
-            drop(guard);
-            drop(state);
-            return Ok(());
-        }
     }
     publish(window, &state);
     Ok(())
@@ -641,6 +640,11 @@ pub fn refresh(
 /// loaded days are rebuilt on the next refresh.
 pub fn invalidate() {
     GENERATION.fetch_add(1, Ordering::Release);
+}
+
+/// Changes whenever `invalidate` is called.
+pub fn generation() -> u64 {
+    GENERATION.load(Ordering::Acquire)
 }
 
 /// Every loaded day changes, for example after clearing or deleting history.

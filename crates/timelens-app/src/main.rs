@@ -259,6 +259,8 @@ struct AppsState {
     pending: Option<(bool, mpsc::Receiver<Result<TimelineSnapshot>>)>,
     /// The totals on screen, kept to show another selection without a reload.
     shown: Option<(bool, TimelineSnapshot)>,
+    /// The history generation these totals belong to; a merge changes it.
+    generation: u64,
 }
 
 impl UiState {
@@ -554,6 +556,7 @@ fn run_window(
             window.set_report_summary("数据已变更，请重新生成本地报告".into());
             window.global::<DataState>().set_clear_credentials(false);
             history::reset(&timer_history);
+            timer_state.borrow_mut().apps = AppsState::default();
             refresh_requested = true;
         }
         while let Ok(status) = action_receiver.try_recv() {
@@ -561,6 +564,7 @@ fn run_window(
             if status.refresh {
                 // Cleaning or clearing may have removed earlier days' records.
                 history::reset(&timer_history);
+                timer_state.borrow_mut().apps = AppsState::default();
             }
             refresh_requested |= status.refresh;
             if let Some(report) = status.report {
@@ -730,6 +734,13 @@ fn request_apps(
         window.window().is_visible() && window.get_page() == 3 && window.get_stats_tab() == 0;
     let mut state = ui_state.borrow_mut();
     let apps = &mut state.apps;
+    if apps.generation != history::generation() {
+        // Applications were merged or split: drop what was gathered before.
+        *apps = AppsState {
+            generation: history::generation(),
+            ..AppsState::default()
+        };
+    }
     let interval = if today {
         TODAY_REFRESH
     } else {
