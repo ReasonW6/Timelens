@@ -831,8 +831,9 @@ fn is_identityless_host(path: &str) -> bool {
 
 /// Installers and uninstallers run once and are not applications the user works
 /// in, so they are never recorded. Like Windows' installer detection, this keys
-/// on the file name; programs launched from a temporary directory are bootstrap
-/// payloads such as Inno Setup's `is-*.tmp` helpers.
+/// on the file name. In a temporary directory only installer helpers count, such
+/// as Inno Setup's `is-*.tmp\*.tmp` and NSIS's `~nsu*.tmp\Au_.exe`; portable or
+/// self-extracted applications running there are still recorded.
 fn is_one_time_installer(path: &str) -> bool {
     let path = normalize_path(path);
     let name = path.rsplit('\\').next().unwrap_or_default();
@@ -848,7 +849,9 @@ fn is_one_time_installer(path: &str) -> bool {
             .to_str()
             .map(normalize_path)
             .is_some_and(|temp| path.starts_with(temp.trim_end_matches('\\')));
-    named_as_installer || temporary
+    let folder = path.rsplit('\\').nth(1).unwrap_or_default();
+    let helper = temporary && (name.ends_with(".tmp") || folder.ends_with(".tmp"));
+    named_as_installer || helper
 }
 
 fn normalize_path(path: &str) -> String {
@@ -1102,7 +1105,7 @@ mod tests {
             r"C:\Program Files\Tool\Uninstall.exe",
             r"C:\Windows\System32\msiexec.exe",
             r"C:\Users\Me\Downloads\VSCodeUserSetup-x64.exe",
-            r"C:\Users\Me\AppData\Local\Temp\7zS1234\payload.exe",
+            r"C:\Users\Me\AppData\Local\Temp\~nsuA.tmp\Au_.exe",
         ] {
             assert!(is_one_time_installer(installer), "{installer}");
         }
@@ -1112,6 +1115,9 @@ mod tests {
             r"C:\Windows\explorer.exe",
             // Squirrel-style launchers keep running the real application.
             r"C:\Users\Me\AppData\Local\Discord\Update.exe",
+            // Self-extracted and portable applications run their UI from temp.
+            r"C:\Users\Me\AppData\Local\Temp\7zS1234\payload.exe",
+            r"C:\Windows\Temp\portable\Viewer.exe",
         ] {
             assert!(!is_one_time_installer(application), "{application}");
         }

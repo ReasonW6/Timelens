@@ -33,13 +33,8 @@ pub fn validate_fixed_directory(path: &Path) -> Result<PathBuf> {
     }
     let plain = display.trim_start_matches(r"\\?\");
     let root = plain.get(..3).ok_or_else(|| invalid("磁盘根路径无效"))?;
-    // Fixed and removable local disks only: network shares and optical media
-    // cannot hold an encrypted database reliably.
-    if !matches!(
-        unsafe { windows_sys::Win32::Storage::FileSystem::GetDriveTypeW(wide(root).as_ptr()) },
-        2 | 3
-    ) {
-        return Err(invalid("数据目录必须位于本机磁盘，不支持网络位置和光驱"));
+    if unsafe { windows_sys::Win32::Storage::FileSystem::GetDriveTypeW(wide(root).as_ptr()) } != 3 {
+        return Err(invalid("数据目录必须位于本地固定磁盘"));
     }
     for component in path.components() {
         let name = component.as_os_str().to_string_lossy().to_lowercase();

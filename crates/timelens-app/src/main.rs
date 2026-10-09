@@ -1469,15 +1469,11 @@ fn refresh_snapshot_panel(
         (
             storage.snapshot_policy()?,
             storage.snapshot_exclusions()?,
-            storage.list_snapshot_slots(range_started, range_ended, 10_000)?,
+            storage.list_snapshot_slots(range_started, range_ended, 500)?,
         )
     };
-    // Only saved images are listed; missing and deleted slots are not shown.
-    let slots = slots
-        .into_iter()
-        .filter(|slot| slot.success)
-        .take(500)
-        .collect::<Vec<_>>();
+    // Missing slots stay listed with their reason, so an empty-looking range
+    // still explains why nothing was saved.
     let rows = slots
         .iter()
         .map(|slot| SnapshotRow {
@@ -1489,7 +1485,17 @@ fn refresh_snapshot_panel(
                 .trim_start_matches(r"\\.\")
                 .to_owned()
                 .into(),
-            result: format_bytes(slot.plaintext_bytes).into(),
+            result: if slot.success {
+                format!("已保存 · {}", format_bytes(slot.plaintext_bytes)).into()
+            } else {
+                format!(
+                    "缺失 · {}",
+                    slot.missing_reason
+                        .map(snapshot_reason_label)
+                        .unwrap_or("未知原因")
+                )
+                .into()
+            },
         })
         .collect::<Vec<_>>();
     let selected_index = snapshot_state
