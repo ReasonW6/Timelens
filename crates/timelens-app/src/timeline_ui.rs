@@ -60,14 +60,10 @@ pub fn install(
         }
     });
     {
-        let weak = window.as_weak();
+        // The window's timer gathers the totals for the new scope.
         let state = state.clone();
-        let storage = storage.clone();
         window.on_apps_scope_changed(move || {
-            state.borrow_mut().apps_loaded = None;
-            if let Some(w) = weak.upgrade() {
-                refresh(&w, &storage, &state);
-            }
+            state.borrow_mut().apps.requested = None;
         });
     }
     let weak = window.as_weak();

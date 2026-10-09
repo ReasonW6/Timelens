@@ -5,7 +5,10 @@ use std::{
     cell::RefCell,
     collections::BTreeMap,
     rc::Rc,
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicU64, Ordering},
+    },
     time::{Duration, Instant},
 };
 
@@ -39,8 +42,12 @@ const KIND_END: i32 = 5;
 const DAYS_PER_LOAD: i32 = 3;
 /// Gaps without focus at least this long read as a break between entries.
 const BREAK_MS: i64 = 15 * 60_000;
-/// Earlier days are rebuilt this often in case history was deleted or cleaned.
+/// Yesterday is rebuilt this often: records delivered late, for example from the
+/// collector's offline buffer, may still land there. Older days stay cached until
+/// `reset` or `invalidate`.
 const PAST_REFRESH: Duration = Duration::from_secs(30);
+/// Bumped when every loaded day may read differently, such as after a merge.
+static GENERATION: AtomicU64 = AtomicU64::new(0);
 /// Never reach further back than this, whatever the retention.
 const MAX_DAYS: i32 = 400;
 /// Other applications a row's card stack shows before "+N".
@@ -70,6 +77,7 @@ pub struct HistoryState {
     query: String,
     selected: Option<String>,
     past_refreshed: Instant,
+    generation: u64,
 }
 
 impl HistoryState {
@@ -81,6 +89,7 @@ impl HistoryState {
             query: String::new(),
             selected: None,
             past_refreshed: Instant::now(),
+            generation: GENERATION.load(Ordering::Acquire),
         }
     }
 }
@@ -579,12 +588,16 @@ pub fn refresh(
         let Some(guard) = try_lock_storage(storage)? else {
             return Ok(());
         };
+        let generation = GENERATION.load(Ordering::Acquire);
         let past = state.past_refreshed.elapsed() >= PAST_REFRESH;
-        let offsets = if past {
+        let offsets = if generation != state.generation {
             (0..=state.loaded).collect::<Vec<_>>()
+        } else if past {
+            (0..=state.loaded.min(1)).collect()
         } else {
             vec![0]
         };
+        state.generation = generation;
         for offset in offsets {
             match load_day(&guard, offset)? {
                 Some(day) => {
@@ -597,6 +610,15 @@ pub fn refresh(
         }
         if past {
             state.past_refreshed = Instant::now();
+            // Retention removes whole days at the far end; stop showing them.
+            if let Ok(policy) = guard.retention_policy() {
+                state.horizon = policy
+                    .days
+                    .map_or(MAX_DAYS, |days| (days as i32).min(MAX_DAYS));
+                let horizon = state.horizon;
+                state.days.retain(|offset, _| *offset <= horizon);
+                state.loaded = state.loaded.min(horizon);
+            }
         }
         // A new day began while the app was open: everything shifts by one.
         if state
@@ -613,6 +635,12 @@ pub fn refresh(
     }
     publish(window, &state);
     Ok(())
+}
+
+/// Every loaded day reads differently, for example after merging applications;
+/// loaded days are rebuilt on the next refresh.
+pub fn invalidate() {
+    GENERATION.fetch_add(1, Ordering::Release);
 }
 
 /// Every loaded day changes, for example after clearing or deleting history.

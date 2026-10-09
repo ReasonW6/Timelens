@@ -246,9 +246,19 @@ struct UiState {
     application_identities: Vec<String>,
     follow_now: bool,
     calendar_day: Option<i64>,
-    /// When the application list was last loaded and whether it covered today
-    /// only; `None` reloads it on the next refresh.
-    apps_loaded: Option<(bool, Instant)>,
+    apps: AppsState,
+}
+
+/// The application totals, gathered off the UI thread: all records can take a
+/// while to total, and storage stays locked meanwhile.
+#[derive(Default)]
+struct AppsState {
+    /// When the totals were last requested and whether they covered today only;
+    /// `None` requests them again.
+    requested: Option<(bool, Instant)>,
+    pending: Option<(bool, mpsc::Receiver<Result<TimelineSnapshot>>)>,
+    /// The totals on screen, kept to show another selection without a reload.
+    shown: Option<(bool, TimelineSnapshot)>,
 }
 
 impl UiState {
@@ -264,7 +274,7 @@ impl UiState {
             application_identities: Vec::new(),
             follow_now: true,
             calendar_day: None,
-            apps_loaded: None,
+            apps: AppsState::default(),
         }
     }
 }
@@ -365,7 +375,6 @@ fn run_window(
 
     {
         let weak = window.as_weak();
-        let storage = Arc::clone(&storage);
         let ui_state = Rc::clone(&ui_state);
         let action_busy = Arc::clone(&action_busy);
         window.on_app_selected(move |index| {
@@ -374,12 +383,12 @@ fn run_window(
             }
             let mut state = ui_state.borrow_mut();
             state.selected_identity = state.application_identities.get(index as usize).cloned();
-            state.apps_loaded = None;
+            let shown = state.apps.shown.clone();
             drop(state);
-            if let Some(window) = weak.upgrade()
-                && let Err(error) = refresh_timeline(&window, &storage, &ui_state)
+            if let Some((today, snapshot)) = shown
+                && let Some(window) = weak.upgrade()
             {
-                window.set_action_status(format!("刷新失败：{error}").into());
+                render_apps(&window, &ui_state, snapshot, today);
             }
         });
     }
@@ -495,6 +504,10 @@ fn run_window(
             last_data_status = data_status;
         }
         window.set_action_busy(timer_busy.load(Ordering::Acquire));
+        request_apps(&window, &timer_storage, &timer_state);
+        if let Err(error) = poll_apps(&window, &timer_state) {
+            window.set_action_status(format!("读取应用统计失败：{error}").into());
+        }
         window.global::<AiState>().set_open(
             window.get_page() == 4
                 || (window.get_settings_open() && window.get_settings_tab() == 4),
@@ -686,43 +699,92 @@ fn refresh_timeline(
             state.range_ended_utc_ms.min(unix_time_ms()),
         )
     };
-    let apps_today = window.get_apps_today();
-    let apps_due = ui_state.borrow().apps_loaded.is_none_or(|(today, loaded)| {
-        today != apps_today || today || loaded.elapsed() >= ALL_TIME_REFRESH
-    });
-    let (snapshot, apps, policy, paused) = {
+    let (snapshot, policy, paused) = {
         let Some(storage) = try_lock_storage(storage)? else {
             return Ok(false);
         };
-        let apps = if apps_due {
-            let now = unix_time_ms();
-            let started = if apps_today {
-                timeline_view::selected_day_bounds(now, 0).map_or(now - 1, |(start, _)| start)
-            } else {
-                1
-            };
-            Some(storage.timeline_snapshot(started, now)?)
-        } else {
-            None
-        };
         (
             storage.timeline_snapshot(range_started, range_ended)?,
-            apps,
             storage.retention_policy()?,
             storage.collection_policy()?.paused,
         )
     };
     window.global::<CollectionState>().set_paused(paused);
     render_snapshot(window, ui_state, snapshot, policy);
-    if let Some(apps) = apps {
-        ui_state.borrow_mut().apps_loaded = Some((apps_today, Instant::now()));
-        render_apps(window, ui_state, apps, apps_today);
-    }
     Ok(true)
 }
 
-/// All recorded history takes longer to total, so it is reloaded less often.
+/// How often the application totals are gathered while their list is on screen.
+const TODAY_REFRESH: Duration = Duration::from_secs(2);
 const ALL_TIME_REFRESH: Duration = Duration::from_secs(30);
+
+/// Start gathering the application totals in the background when their list is
+/// on screen and due; `poll_apps` shows them once ready.
+fn request_apps(
+    window: &AppWindow,
+    storage: &Arc<Mutex<Storage>>,
+    ui_state: &Rc<RefCell<UiState>>,
+) {
+    let today = window.get_apps_today();
+    let visible =
+        window.window().is_visible() && window.get_page() == 3 && window.get_stats_tab() == 0;
+    let mut state = ui_state.borrow_mut();
+    let apps = &mut state.apps;
+    let interval = if today {
+        TODAY_REFRESH
+    } else {
+        ALL_TIME_REFRESH
+    };
+    let due = apps
+        .requested
+        .is_none_or(|(was_today, at)| was_today != today || at.elapsed() >= interval);
+    if !visible || !due || apps.pending.is_some() {
+        return;
+    }
+    apps.requested = Some((today, Instant::now()));
+    let (sender, receiver) = mpsc::channel();
+    apps.pending = Some((today, receiver));
+    let storage = Arc::clone(storage);
+    thread::spawn(move || {
+        let now = unix_time_ms();
+        let started = if today {
+            timeline_view::selected_day_bounds(now, 0).map_or(now - 1, |(start, _)| start)
+        } else {
+            1
+        };
+        let result = storage
+            .lock()
+            .map_err(|_| anyhow::anyhow!("storage lock poisoned"))
+            .and_then(|storage| Ok(storage.timeline_snapshot(started, now)?));
+        let _ = sender.send(result);
+    });
+}
+
+/// Show gathered application totals, unless the scope changed meanwhile.
+fn poll_apps(window: &AppWindow, ui_state: &Rc<RefCell<UiState>>) -> Result<()> {
+    let mut state = ui_state.borrow_mut();
+    let Some((today, receiver)) = &state.apps.pending else {
+        return Ok(());
+    };
+    let today = *today;
+    let result = match receiver.try_recv() {
+        Ok(result) => result,
+        Err(mpsc::TryRecvError::Empty) => return Ok(()),
+        Err(mpsc::TryRecvError::Disconnected) => {
+            state.apps.pending = None;
+            return Ok(());
+        }
+    };
+    state.apps.pending = None;
+    let snapshot = result?;
+    if today != window.get_apps_today() {
+        return Ok(());
+    }
+    state.apps.shown = Some((today, snapshot.clone()));
+    drop(state);
+    render_apps(window, ui_state, snapshot, today);
+    Ok(())
+}
 
 fn render_snapshot(
     window: &AppWindow,
