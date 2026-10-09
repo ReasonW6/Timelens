@@ -48,8 +48,6 @@ const BREAK_MS: i64 = 15 * 60_000;
 const PAST_REFRESH: Duration = Duration::from_secs(30);
 /// Bumped when every loaded day may read differently, such as after a merge.
 static GENERATION: AtomicU64 = AtomicU64::new(0);
-/// Never reach further back than this, whatever the retention.
-const MAX_DAYS: i32 = 400;
 /// Other applications a row's card stack shows before "+N".
 const STACK_SHOWN: usize = 2;
 
@@ -85,7 +83,7 @@ impl HistoryState {
         Self {
             days: BTreeMap::new(),
             loaded: -1,
-            horizon: MAX_DAYS,
+            horizon: 0,
             query: String::new(),
             selected: None,
             past_refreshed: Instant::now(),
@@ -534,6 +532,22 @@ fn publish(window: &AppWindow, state: &HistoryState) {
     window.set_history_selected(state.selected.clone().unwrap_or_default().into());
 }
 
+/// How many days back the oldest retained record lies; nothing older needs
+/// loading, and retention never keeps anything beyond its period.
+fn reach(storage: &Storage) -> Option<i32> {
+    let policy = storage.retention_policy().ok()?;
+    let oldest = match storage.earliest_activity_utc_ms().ok()? {
+        Some(timestamp) => {
+            let date = Local.timestamp_millis_opt(timestamp).single()?.date_naive();
+            (Local::now().date_naive() - date)
+                .num_days()
+                .clamp(0, i32::MAX as i64) as i32
+        }
+        None => 0,
+    };
+    Some(policy.days.map_or(oldest, |days| oldest.min(days as i32)))
+}
+
 /// Fetch more days until `until` is loaded. Returns false when storage is busy.
 fn load_until(
     storage: &Arc<Mutex<Storage>>,
@@ -543,10 +557,8 @@ fn load_until(
     let Some(storage) = try_lock_storage(storage)? else {
         return Ok(false);
     };
-    if let Ok(policy) = storage.retention_policy() {
-        state.horizon = policy
-            .days
-            .map_or(MAX_DAYS, |days| (days as i32).min(MAX_DAYS));
+    if let Some(reach) = reach(&storage) {
+        state.horizon = reach;
     }
     let until = until.min(state.horizon);
     while state.loaded < until {
@@ -622,10 +634,8 @@ pub fn refresh(
         if past {
             state.past_refreshed = Instant::now();
             // Retention removes whole days at the far end; stop showing them.
-            if let Ok(policy) = guard.retention_policy() {
-                state.horizon = policy
-                    .days
-                    .map_or(MAX_DAYS, |days| (days as i32).min(MAX_DAYS));
+            if let Some(reach) = reach(&guard) {
+                state.horizon = reach;
                 let horizon = state.horizon;
                 state.days.retain(|offset, _| *offset <= horizon);
                 state.loaded = state.loaded.min(horizon);
@@ -904,7 +914,7 @@ pub fn install(
             }
             let mut s = state.borrow_mut();
             if offset as i32 > s.horizon {
-                window.set_action_status("这一天早于数据保留期，已没有记录".into());
+                window.set_action_status("这一天早于最早的记录".into());
                 return;
             }
             if let Err(error) = load_until(&storage, &mut s, offset as i32) {
@@ -944,6 +954,11 @@ pub fn install(
             let Some(entry) = s.selected.as_deref().and_then(|key| find(&s, key)) else {
                 return;
             };
+            if action == 2 {
+                // The rules page follows the selected application.
+                ui_state.borrow_mut().selected_identity = entry.entry.identity.clone();
+                return;
+            }
             focus_range(&window, &storage, &ui_state, entry);
             match action {
                 0 => window.invoke_navigate(2),

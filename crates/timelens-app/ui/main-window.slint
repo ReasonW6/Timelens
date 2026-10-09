@@ -319,7 +319,8 @@ export component AppWindow inherits Window {
     callback history-select(string);
     callback history-close;
     callback history-jump(string);
-    // On the selected activity: 0 show its snapshots, 1 summarize it.
+    // On the selected activity: 0 show its snapshots, 1 summarize it, 2 select
+    // its application.
     callback detail-action(int);
     callback app-selected(int);
     callback horizon-selected(int);
@@ -375,7 +376,9 @@ export component AppWindow inherits Window {
     }
     // 0 show its snapshots, 1 summarize it, 2 open its application's rules.
     function act-on-activity(action: int) {
-        if action == 2 { root.open-settings(2); } else { root.detail-action(action); }
+        root.detail-action(action);
+        // The rules page opens on the application the activity selected.
+        if action == 2 { root.open-settings(2); }
     }
     function open-settings(tab: int) {
         root.settings-open = true;

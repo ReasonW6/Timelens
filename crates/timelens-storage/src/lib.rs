@@ -461,6 +461,15 @@ impl Storage {
         Ok(WindowBatchOutcome::Stored)
     }
 
+    /// When the earliest retained application window opened, if any.
+    pub fn earliest_activity_utc_ms(&self) -> Result<Option<i64>> {
+        Ok(self.connection.query_row(
+            "SELECT MIN(opened_utc_ms) FROM window_instances",
+            [],
+            |row| row.get(0),
+        )?)
+    }
+
     pub fn timeline_snapshot(
         &self,
         range_started_utc_ms: i64,

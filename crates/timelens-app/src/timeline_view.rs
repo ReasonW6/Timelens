@@ -138,7 +138,11 @@ fn build_activity_rows_in<Tz: TimeZone>(
     runs.sort_by(|left, right| {
         (left.started, left.ended, left.identity).cmp(&(right.started, right.ended, right.identity))
     });
-    group_runs(&runs)
+    let unrecorded = unrecorded_spans(snapshot)
+        .into_iter()
+        .map(|span| (span.started_utc_ms, span.ended_utc_ms))
+        .collect::<Vec<_>>();
+    group_runs(&runs, &unrecorded)
 }
 
 /// Stretches in which the collector did not record application activity.
@@ -225,9 +229,14 @@ impl<'a> Block<'a> {
         self.group.split(" · ").next().unwrap_or("")
     }
 
-    /// Whether `next`, which starts no earlier, continues the same stretch.
-    fn links(&self, next: &Self) -> bool {
-        next.date() == self.date() && next.started - self.ended <= BRIEF_ABSENCE_MS
+    /// Whether `next`, which starts no earlier, continues the same stretch. A
+    /// shown unrecorded stretch between them always separates them.
+    fn links(&self, next: &Self, unrecorded: &[Interval]) -> bool {
+        next.date() == self.date()
+            && next.started - self.ended <= BRIEF_ABSENCE_MS
+            && !unrecorded
+                .iter()
+                .any(|&(started, ended)| started < next.started && ended > self.ended)
     }
 
     fn absorb(&mut self, other: Block<'a>) {
@@ -295,13 +304,13 @@ impl<'a> Block<'a> {
 /// neighbour of the same stretch, and neighbours with the same main application
 /// merge. A block's main application is the one focused longest within it, so a
 /// short visit at the start of a stretch never claims the time spent elsewhere.
-fn group_runs(runs: &[FocusRun<'_>]) -> Vec<ActivityEntry> {
+fn group_runs(runs: &[FocusRun<'_>], unrecorded: &[Interval]) -> Vec<ActivityEntry> {
     let mut blocks = runs.iter().map(Block::new).collect::<Vec<_>>();
     loop {
         let mut index = 1;
         while index < blocks.len() {
             if blocks[index - 1].main.0 == blocks[index].main.0
-                && blocks[index - 1].links(&blocks[index])
+                && blocks[index - 1].links(&blocks[index], unrecorded)
             {
                 let block = blocks.remove(index);
                 blocks[index - 1].absorb(block);
@@ -309,7 +318,8 @@ fn group_runs(runs: &[FocusRun<'_>]) -> Vec<ActivityEntry> {
                 index += 1;
             }
         }
-        let gap = |a: &Block<'_>, b: &Block<'_>| a.links(b).then_some(b.started - a.ended);
+        let gap =
+            |a: &Block<'_>, b: &Block<'_>| a.links(b, unrecorded).then_some(b.started - a.ended);
         let brief = (0..blocks.len())
             .filter(|&i| blocks[i].main.1 < BRIEF_ABSENCE_MS as u64)
             .filter_map(|i| {
@@ -864,6 +874,33 @@ mod tests {
         assert_eq!(
             summary,
             vec![("browser", 0, 10), ("chat", 10, 15), ("browser", 15, 26)]
+        );
+    }
+
+    #[test]
+    fn an_unrecorded_stretch_separates_rows_of_the_same_application() {
+        let start = timestamp(2026, 9, 5, 9, 0);
+        let at = |minute: i64| start + minute * MINUTE;
+        let mut snapshot = snapshot(
+            start,
+            at(60),
+            vec![application("editor", &[(at(0), at(10)), (at(13), at(20))])],
+        );
+        snapshot.monitoring_gaps.push(TimelineGap {
+            data_class: "activity".into(),
+            started_utc_ms: at(10),
+            ended_utc_ms: at(13),
+            reason: "collector_restart".into(),
+        });
+        let rows = build_activity_rows_in(&snapshot, &zone());
+        assert_eq!(
+            rows.iter()
+                .map(|row| (
+                    (row.started_utc_ms - start) / MINUTE,
+                    (row.ended_utc_ms - start) / MINUTE
+                ))
+                .collect::<Vec<_>>(),
+            vec![(0, 10), (13, 20)]
         );
     }
 
