@@ -13,10 +13,15 @@ target/
 *.suo
 *.user
 
+# Python caches from asset scripts
+__pycache__/
+*.py[cod]
+
 # Local configuration and secrets
 .env
 .env.*
 !.env.example
+.claude/settings.local.json
 
 # Timelens runtime data
 data/

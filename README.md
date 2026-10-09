@@ -6,6 +6,8 @@ Timelens 是一款面向 Windows 11 的轻量级、本地优先活动观察应�
 
 > 界面重构（2026-09-06）：已实施用户选定的 Paper 原生界面，涵盖六个主页面与恢复窗口。设计对照、窗口缩放、实际操作和最新回归证据见 [界面验收](design-qa.md)及[设计实施记录](docs/design/rebuild-20260905/README.md)。重构实现与验收记录已归档至提交 `b535a6f`；完整发布验收仍待完成。
 
+> 界面调整（2026-10-09）：首页改为按日连续滚动的时间线，每一行归属该时段聚焦最久的应用，短暂切换作为穿插应用归入同一行。主导航为时间线、统计与报告（应用、本地报告、键位与系统）、快照和 AI 总结；应用统计默认显示全部记录的累计时间，可切换为今天。定时快照会跳过桌面复制返回的只含鼠标的黑帧。
+
 > 历史里程碑验收（2026-09-05）：里程碑 1 至 5 的功能均已实现，当时的 103 项 Release 回归及当前宿主机的 UI、安装升级卸载、崩溃恢复、容量与资源验收通过。当时的 Inno 安装包为 9.665 MiB。按用户决定跳过签名和干净 Windows 11 虚拟机验收；锁屏、睡眠、系统重启、多屏、HDR 与远程会话的真实发布矩阵仍待执行。历史性能与安装包数据不代表本次界面重构后的完整发布验收。
 
 ## V1 原则
@@ -52,6 +54,8 @@ cargo run --release -p timelens-storage --example milestone2_capacity -- --data-
 & '.\docs\wayfinder\timelens-v1\performance-validation\verify-milestone2-privacy.ps1' -DataDirectory C:\path\to\capacity-data
 ```
 
+调试构建可设置 `TIMELENS_QA_CAPTURE=<目录>`，依次截取主要页面后自动退出；配合 `--data-dir` 使用隔离数据。核心是单实例的，运行前需先关闭已安装的 Timelens。
+
 DPAPI 与 Credential Manager 回归需要当前 Windows 用户的凭据上下文。完整进程组性能、按需截图和独立安装验收的前置条件及入口见[里程碑 4、5 报告](docs/wayfinder/timelens-v1/performance-validation/milestone-4-5-report.md)。
 
 安装包使用 Inno Setup 7 编译：
@@ -60,7 +64,7 @@ DPAPI 与 Credential Manager 回归需要当前 Windows 用户的凭据上下文
 & 'C:\path\to\ISCC.exe' 'installer\Timelens.iss'
 ```
 
-Core 与 Collector 只在校验同一用户、同一会话、Windows 返回的真实 PID、固定可执行文件名和同目录路径后握手。正式安装由 Inno Setup 将安装目录收紧为 SYSTEM/Administrators 可写、普通用户只读执行，并检查祖先目录不能被普通用户用于替换载荷；没有代码签名时，这是防止同名二进制替换的必要安全边界。升级由用户主动运行安装器；卸载可选择保留或删除本地数据，外部导出不随卸载删除。
+Core 与 Collector 只在校验同一用户、同一会话、Windows 返回的真实 PID、固定可执行文件名和对端路径后握手：对端须与自身同目录，或位于管理员专属登录任务定义登记的目录。主程序（core、AI worker）可安装到任意本地固定磁盘目录；以管理员身份运行的采集器、卸载程序和维护脚本固定安装在 `Common Files\Timelens`。安装器将两处目录收紧为 SYSTEM/Administrators 可写、普通用户只读执行，并检查提权目录的祖先目录不能被普通用户用于替换载荷；没有代码签名时，这是防止同名二进制替换提权的必要安全边界。首次安装时可以选择数据位置：默认是当前用户的 `AppData\Local\Timelens`，也可以选本地固定磁盘上的任意空文件夹（在安装目录内仅限其中的 `Data` 文件夹），安装器会创建该文件夹并授予当前用户写入权限；已有数据的用户继续使用原位置，升级也不改变数据位置。升级由用户主动运行安装器；卸载可选择保留或删除本地数据，外部导出不随卸载删除。
 
 ## 文档
 

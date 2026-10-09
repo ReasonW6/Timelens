@@ -25,7 +25,7 @@ use timelens_ipc::{
     TrayTransition as ProtocolTrayTransition, TrayTransitionKind as ProtocolTrayTransitionKind,
     WindowObservation as ProtocolWindowObservation, WindowTransition as ProtocolWindowTransition,
     WindowTransitionKind as ProtocolWindowTransitionKind, collector_event, current_pipe_name,
-    new_collector_run_id, run_client_event_batch, run_client_probe,
+    new_collector_run_id, run_client_event_batch, run_client_probe, trust_peer_directory,
 };
 use timelens_observer::{
     IdentitySource as ObserverIdentitySource, InputDrain, InputMonitor, InputSampleKind,
@@ -60,6 +60,14 @@ fn main() -> Result<()> {
         return observe_window_events(duration);
     }
     let pipe_name = options.pipe_name.clone().unwrap_or(current_pipe_name()?);
+    if let Some(core_directory) = &options.core_directory {
+        trust_peer_directory(core_directory).with_context(|| {
+            format!(
+                "Timelens core directory is unavailable: {}",
+                core_directory.display()
+            )
+        })?;
+    }
 
     if options.handshake_once {
         let report = probe(&pipe_name)?;
@@ -1278,6 +1286,9 @@ struct Options {
     observe_windows_once: bool,
     pipe_name: Option<String>,
     data_directory: Option<PathBuf>,
+    /// The user-chosen installation directory of the core, set by the collector
+    /// task when the collector is installed in its own protected directory.
+    core_directory: Option<PathBuf>,
 }
 
 impl Options {
@@ -1311,6 +1322,14 @@ impl Options {
                     options.data_directory = Some(PathBuf::from(
                         arguments.next().context("--data-dir requires a value")?,
                     ));
+                }
+                "--core-dir" => {
+                    let path =
+                        PathBuf::from(arguments.next().context("--core-dir requires a value")?);
+                    if !path.is_absolute() {
+                        bail!("--core-dir must be absolute: {}", path.display());
+                    }
+                    options.core_directory = Some(path);
                 }
                 unknown => bail!("unknown argument: {unknown}"),
             }

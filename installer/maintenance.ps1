@@ -1,14 +1,22 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)][string] $InstallDir,
+    # Holds the elevated collector; defaults to the installation directory itself.
+    [string] $ElevatedDir = $InstallDir,
     [ValidateSet('PrepareUpgrade', 'Uninstall')][string] $Mode = 'PrepareUpgrade',
     [ValidateSet('Keep', 'Delete')][string] $DataMode = 'Delete',
     [ValidatePattern('^\\Timelens(?:-Acceptance-[a-fA-F0-9-]+)?\\$')][string] $TaskPath = '\Timelens\',
-    [string] $DataDirectory = ''
+    [string] $DataDirectory = '',
+    # Receives the failure reason so the installer can show it instead of a generic message.
+    [string] $ErrorFile = ''
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+trap {
+    if ($ErrorFile) { Set-Content -LiteralPath $ErrorFile -Value $_.Exception.Message -Encoding UTF8 -ErrorAction SilentlyContinue }
+    break
+}
 . (Join-Path $PSScriptRoot 'path-safety.ps1')
 
 function Assert-FixedDirectory([string] $Path) {
@@ -34,6 +42,7 @@ function Get-InteractiveUser {
 }
 
 $targetDir = Assert-InstallDirectory $InstallDir
+$elevatedDir = Assert-InstallDirectory $ElevatedDir -RequireProtectedAncestors
 $core = Join-Path $targetDir 'Timelens.exe'
 $tasks = @(Get-ScheduledTask -TaskPath $TaskPath -ErrorAction SilentlyContinue | Where-Object TaskName -In @('Core', 'Collector'))
 # An upgrade may choose a different installation directory. Only the protected
@@ -45,11 +54,13 @@ if ($Mode -eq 'PrepareUpgrade' -and $oldCoreTask) {
     $targetDir = Assert-FixedDirectory (Split-Path -Parent $oldCore)
     $core = Join-Path $targetDir 'Timelens.exe'
 }
-$collector = Join-Path $targetDir 'Timelens.Collector.exe'
+# Earlier builds kept the collector beside the core; current ones keep it in the
+# protected elevated directory.
+$collectors = @((Join-Path $targetDir 'Timelens.Collector.exe'), (Join-Path $elevatedDir 'Timelens.Collector.exe'))
 $worker = Join-Path $targetDir 'Timelens.AI.exe'
 foreach ($task in $tasks) {
-    $expected = if ($task.TaskName -eq 'Core') { $core } else { $collector }
-    if (@($task.Actions).Count -ne 1 -or @($task.Actions)[0].Execute -ine $expected) {
+    $expected = if ($task.TaskName -eq 'Core') { @($core) } else { $collectors }
+    if (@($task.Actions).Count -ne 1 -or @($task.Actions)[0].Execute -notin $expected) {
         throw "Refusing to alter a task with an unexpected executable: $($task.TaskName)"
     }
 }
@@ -90,7 +101,7 @@ function Invoke-UserCore([string] $Arguments) {
     }
 }
 
-$paths = @($core, $collector, $worker)
+$paths = @($core, $worker) + $collectors
 function Get-ProductProcesses {
     @(Get-Process -Name 'Timelens', 'Timelens.Collector', 'Timelens.AI' -ErrorAction SilentlyContinue |
         Where-Object { $_.Path -and $paths -contains $_.Path })

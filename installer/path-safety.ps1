@@ -1,6 +1,8 @@
-# Installation tasks run elevated. Every existing ancestor must prevent an
-# ordinary user from renaming it or granting themselves deletion of its children.
-function Assert-InstallDirectory([string] $Path) {
+# The collector and maintenance scripts run elevated, so every existing ancestor of
+# their directory must prevent an ordinary user from renaming it or granting
+# themselves deletion of its children. The user-chosen directory only holds
+# ordinary-privilege programs and may live under any fixed-disk folder.
+function Assert-InstallDirectory([string] $Path, [switch] $RequireProtectedAncestors) {
     $full = [IO.Path]::GetFullPath($Path).TrimEnd('\')
     $root = [IO.Path]::GetPathRoot($full)
     if ($full.Length -le $root.Length -or ([IO.DriveInfo]::new($root)).DriveType -ne [IO.DriveType]::Fixed) {
@@ -12,6 +14,8 @@ function Assert-InstallDirectory([string] $Path) {
         if (Test-Path -LiteralPath $parent) {
             $item = Get-Item -LiteralPath $parent -Force
             if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Installation paths cannot traverse reparse points.' }
+        }
+        if ($RequireProtectedAncestors -and (Test-Path -LiteralPath $parent)) {
             $acl = Get-Acl -LiteralPath $parent
             $owner = $acl.GetOwner([Security.Principal.SecurityIdentifier]).Value
             if ($owner -notin $trusted) { throw "The parent directory is owned by an ordinary user and can be replaced: $parent. Choose Program Files or an administrator-protected folder." }
@@ -29,7 +33,16 @@ function Assert-InstallDirectory([string] $Path) {
     }
     if (Test-Path -LiteralPath $full) {
         if ((Get-Item -LiteralPath $full -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'The installation directory cannot be a link.' }
-        foreach ($item in Get-ChildItem -LiteralPath $full -Force -Recurse) {
+        # The ordinary-privilege directory may hold the user's dataset in its Data
+        # folder. Only that folder itself is checked; its contents belong to the user.
+        $children = @(Get-ChildItem -LiteralPath $full -Force)
+        $data = $children | Where-Object { $_.Name -ieq 'Data' -and -not $RequireProtectedAncestors }
+        if ($data -and (-not $data.PSIsContainer -or ($data.Attributes -band [IO.FileAttributes]::ReparsePoint))) {
+            throw 'The Data folder in the installation directory must be a plain directory.'
+        }
+        $children = @($children | Where-Object { $_ -ne $data })
+        $nested = @($children | Where-Object { $_.PSIsContainer -and -not ($_.Attributes -band [IO.FileAttributes]::ReparsePoint) } | ForEach-Object { Get-ChildItem -LiteralPath $_.FullName -Force -Recurse })
+        foreach ($item in $children + $nested) {
             if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Installation files cannot be links.' }
             $relative = $item.FullName.Substring($full.Length + 1)
             if ($relative -notmatch '^(Timelens(?:\.Collector|\.AI)?\.exe|unins\d+\.(exe|dat|msg)|internal(?:\\(register-tasks|unregister-tasks|maintenance|path-safety)\.ps1)?)$') {

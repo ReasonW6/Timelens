@@ -1,0 +1,27 @@
+// Rows the Rust side feeds into the views. `tint` is each application's stable
+// color, shared by icons, rails, bars and stacks. An AppRow's `focus-ratio` is
+// its share of all focus in the range; the other ratios are of the range's length.
+export struct AppRow { identity: string, original-index: int, name: string, summary: string, open-ratio: float, display-ratio: float, focus-ratio: float, icon: image, tint: color, focused: string }
+export struct WindowRow { identity: string, label: string, summary: string, focused: string }
+export struct SegmentRow { offset: float, width: float, kind: int, tint: color }
+export struct SnapshotRow { identity: string, time: string, display: string, result: string }
+export struct ReportAppRow { name: string, summary: string, focused: string, icon: image, tint: color, ratio: float }
+
+// The home history. `kind`: 0 day header, 1 morning/afternoon label, 2 activity,
+// 3 break or note, 4 recording gap, 5 the note closing the list. Day headers use
+// `time` for the application count and `duration` for the day's focus.
+export struct ShareSlice { ratio: float, tint: color }
+export struct StackApp { name: string, icon: image, tint: color }
+export struct HistoryItem {
+    kind: int, key: string, height: length,
+    title: string, subtitle: string, time: string, duration: string,
+    icon: image, tint: color,
+    // Other applications used alongside, longest first; `more` counts the rest.
+    stack: [StackApp], more: int,
+    shares: [ShareSlice],
+    rail-top: bool, rail-bottom: bool,
+}
+// Where each day's rows start and end in the list, for the sticky day header.
+export struct DayAnchor { title: string, subtitle: string, duration: string, apps: string, shares: [ShareSlice], top: length, bottom: length }
+// An application used during the selected activity, with its own times there.
+export struct Participant { name: string, icon: image, tint: color, role: string, focused: string, visible: string, background: string, segments: [SegmentRow] }

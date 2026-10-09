@@ -5,6 +5,7 @@ use std::{
     os::windows::ffi::OsStrExt,
     path::{Path, PathBuf},
     ptr::{null, null_mut},
+    sync::OnceLock,
     thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
@@ -50,9 +51,24 @@ use crate::{
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// The elevated collector lives in a protected directory apart from the
+/// user-chosen installation directory; each side learns the other's directory from
+/// an administrator-owned task definition.
+static TRUSTED_PEER_DIRECTORY: OnceLock<PathBuf> = OnceLock::new();
+
+/// Also accept peers from `directory`, in addition to this executable's own
+/// directory. Set once at startup, before any handshake.
+pub fn trust_peer_directory(directory: &Path) -> Result<()> {
+    let directory = directory.canonicalize()?;
+    TRUSTED_PEER_DIRECTORY.set(directory).map_err(|_| {
+        IpcError::PeerAuthentication("the trusted peer directory is already set".to_owned())
+    })
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PeerVerification {
     ProtectedSiblingPath,
+    RegisteredPeerPath,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -505,17 +521,24 @@ fn verify_peer(
     let peer_parent = peer_path
         .parent()
         .ok_or_else(|| IpcError::PeerAuthentication("peer executable has no parent".to_owned()))?;
-    if !paths_equal_case_insensitive(&own_parent, peer_parent) {
+    let verification = if paths_equal_case_insensitive(&own_parent, peer_parent) {
+        PeerVerification::ProtectedSiblingPath
+    } else if TRUSTED_PEER_DIRECTORY
+        .get()
+        .is_some_and(|trusted| paths_equal_case_insensitive(trusted, peer_parent))
+    {
+        PeerVerification::RegisteredPeerPath
+    } else {
         return Err(IpcError::PeerAuthentication(
             "peer executable is not in the Timelens installation directory".to_owned(),
         ));
-    }
+    };
 
     Ok(HandshakeReport {
         peer_process_id: process_id,
         peer_session_id: actual_session_id,
         peer_path,
-        verification: PeerVerification::ProtectedSiblingPath,
+        verification,
     })
 }
 

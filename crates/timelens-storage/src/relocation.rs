@@ -65,6 +65,55 @@ pub fn validate_fixed_directory(path: &Path) -> Result<PathBuf> {
             .map_err(|_| invalid("数据路径无法规范化"))?,
     ))
 }
+/// Move the verified copy out of its staging folder into the destination. A
+/// failed move puts back what had moved so the stage cleans up as one piece.
+fn adopt_stage(stage: &Path, destination: &Path) -> Result<()> {
+    let names = fs::read_dir(stage)?
+        .map(|entry| entry.map(|entry| entry.file_name()))
+        .collect::<std::io::Result<Vec<_>>>()?;
+    for (index, name) in names.iter().enumerate() {
+        if let Err(error) = fs::rename(stage.join(name), destination.join(name)) {
+            for moved in names[..index].iter().rev() {
+                let _ = fs::rename(destination.join(moved), stage.join(moved));
+            }
+            return Err(error.into());
+        }
+    }
+    Ok(())
+}
+/// What a relocation is doing, for a progress display.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RelocationStep {
+    /// Checking the current dataset before anything is copied.
+    Checking,
+    /// Copying files; the counts are bytes.
+    Copying,
+    /// Opening the copy and reading every image back; the counts are images.
+    Verifying,
+    /// Pointing Timelens at the copy and removing the original.
+    Switching,
+}
+/// Copy in chunks so a large database still reports progress as it goes.
+fn copy_counted(source: &Path, destination: &Path, copied: &mut dyn FnMut(u64)) -> Result<()> {
+    use std::io::{Read, Write};
+    let mut source = File::open(source)?;
+    let mut target = OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .open(destination)?;
+    let mut buffer = vec![0_u8; 1 << 20];
+    loop {
+        let read = source.read(&mut buffer)?;
+        if read == 0 {
+            break;
+        }
+        target.write_all(&buffer[..read])?;
+        copied(read as u64);
+    }
+    target.sync_all()?;
+    Ok(())
+}
 pub(crate) fn owned_snapshot_name(name: &str) -> bool {
     name.strip_suffix(".tlsnap")
         .is_some_and(|s| s.len() == 32 && s.bytes().all(|b| b.is_ascii_hexdigit()))
@@ -103,13 +152,18 @@ impl Storage {
     pub fn validate_data_destination(path: &Path) -> Result<PathBuf> {
         validate_fixed_directory(path)
     }
+    pub fn holds_dataset(directory: &Path) -> bool {
+        directory.join(DATABASE_FILE).exists()
+    }
     /// Copy authenticated ciphertext, verify every image and database, then publish
     /// the caller's atomic pointer. The collector control directory never migrates.
     pub fn relocate(
         &mut self,
         destination: &Path,
         publish: impl FnOnce(&Path) -> Result<()>,
+        mut progress: impl FnMut(RelocationStep, u64, u64),
     ) -> Result<u64> {
+        progress(RelocationStep::Checking, 0, 1);
         self.ensure_writable()?;
         let destination = validate_fixed_directory(destination)?;
         let source = fs::canonicalize(&self.data_directory)?;
@@ -127,52 +181,88 @@ impl Storage {
         {
             return Err(invalid("新旧数据目录不能相同或互相包含"));
         }
-        if destination.exists() && fs::read_dir(&destination)?.next().is_some() {
+        let created = !destination.exists();
+        if !created && fs::read_dir(&destination)?.next().is_some() {
             return Err(invalid("目标目录必须为空；V1 不合并数据集"));
         }
-        let parent = destination
-            .parent()
-            .ok_or_else(|| invalid("目标父目录无效"))?;
-        fs::create_dir_all(parent)?;
+        match fs::create_dir_all(&destination) {
+            Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+                return Err(invalid(
+                    "无法在这个位置创建目录。请选择有写入权限的位置，或先建好一个空目录再迁移",
+                ));
+            }
+            result => result?,
+        }
+        // Staging inside the destination needs write access only to it, so an
+        // empty directory prepared under a read-only parent (such as the
+        // installer's Data folder) works too.
+        let result = self.relocate_into(&destination, publish, &mut progress);
+        if result.is_err() && created {
+            let _ = fs::remove_dir(&destination);
+        }
+        result
+    }
+    fn relocate_into(
+        &mut self,
+        destination: &Path,
+        publish: impl FnOnce(&Path) -> Result<()>,
+        progress: &mut dyn FnMut(RelocationStep, u64, u64),
+    ) -> Result<u64> {
         self.checkpoint()?;
         self.verify_integrity()?;
         let stage = tempfile::Builder::new()
             .prefix("timelens-move-")
-            .tempdir_in(parent)?;
-        copy_and_sync(&self.database_path, &stage.path().join(DATABASE_FILE))?;
-        copy_and_sync(&self.key_path, &stage.path().join(KEY_FILE))?;
-        fs::create_dir_all(stage.path().join("snapshots"))?;
+            .tempdir_in(destination)?;
         let names = self
             .connection
             .prepare("SELECT file_name FROM snapshot_blobs")?
             .query_map([], |r| r.get::<_, String>(0))?
             .collect::<rusqlite::Result<Vec<_>>>()?;
-        for name in &names {
-            if !owned_snapshot_name(name) {
-                return Err(invalid("数据集快照路径无效"));
-            }
-            copy_and_sync(
-                &self.data_directory.join("snapshots").join(name),
-                &stage.path().join("snapshots").join(name),
-            )?;
+        if !names.iter().all(|name| owned_snapshot_name(name)) {
+            return Err(invalid("数据集快照路径无效"));
+        }
+        let mut files = vec![
+            (self.database_path.clone(), stage.path().join(DATABASE_FILE)),
+            (self.key_path.clone(), stage.path().join(KEY_FILE)),
+        ];
+        files.extend(names.iter().map(|name| {
+            (
+                self.data_directory.join("snapshots").join(name),
+                stage.path().join("snapshots").join(name),
+            )
+        }));
+        let total = files
+            .iter()
+            .map(|(source, _)| fs::metadata(source).map(|m| m.len()))
+            .sum::<std::io::Result<u64>>()?
+            .max(1);
+        fs::create_dir_all(stage.path().join("snapshots"))?;
+        let mut copied = 0_u64;
+        progress(RelocationStep::Copying, 0, total);
+        for (source, target) in &files {
+            copy_counted(source, target, &mut |bytes| {
+                copied += bytes;
+                progress(RelocationStep::Copying, copied.min(total), total);
+            })?;
         }
         {
             let staged = Storage::open(stage.path())?;
             staged.verify_integrity()?;
             let ids=staged.connection.prepare("SELECT MIN(slot_id) FROM snapshot_slots WHERE blob_id IS NOT NULL GROUP BY blob_id")?.query_map([],|r|r.get::<_,i64>(0))?.collect::<rusqlite::Result<Vec<_>>>()?;
-            for id in ids {
+            let count = ids.len() as u64;
+            progress(RelocationStep::Verifying, 0, count.max(1));
+            for (index, id) in ids.into_iter().enumerate() {
                 staged.load_snapshot_image(id)?;
+                progress(RelocationStep::Verifying, index as u64 + 1, count);
             }
             staged.checkpoint()?;
         }
-        if destination.exists() {
-            fs::remove_dir(&destination)?;
-        }
-        fs::rename(stage.path(), &destination)?;
-        let mut replacement = Storage::open(&destination)?;
+        progress(RelocationStep::Switching, 0, 1);
+        adopt_stage(stage.path(), destination)?;
+        let mut replacement = Storage::open(destination)?;
         replacement.set_control_directory(&self.control_directory)?;
         replacement.checkpoint()?;
-        if let Err(error) = publish(&destination) {
+        if let Err(error) = publish(destination) {
             return Err(invalid(format!(
                 "切换未完成，原数据仍使用；已验证的副本位于 {}。{error}",
                 destination.display()
@@ -210,6 +300,7 @@ impl Storage {
             }
             let _ = fs::remove_dir(&old_directory);
         }
+        progress(RelocationStep::Switching, 1, 1);
         Ok(residual_files)
     }
     pub fn delete_owned_dataset(directory: &Path) -> Result<()> {
@@ -272,7 +363,7 @@ mod tests {
         let key = fs::read(source.path().join(KEY_FILE)).unwrap();
         assert!(
             storage
-                .relocate(&target, |_| Err(invalid("publish failed")))
+                .relocate(&target, |_| Err(invalid("publish failed")), |_, _, _| {})
                 .is_err()
         );
         assert_eq!(storage.data_directory(), source.path());
@@ -281,12 +372,83 @@ mod tests {
         Storage::open(&target).unwrap().verify_integrity().unwrap();
     }
     #[test]
+    fn relocation_fills_an_existing_empty_directory_without_leaving_its_stage() {
+        let (_source, mut storage) = ai::tests::fixture();
+        let parent = tempfile::tempdir().unwrap();
+        let target = parent.path().join("prepared");
+        fs::create_dir(&target).unwrap();
+        let mut steps = Vec::new();
+        assert_eq!(
+            storage
+                .relocate(
+                    &target,
+                    |_| Ok(()),
+                    |step, done, total| steps.push((step, done, total))
+                )
+                .unwrap(),
+            0
+        );
+        assert_eq!(storage.data_directory(), target);
+        storage.verify_integrity().unwrap();
+        // Progress starts with the check, copies every byte, and ends switched.
+        assert_eq!(steps.first(), Some(&(RelocationStep::Checking, 0, 1)));
+        assert!(
+            steps
+                .iter()
+                .any(|(step, done, total)| *step == RelocationStep::Copying
+                    && done == total
+                    && *total > 0)
+        );
+        assert_eq!(steps.last(), Some(&(RelocationStep::Switching, 1, 1)));
+        let names = fs::read_dir(&target)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        assert!(names.iter().all(|name| !name.starts_with("timelens-move-")));
+        assert!(names.iter().any(|name| name == DATABASE_FILE));
+        assert!(Storage::holds_dataset(&target));
+    }
+    #[test]
+    fn relocation_works_in_a_prepared_directory_under_a_read_only_parent() {
+        let (_source, mut storage) = ai::tests::fixture();
+        let parent = tempfile::tempdir().unwrap();
+        let target = parent.path().join("Data");
+        fs::create_dir(&target).unwrap();
+        // Like an installation directory: nothing new can be added to the parent.
+        let user = format!(
+            "{}\\{}",
+            std::env::var("USERDOMAIN").unwrap(),
+            std::env::var("USERNAME").unwrap()
+        );
+        let denied = std::process::Command::new("icacls")
+            .arg(parent.path())
+            .args(["/deny", &format!("{user}:(AD,WD)")])
+            .output()
+            .unwrap();
+        assert!(denied.status.success());
+        assert!(fs::create_dir(parent.path().join("probe")).is_err());
+
+        assert_eq!(
+            storage.relocate(&target, |_| Ok(()), |_, _, _| {}).unwrap(),
+            0
+        );
+        storage.verify_integrity().unwrap();
+        let error = storage
+            .relocate(&parent.path().join("Other"), |_| Ok(()), |_, _, _| {})
+            .unwrap_err();
+        assert!(error.to_string().contains("无法在这个位置创建目录"));
+        assert_eq!(storage.data_directory(), target);
+    }
+    #[test]
     fn relocation_and_uninstall_leave_unrelated_exports_intact() {
         let (source, mut storage) = ai::tests::fixture();
         let parent = tempfile::tempdir().unwrap();
         let target = parent.path().join("new-dataset");
         fs::write(source.path().join("my-backup.zip"), b"user-owned").unwrap();
-        assert_eq!(storage.relocate(&target, |_| Ok(())).unwrap(), 0);
+        assert_eq!(
+            storage.relocate(&target, |_| Ok(()), |_, _, _| {}).unwrap(),
+            0
+        );
         assert_eq!(storage.data_directory(), target);
         assert!(!source.path().join(DATABASE_FILE).exists());
         assert_eq!(

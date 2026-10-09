@@ -8,6 +8,7 @@ mod recovery;
 mod relocation;
 pub use portable::{BackupInfo, BackupOptions, ExportFormat, PreparedRestore};
 pub use recovery::RecoveryReport;
+pub use relocation::RelocationStep;
 
 pub use ai::{
     AiJob, AiJobKind, AiJobSpec, AiMessage, AiRetentionOutcome, AiSettings, AiVersion,
@@ -458,6 +459,15 @@ impl Storage {
         )?;
         transaction.commit()?;
         Ok(WindowBatchOutcome::Stored)
+    }
+
+    /// When the earliest retained application window opened, if any.
+    pub fn earliest_activity_utc_ms(&self) -> Result<Option<i64>> {
+        Ok(self.connection.query_row(
+            "SELECT MIN(opened_utc_ms) FROM window_instances",
+            [],
+            |row| row.get(0),
+        )?)
     }
 
     pub fn timeline_snapshot(

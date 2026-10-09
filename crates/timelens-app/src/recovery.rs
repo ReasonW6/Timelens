@@ -147,6 +147,7 @@ pub fn open(data: Result<PathBuf>, control: &Path, force: bool) -> Result<Storag
         }
     });
     window.show()?;
+    crate::window_chrome::apply(window.window());
     crate::window_placement::fit_after_show(&window);
     window.run()?;
     selected

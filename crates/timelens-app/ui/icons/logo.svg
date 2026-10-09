@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
+  <!-- Timelens mark: a lens whose rim records a sweep of time. Geometry is mirrored
+       by assets/brand/render_icon.py, which renders the Windows icon sizes. -->
+  <defs>
+    <linearGradient id="tile" x1="6" y1="4" x2="58" y2="60" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#5a60e3"/>
+      <stop offset="1" stop-color="#2b2f92"/>
+    </linearGradient>
+    <linearGradient id="sweep" x1="32" y1="14" x2="47" y2="41" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ffd37c"/>
+      <stop offset="1" stop-color="#ff7859"/>
+    </linearGradient>
+  </defs>
+  <rect x="2" y="2" width="60" height="60" rx="15" fill="url(#tile)"/>
+  <circle cx="32" cy="32" r="17" fill="none" stroke="#ffffff" stroke-opacity="0.3" stroke-width="6"/>
+  <path d="M32 15A17 17 0 0 1 46.72 40.5" fill="none" stroke="url(#sweep)" stroke-width="6" stroke-linecap="round"/>
+  <circle cx="32" cy="32" r="5" fill="#ffffff"/>
+</svg>

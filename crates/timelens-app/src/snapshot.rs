@@ -5,7 +5,7 @@ use std::{
     ptr::null_mut,
     sync::{Arc, Mutex, TryLockError},
     thread,
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use anyhow::{Context, Result, anyhow, bail};
@@ -38,9 +38,10 @@ use windows::{
                 IDXGIOutput5, IDXGIOutputDuplication, IDXGIResource,
             },
             Gdi::{
-                BI_RGB, BITMAPINFO, CreateCompatibleDC, CreateDIBSection, DIB_RGB_COLORS, DeleteDC,
-                DeleteObject, HGDIOBJ, MONITOR_DEFAULTTONULL, MONITOR_DEFAULTTOPRIMARY,
-                MonitorFromPoint, SelectObject,
+                BI_RGB, BITMAPINFO, BitBlt, CAPTUREBLT, CreateCompatibleBitmap, CreateCompatibleDC,
+                CreateDIBSection, DIB_RGB_COLORS, DeleteDC, DeleteObject, GetDC, GetDIBits,
+                HGDIOBJ, MONITOR_DEFAULTTONULL, MONITOR_DEFAULTTOPRIMARY, MonitorFromPoint,
+                ReleaseDC, SRCCOPY, SelectObject,
             },
         },
         Storage::FileSystem::GetDiskFreeSpaceExW,
@@ -584,23 +585,63 @@ fn select_display_index(
 }
 
 fn capture_output(target: &OutputTarget) -> Result<CapturedFrame> {
+    let mut image = match duplicate_frame(target)? {
+        Some(image) => rotate_image(image, target.desc.Rotation),
+        // A still desktop may present nothing after the pointer-only first frame;
+        // copy the same area through GDI instead.
+        None => copy_screen_area(&target.desc.DesktopCoordinates)?,
+    };
+    overlay_cursor(&mut image, &target.desc.DesktopCoordinates)?;
+    image = bound_image(image, MAX_SNAPSHOT_DIMENSION);
+    let (width, height) = image.dimensions();
+    let (channel_low, channel_high) = image
+        .as_raw()
+        .chunks_exact(4)
+        .flat_map(|pixel| pixel[..3].iter().copied())
+        .fold((u8::MAX, u8::MIN), |(low, high), channel| {
+            (low.min(channel), high.max(channel))
+        });
+    let mut webp = Vec::new();
+    image::codecs::webp::WebPEncoder::new_lossless(&mut webp).write_image(
+        image.as_raw(),
+        width,
+        height,
+        ExtendedColorType::Rgba8,
+    )?;
+    Ok(CapturedFrame {
+        webp,
+        width,
+        height,
+        channel_low,
+        channel_high,
+    })
+}
+
+/// The output's image through desktop duplication, unrotated, or `None` when no
+/// frame presenting the desktop arrives in time.
+fn duplicate_frame(target: &OutputTarget) -> Result<Option<RgbaImage>> {
     let (device, context) = create_device(&target.adapter)?;
     let duplication = duplicate_output(&target.output, &device)?;
     let mut frame_info = DXGI_OUTDUPL_FRAME_INFO::default();
     let mut resource: Option<IDXGIResource> = None;
-    let mut acquired = false;
-    for _ in 0..3 {
-        match unsafe { duplication.AcquireNextFrame(500, &mut frame_info, &mut resource) } {
-            Ok(()) => {
-                acquired = true;
-                break;
+    let deadline = Instant::now() + Duration::from_millis(1_500);
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Ok(None);
+        }
+        let wait = remaining.as_millis().min(500) as u32;
+        match unsafe { duplication.AcquireNextFrame(wait, &mut frame_info, &mut resource) } {
+            // The first frame after duplicating often carries only the pointer and
+            // a black texture; wait for one that presented the desktop.
+            Ok(()) if frame_info.LastPresentTime == 0 => {
+                resource = None;
+                unsafe { duplication.ReleaseFrame() }?;
             }
+            Ok(()) => break,
             Err(error) if error.code() == DXGI_ERROR_WAIT_TIMEOUT => continue,
             Err(error) => return Err(error.into()),
         }
-    }
-    if !acquired {
-        bail!("desktop duplication timed out");
     }
     let result = (|| {
         let texture: ID3D11Texture2D = resource
@@ -622,37 +663,80 @@ fn capture_output(target: &OutputTarget) -> Result<CapturedFrame> {
         unsafe { context.Map(&staging, 0, D3D11_MAP_READ, 0, Some(&mut mapped)) }?;
         let converted = copy_mapped_rgba(&source_desc, &mapped);
         unsafe { context.Unmap(&staging, 0) };
-        let rgba = converted?;
-        let mut image = RgbaImage::from_raw(source_desc.Width, source_desc.Height, rgba)
-            .context("captured desktop buffer has inconsistent dimensions")?;
-        image = rotate_image(image, target.desc.Rotation);
-        overlay_cursor(&mut image, &target.desc.DesktopCoordinates)?;
-        image = bound_image(image, MAX_SNAPSHOT_DIMENSION);
-        let (width, height) = image.dimensions();
-        let (channel_low, channel_high) = image
-            .as_raw()
-            .chunks_exact(4)
-            .flat_map(|pixel| pixel[..3].iter().copied())
-            .fold((u8::MAX, u8::MIN), |(low, high), channel| {
-                (low.min(channel), high.max(channel))
-            });
-        let mut webp = Vec::new();
-        image::codecs::webp::WebPEncoder::new_lossless(&mut webp).write_image(
-            image.as_raw(),
-            width,
-            height,
-            ExtendedColorType::Rgba8,
-        )?;
-        Ok(CapturedFrame {
-            webp,
-            width,
-            height,
-            channel_low,
-            channel_high,
-        })
+        RgbaImage::from_raw(source_desc.Width, source_desc.Height, converted?)
+            .context("captured desktop buffer has inconsistent dimensions")
     })();
     let released = unsafe { duplication.ReleaseFrame() };
-    result.and_then(|value| released.map(|_| value).map_err(Into::into))
+    result.and_then(|image| released.map(|_| Some(image)).map_err(Into::into))
+}
+
+/// Copy a desktop area, in physical pixels, through GDI.
+fn copy_screen_area(rect: &RECT) -> Result<RgbaImage> {
+    let (width, height) = (rect.right - rect.left, rect.bottom - rect.top);
+    if width <= 0 || height <= 0 {
+        bail!("display has no area to copy");
+    }
+    let screen = unsafe { GetDC(None) };
+    if screen.is_invalid() {
+        bail!("failed to open the screen for copying");
+    }
+    let memory = unsafe { CreateCompatibleDC(Some(screen)) };
+    let bitmap = unsafe { CreateCompatibleBitmap(screen, width, height) };
+    let result = (|| {
+        if memory.is_invalid() || bitmap.is_invalid() {
+            bail!("failed to create a screen copy");
+        }
+        let old = unsafe { SelectObject(memory, HGDIOBJ(bitmap.0)) };
+        let copied = unsafe {
+            BitBlt(
+                memory,
+                0,
+                0,
+                width,
+                height,
+                Some(screen),
+                rect.left,
+                rect.top,
+                SRCCOPY | CAPTUREBLT,
+            )
+        };
+        unsafe { SelectObject(memory, old) };
+        copied?;
+        let mut info = BITMAPINFO::default();
+        info.bmiHeader.biSize = std::mem::size_of_val(&info.bmiHeader) as u32;
+        info.bmiHeader.biWidth = width;
+        info.bmiHeader.biHeight = -height;
+        info.bmiHeader.biPlanes = 1;
+        info.bmiHeader.biBitCount = 32;
+        info.bmiHeader.biCompression = BI_RGB.0;
+        let mut pixels = vec![0_u8; width as usize * height as usize * 4];
+        let lines = unsafe {
+            GetDIBits(
+                memory,
+                bitmap,
+                0,
+                height as u32,
+                Some(pixels.as_mut_ptr().cast()),
+                &mut info,
+                DIB_RGB_COLORS,
+            )
+        };
+        if lines != height {
+            bail!("failed to read the screen copy");
+        }
+        for pixel in pixels.chunks_exact_mut(4) {
+            pixel.swap(0, 2);
+            pixel[3] = 255;
+        }
+        RgbaImage::from_raw(width as u32, height as u32, pixels)
+            .context("screen copy has inconsistent dimensions")
+    })();
+    unsafe {
+        let _ = DeleteObject(HGDIOBJ(bitmap.0));
+        let _ = DeleteDC(memory);
+        ReleaseDC(None, screen);
+    }
+    result
 }
 
 fn create_device(adapter: &IDXGIAdapter) -> Result<(ID3D11Device, ID3D11DeviceContext)> {

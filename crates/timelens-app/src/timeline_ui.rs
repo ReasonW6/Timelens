@@ -1,10 +1,10 @@
 //! Native presentation wiring. Storage remains the source of every displayed fact.
 use crate::{
-    ActivityRow, AiState, AppWindow, CollectionState, DataState, DayRow, SegmentRow, UiState,
-    app_icon, format_duration, refresh_timeline, timeline_view, ui_model, unix_time_ms,
+    AiState, AppWindow, CollectionState, DataState, UiState, refresh_timeline, timeline_view,
+    ui_model, unix_time_ms,
 };
 use chrono::{Datelike, Local, TimeZone};
-use slint::{ComponentHandle, Model, ModelRc, VecModel};
+use slint::{ComponentHandle, Model};
 use std::{
     cell::RefCell,
     rc::Rc,
@@ -59,18 +59,25 @@ pub fn install(
             filter_apps(&w);
         }
     });
+    {
+        // The window's timer gathers the totals for the new scope.
+        let state = state.clone();
+        window.on_apps_scope_changed(move || {
+            state.borrow_mut().apps.requested = None;
+        });
+    }
     let weak = window.as_weak();
     window.on_navigate(move |page| {
         let Some(window) = weak.upgrade() else {
             return;
         };
         window.set_action_status("".into());
-        window.set_page(page.clamp(0, 5));
+        window.set_page(page.clamp(0, 4));
         window.set_snapshot_open(page == 2);
         window.set_report_open(page == 3);
         window
             .global::<AiState>()
-            .set_open(page == 4 || (page == 5 && window.get_settings_tab() == 2));
+            .set_open(page == 4 || (window.get_settings_open() && window.get_settings_tab() == 4));
         window.global::<DataState>().set_open(false);
         window.global::<CollectionState>().set_open(false);
         match page {
@@ -180,33 +187,11 @@ pub fn install(
                     // A range that has not ended yet grows with the clock, like today.
                     s.range_ended_utc_ms = end.min(now);
                     s.follow_now = s.calendar_day.is_some() && end > now;
-                    s.selected_activity = None;
                     drop(s);
                     w.set_action_status("".into());
                     refresh(&w, &storage, &state);
                 }
                 Err(message) => w.set_action_status(message.into()),
-            }
-        });
-    }
-    {
-        let weak = window.as_weak();
-        window.on_activity_selected(move |index| {
-            if busy.load(Ordering::Acquire) || index < 0 {
-                return;
-            }
-            let mut s = state.borrow_mut();
-            let Some(entry) = s.activity_rows.get(index as usize).cloned() else {
-                return;
-            };
-            let Some(identity) = entry.identity else {
-                return;
-            };
-            s.selected_identity = Some(identity.clone());
-            s.selected_activity = Some((identity, entry.started_utc_ms));
-            drop(s);
-            if let Some(w) = weak.upgrade() {
-                refresh(&w, &storage, &state);
             }
         });
     }
@@ -260,7 +245,7 @@ fn local_label(timestamp: i64, format: &str) -> String {
 }
 
 pub fn render(window: &AppWindow, state: &Rc<RefCell<UiState>>, snapshot: &TimelineSnapshot) {
-    let mut state = state.borrow_mut();
+    let state = state.borrow();
     let anchor = state
         .calendar_day
         .unwrap_or(snapshot.range_ended_utc_ms.saturating_sub(1));
@@ -299,27 +284,13 @@ pub fn render(window: &AppWindow, state: &Rc<RefCell<UiState>>, snapshot: &Timel
             .single()
             .is_some_and(|d| d.date_naive() < now_date),
     );
-    let days = timeline_view::week_days(anchor)
-        .into_iter()
-        .map(|day| {
-            let enabled = chrono::NaiveDate::parse_from_str(&day.date, "%Y-%m-%d")
-                .is_ok_and(|d| d <= now_date);
-            DayRow {
-                date: chrono::NaiveDate::parse_from_str(&day.date, "%Y-%m-%d")
-                    .map(|d| d.format("%-m/%-d").to_string())
-                    .unwrap_or(day.date)
-                    .into(),
-                weekday: day.weekday.trim_start_matches('周').into(),
-                offset: day.offset,
-                selected: day.selected,
-                today: day.is_today,
-                enabled,
-            }
-        })
-        .collect::<Vec<_>>();
-    window.set_week(ui_model::sync(window.get_week(), days, |a, b| {
-        a.date == b.date
-    }));
+    window.set_is_today(
+        state.calendar_day.is_some()
+            && Local
+                .timestamp_millis_opt(anchor)
+                .single()
+                .is_some_and(|d| d.date_naive() == now_date),
+    );
     let same_day = local_label(snapshot.range_started_utc_ms, "%Y-%m-%d")
         == local_label(snapshot.range_ended_utc_ms.saturating_sub(1), "%Y-%m-%d");
     let time_format = if same_day { "%H:%M" } else { "%-m/%-d %H:%M" };
@@ -336,7 +307,6 @@ pub fn render(window: &AppWindow, state: &Rc<RefCell<UiState>>, snapshot: &Timel
         )
         .into(),
     );
-    window.set_focus_total(format_duration(timeline_view::total_focus_ms(snapshot)).into());
     window.set_has_gaps(!snapshot.monitoring_gaps.is_empty());
     let gap_count = snapshot
         .monitoring_gaps
@@ -353,161 +323,24 @@ pub fn render(window: &AppWindow, state: &Rc<RefCell<UiState>>, snapshot: &Timel
             format!("{gap_count} 段明确记录缺口").into()
         },
     );
-
-    let entries = timeline_view::build_activity_rows(snapshot);
-    let selected_activity = state.selected_activity.as_ref().and_then(|(id, start)| {
-        entries
-            .iter()
-            .position(|e| e.identity.as_ref() == Some(id) && e.started_utc_ms == *start)
-    });
-    let mut previous_group = String::new();
-    let rows = entries
-        .iter()
-        .map(|entry| {
-            let group = if entry.group == previous_group {
-                String::new()
-            } else {
-                previous_group = entry.group.clone();
-                if same_day {
-                    entry
-                        .group
-                        .rsplit(" · ")
-                        .next()
-                        .unwrap_or(&entry.group)
-                        .to_owned()
-                } else {
-                    entry.group.clone()
-                }
-            };
-            ActivityRow {
-                identity: format!(
-                    "{}:{}:{}",
-                    entry.identity.as_deref().unwrap_or("gap"),
-                    entry.started_utc_ms,
-                    if entry.gap { &entry.detail } else { "" }
-                )
-                .into(),
-                name: entry
-                    .identity
-                    .as_deref()
-                    .map(|id| app_icon::display_name(id, &entry.name))
-                    .unwrap_or_else(|| entry.name.clone())
-                    .into(),
-                time: local_label(entry.started_utc_ms, "%H:%M").into(),
-                interval: format!(
-                    "{}–{}",
-                    local_label(entry.started_utc_ms, "%H:%M"),
-                    local_label(entry.ended_utc_ms, "%H:%M")
-                )
-                .into(),
-                duration: format_duration(entry.duration_ms).into(),
-                group: group.into(),
-                gap: entry.gap,
-                detail: entry.detail.clone().into(),
-                icon: entry
-                    .identity
-                    .as_deref()
-                    .map(app_icon::for_identity)
-                    .unwrap_or_default(),
-            }
-        })
-        .collect::<Vec<_>>();
-    window.set_activity(ui_model::sync(window.get_activity(), rows, |a, b| {
-        a.identity == b.identity
-    }));
-    window.set_activity_selected_index(selected_activity.map_or(-1, |i| i as i32));
-    window.set_selected_is_activity(selected_activity.is_some());
-    if let Some(index) = selected_activity {
-        let entry = &entries[index];
-        window.set_selected_start(local_label(entry.started_utc_ms, "%H:%M").into());
-        window.set_selected_end(local_label(entry.ended_utc_ms, "%H:%M").into());
-        window.set_selected_duration(format_duration(entry.duration_ms).into());
-        window.set_selected_interval(
-            format!(
-                "{} · {}–{}",
-                local_label(entry.started_utc_ms, "%-m月%-d日"),
-                local_label(entry.started_utc_ms, "%H:%M"),
-                local_label(entry.ended_utc_ms, "%H:%M")
-            )
-            .into(),
-        );
-    } else {
-        state.selected_activity = None;
-    }
-    if let Some(app) = state.selected_identity.as_ref().and_then(|identity| {
-        snapshot
-            .applications
-            .iter()
-            .find(|app| &app.identity == identity)
-    }) {
-        window.set_selected_icon(app_icon::for_identity(&app.identity));
-        window
-            .set_keyboard_value(format!("{} 次", crate::grouped_count(app.keyboard_count)).into());
-        window.set_mouse_value(
-            format!(
-                "{} 次",
-                crate::grouped_count(
-                    app.left_click_count
-                        .saturating_add(app.middle_click_count)
-                        .saturating_add(app.right_click_count)
-                )
-            )
-            .into(),
-        );
-    } else {
-        window.set_selected_icon(slint::Image::default());
-        window.set_keyboard_value("0 次".into());
-        window.set_mouse_value("0 次".into());
-    }
-    state.activity_rows = entries;
 }
 
-pub fn render_overview(window: &AppWindow, state: &UiState, snapshot: &TimelineSnapshot) {
-    let start = state.horizon_started_utc_ms;
-    let end = state.horizon_ended_utc_ms;
-    let span = end.saturating_sub(start).max(1) as f64;
-    let normalize = |a: i64, b: i64, kind: i32| -> Option<SegmentRow> {
-        let a = a.max(start);
-        let b = b.min(end);
-        (b > a).then(|| SegmentRow {
-            offset: ((a - start) as f64 / span) as f32,
-            width: ((b - a) as f64 / span) as f32,
-            kind,
-        })
-    };
-    let mut rows = Vec::new();
-    for (index, app) in snapshot.applications.iter().enumerate() {
-        rows.extend(
-            app.segments
-                .iter()
-                .filter(|s| s.focused)
-                .filter_map(|s| normalize(s.started_utc_ms, s.ended_utc_ms, (index % 4) as i32)),
-        );
-    }
-    rows.extend(
-        snapshot
-            .monitoring_gaps
-            .iter()
-            .filter(|g| g.data_class == "activity")
-            .filter_map(|g| normalize(g.started_utc_ms, g.ended_utc_ms, -1)),
-    );
-    window.set_overview_segments(ModelRc::new(VecModel::from(rows)));
-    let axis_format = if end - start > 86_400_000 {
-        "%-m/%-d %H:%M"
+/// What the application totals cover: all records since the first, or today.
+pub fn apps_range_label(snapshot: &TimelineSnapshot, today: bool) -> String {
+    if today {
+        format!(
+            "今天 {}–{}",
+            local_label(snapshot.range_started_utc_ms, "%H:%M"),
+            local_label(snapshot.range_ended_utc_ms, "%H:%M")
+        )
+    } else if snapshot.applications.is_empty() {
+        "全部记录".to_owned()
     } else {
-        "%H:%M"
-    };
-    window.set_axis_start(local_label(start, axis_format).into());
-    window.set_axis_middle(local_label(start + (end - start) / 2, axis_format).into());
-    window.set_axis_end(
-        if state.calendar_day.is_some_and(|day| {
-            timeline_view::selected_day_bounds(day, 0).is_some_and(|(_, day_end)| day_end == end)
-        }) {
-            "24:00".into()
-        } else {
-            local_label(end, axis_format).into()
-        },
-    );
+        format!(
+            "全部记录 · {}起",
+            local_label(snapshot.range_started_utc_ms, "%Y年%-m月%-d日")
+        )
+    }
 }
 
 #[cfg(test)]

@@ -226,10 +226,12 @@ pub fn install(
                                 &other.context("请选择另一个应用")?,
                                 true,
                             )?;
+                            crate::history::invalidate();
                         }
                         4 => {
                             let (a, b) = link.context("请选择合并关联")?;
                             s.set_application_merge(&a, &b, false)?;
+                            crate::history::invalidate();
                         }
                         5 => {
                             if !confirmed {
