@@ -43,6 +43,25 @@ fn emit(event: Event) {
         let _ = sender.send(event);
     }
 }
+/// The embedded Timelens icon (resource 1 in app.rc) at the small-icon size.
+/// Shared icons are owned by the system, so repeated loads do not leak.
+fn tray_icon() -> HICON {
+    let icon = unsafe {
+        LoadImageW(
+            GetModuleHandleW(null()),
+            1 as _,
+            IMAGE_ICON,
+            GetSystemMetrics(SM_CXSMICON),
+            GetSystemMetrics(SM_CYSMICON),
+            LR_SHARED,
+        )
+    };
+    if icon.is_null() {
+        unsafe { LoadIconW(std::ptr::null_mut(), IDI_APPLICATION) }
+    } else {
+        icon
+    }
+}
 fn notification_data(hwnd: HWND) -> NOTIFYICONDATAW {
     let mut d = NOTIFYICONDATAW {
         cbSize: std::mem::size_of::<NOTIFYICONDATAW>() as u32,
@@ -50,7 +69,7 @@ fn notification_data(hwnd: HWND) -> NOTIFYICONDATAW {
         uID: 1,
         uFlags: NIF_MESSAGE | NIF_ICON | NIF_TIP,
         uCallbackMessage: CALLBACK,
-        hIcon: unsafe { LoadIconW(std::ptr::null_mut(), IDI_APPLICATION) },
+        hIcon: tray_icon(),
         ..Default::default()
     };
     for (slot, c) in d

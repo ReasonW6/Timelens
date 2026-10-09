@@ -5,34 +5,70 @@
 
 use std::collections::BTreeMap;
 
-use chrono::{
-    Datelike, Days, Duration, Local, NaiveDate, NaiveDateTime, Offset, TimeZone, Timelike,
-};
-use timelens_storage::{TimelineGap, TimelineSnapshot};
+use chrono::{Days, Duration, Local, NaiveDateTime, Offset, TimeZone, Timelike};
+use timelens_storage::TimelineSnapshot;
 
 type Interval = (i64, i64);
 
+/// Focus runs at most this far apart belong to one stretch of use, and a row
+/// whose own application held focus for less than this joins a neighbouring row.
+const BRIEF_ABSENCE_MS: i64 = 3 * 60_000;
+/// Unrecorded gaps this close together read as one interruption.
+const UNRECORDED_JOIN_MS: i64 = 5 * 60_000;
+/// Interruptions missing less than this in total are restart seams, not news.
+const MIN_UNRECORDED_MS: u64 = 2 * 60_000;
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ActivityEntry {
+    /// The application focused longest within the row.
     pub identity: Option<String>,
     pub name: String,
     pub started_utc_ms: i64,
     pub ended_utc_ms: i64,
+    /// The row's span, including any brief companions.
     pub duration_ms: u64,
+    /// Focus time of the row's own application within the span.
+    pub focused_ms: u64,
+    /// Applications that briefly held focus within the row, longest first.
+    pub companions: Vec<Companion>,
+    /// How many separate focus runs the companions contributed.
+    pub interruptions: usize,
     pub group: String,
-    pub gap: bool,
-    pub detail: String,
+}
+
+/// A stretch in which application activity went unrecorded, merged from
+/// neighbouring monitoring gaps.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Unrecorded {
+    pub started_utc_ms: i64,
+    pub ended_utc_ms: i64,
+    /// Time actually missing; less than the span when its gaps are apart.
+    pub missing_ms: u64,
+    /// How many separate gaps the stretch joins.
+    pub count: usize,
+    /// The longest gap's reason.
+    pub reason: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct DayEntry {
-    /// Full local calendar date, in YYYY-MM-DD form.
-    pub date: String,
-    pub weekday: String,
-    /// Calendar-day difference from the date containing the supplied anchor.
-    pub offset: i32,
-    pub is_today: bool,
-    pub selected: bool,
+pub struct Companion {
+    pub identity: String,
+    pub name: String,
+    pub focused_ms: u64,
+}
+
+struct FocusRun<'a> {
+    identity: &'a str,
+    name: &'a str,
+    started: i64,
+    ended: i64,
+    group: String,
+}
+
+impl FocusRun<'_> {
+    fn length(&self) -> u64 {
+        self.ended.abs_diff(self.started)
+    }
 }
 
 struct FocusGroup<'a> {
@@ -40,14 +76,16 @@ struct FocusGroup<'a> {
     intervals: Vec<Interval>,
 }
 
-/// Build chronological focus records and explicit monitoring-gap records.
+/// Build chronological focus records.
 ///
 /// Each application's touching or overlapping focus intervals are united before
-/// splitting only at local day boundaries. Each row's morning/afternoon group
-/// follows its starting time. Distinct identities remain distinct, including
-/// when their display names or observed intervals coincide.
-/// Gaps retain their data class and reason; an input gap does not erase an
-/// independently observed activity interval.
+/// splitting only at local day boundaries. A row belongs to the application
+/// focused longest within it, not to whichever came first; brief use of other
+/// applications folds into it as companions (see `group_runs`), so consecutive
+/// rows on the same stretch never repeat an application. Each row's
+/// morning/afternoon group follows its starting time. Distinct identities remain
+/// distinct, including when their display names or observed intervals coincide.
+/// Monitoring gaps do not become rows; see `unrecorded_spans`.
 pub fn build_activity_rows(snapshot: &TimelineSnapshot) -> Vec<ActivityEntry> {
     build_activity_rows_in(snapshot, &Local)
 }
@@ -78,7 +116,7 @@ fn build_activity_rows_in<Tz: TimeZone>(
         );
     }
 
-    let mut rows = Vec::new();
+    let mut runs = Vec::new();
     for (identity, application) in applications {
         let name = if application.name.trim().is_empty() {
             "未命名应用"
@@ -87,70 +125,326 @@ fn build_activity_rows_in<Tz: TimeZone>(
         };
         for (started, ended) in union_intervals(application.intervals) {
             for (started, ended, group) in grouped_intervals(timezone, started, ended) {
-                rows.push(ActivityEntry {
-                    identity: Some(identity.to_owned()),
-                    name: name.to_owned(),
-                    started_utc_ms: started,
-                    ended_utc_ms: ended,
-                    duration_ms: ended.abs_diff(started),
+                runs.push(FocusRun {
+                    identity,
+                    name,
+                    started,
+                    ended,
                     group,
-                    gap: false,
-                    detail: "应用聚焦记录".to_owned(),
                 });
             }
         }
     }
+    runs.sort_by(|left, right| {
+        (left.started, left.ended, left.identity).cmp(&(right.started, right.ended, right.identity))
+    });
+    group_runs(&runs)
+}
 
-    let mut gap_groups = BTreeMap::<(i64, i64, &str), Vec<&TimelineGap>>::new();
-    for gap in &snapshot.monitoring_gaps {
-        let Some((started, ended)) =
+/// Stretches in which the collector did not record application activity.
+///
+/// Gaps closer than `UNRECORDED_JOIN_MS` merge into one stretch, so a burst of
+/// collector restarts reads as one interruption; stretches missing less than
+/// `MIN_UNRECORDED_MS` are dropped. Input-only gaps leave application activity
+/// intact, and data removed by the user or by retention was recorded, so neither
+/// counts.
+pub fn unrecorded_spans(snapshot: &TimelineSnapshot) -> Vec<Unrecorded> {
+    let mut gaps = snapshot
+        .monitoring_gaps
+        .iter()
+        .filter(|gap| gap.data_class == "activity")
+        .filter(|gap| {
+            !matches!(
+                gap.reason.as_str(),
+                "user_deleted" | "retention_time" | "retention_space"
+            )
+        })
+        .filter_map(|gap| {
             clipped_interval(snapshot, gap.started_utc_ms, gap.ended_utc_ms)
-        else {
+                .map(|(started, ended)| (started, ended, gap.reason.as_str()))
+        })
+        .collect::<Vec<_>>();
+    gaps.sort_unstable();
+    gaps.dedup_by_key(|(started, ended, _)| (*started, *ended));
+    let mut spans = Vec::<(Unrecorded, u64)>::new();
+    for (started, ended, reason) in gaps {
+        let length = ended.abs_diff(started);
+        if let Some((span, longest)) = spans.last_mut()
+            && started - span.ended_utc_ms <= UNRECORDED_JOIN_MS
+        {
+            span.missing_ms += ended.saturating_sub(started.max(span.ended_utc_ms)) as u64;
+            span.ended_utc_ms = span.ended_utc_ms.max(ended);
+            span.count += 1;
+            if length > *longest {
+                *longest = length;
+                span.reason = reason.to_owned();
+            }
             continue;
-        };
-        gap_groups
-            .entry((started, ended, &gap.reason))
-            .or_default()
-            .push(gap);
-    }
-    for ((started, ended, _), gaps) in gap_groups {
-        let (mut name, mut detail) = gap_labels(gaps[0]);
-        if gaps.iter().any(|g| g.data_class != gaps[0].data_class) {
-            name = "记录缺口".to_owned();
-            let classes = gaps
-                .iter()
-                .map(|g| gap_labels(g).1.split(" · ").next().unwrap_or("").to_owned())
-                .collect::<std::collections::BTreeSet<_>>();
-            let reason = detail.split(" · ").nth(1).unwrap_or("").to_owned();
-            detail = format!(
-                "{} · {}",
-                classes.into_iter().collect::<Vec<_>>().join("、"),
-                reason
-            );
         }
-        for (started, ended, group) in grouped_intervals(timezone, started, ended) {
-            rows.push(ActivityEntry {
-                identity: None,
-                name: name.clone(),
+        spans.push((
+            Unrecorded {
                 started_utc_ms: started,
                 ended_utc_ms: ended,
-                duration_ms: ended.abs_diff(started),
-                group,
-                gap: true,
-                detail: detail.clone(),
-            });
+                missing_ms: length,
+                count: 1,
+                reason: reason.to_owned(),
+            },
+            length,
+        ));
+    }
+    spans
+        .into_iter()
+        .map(|(span, _)| span)
+        .filter(|span| span.missing_ms >= MIN_UNRECORDED_MS)
+        .collect()
+}
+
+/// Focus runs merged into one prospective row.
+struct Block<'a> {
+    started: i64,
+    ended: i64,
+    group: String,
+    /// Focus time and run count per identity.
+    focus: BTreeMap<&'a str, (&'a str, u64, usize)>,
+    /// The identity focused longest, and for how long.
+    main: (&'a str, u64),
+}
+
+impl<'a> Block<'a> {
+    fn new(run: &FocusRun<'a>) -> Self {
+        Self {
+            started: run.started,
+            ended: run.ended,
+            group: run.group.clone(),
+            focus: BTreeMap::from([(run.identity, (run.name, run.length(), 1))]),
+            main: (run.identity, run.length()),
         }
     }
 
-    rows.sort_by(|left, right| {
-        left.started_utc_ms
-            .cmp(&right.started_utc_ms)
-            .then_with(|| right.gap.cmp(&left.gap))
-            .then_with(|| left.ended_utc_ms.cmp(&right.ended_utc_ms))
-            .then_with(|| left.identity.cmp(&right.identity))
-            .then_with(|| left.detail.cmp(&right.detail))
+    fn date(&self) -> &str {
+        self.group.split(" · ").next().unwrap_or("")
+    }
+
+    /// Whether `next`, which starts no earlier, continues the same stretch.
+    fn links(&self, next: &Self) -> bool {
+        next.date() == self.date() && next.started - self.ended <= BRIEF_ABSENCE_MS
+    }
+
+    fn absorb(&mut self, other: Block<'a>) {
+        if other.started < self.started {
+            self.group = other.group;
+        }
+        self.started = self.started.min(other.started);
+        self.ended = self.ended.max(other.ended);
+        for (identity, (name, focused, runs)) in other.focus {
+            let entry = self.focus.entry(identity).or_insert((name, 0, 0));
+            entry.1 = entry.1.saturating_add(focused);
+            entry.2 += runs;
+        }
+        // Longest focus wins; ties go to the smaller identity for stable output.
+        self.main = self
+            .focus
+            .iter()
+            .map(|(identity, (_, focused, _))| (*identity, *focused))
+            .fold(
+                ("", 0),
+                |best, next| if next.1 > best.1 { next } else { best },
+            );
+    }
+
+    fn into_entry(self) -> ActivityEntry {
+        let (main, focused_ms) = self.main;
+        let mut name = "";
+        let mut companions = Vec::new();
+        let mut interruptions = 0;
+        for (identity, (app_name, focused, runs)) in self.focus {
+            if identity == main {
+                name = app_name;
+                continue;
+            }
+            interruptions += runs;
+            companions.push(Companion {
+                identity: identity.to_owned(),
+                name: app_name.to_owned(),
+                focused_ms: focused,
+            });
+        }
+        companions.sort_by(|a, b| {
+            b.focused_ms
+                .cmp(&a.focused_ms)
+                .then_with(|| a.identity.cmp(&b.identity))
+        });
+        ActivityEntry {
+            identity: Some(main.to_owned()),
+            name: name.to_owned(),
+            started_utc_ms: self.started,
+            ended_utc_ms: self.ended,
+            duration_ms: self.ended.abs_diff(self.started),
+            focused_ms,
+            companions,
+            interruptions,
+            group: self.group,
+        }
+    }
+}
+
+/// Group chronological focus runs into rows.
+///
+/// Every run starts as its own block. Repeatedly, the block whose application
+/// held focus the least, below `BRIEF_ABSENCE_MS`, merges into the nearer
+/// neighbour of the same stretch, and neighbours with the same main application
+/// merge. A block's main application is the one focused longest within it, so a
+/// short visit at the start of a stretch never claims the time spent elsewhere.
+fn group_runs(runs: &[FocusRun<'_>]) -> Vec<ActivityEntry> {
+    let mut blocks = runs.iter().map(Block::new).collect::<Vec<_>>();
+    loop {
+        let mut index = 1;
+        while index < blocks.len() {
+            if blocks[index - 1].main.0 == blocks[index].main.0
+                && blocks[index - 1].links(&blocks[index])
+            {
+                let block = blocks.remove(index);
+                blocks[index - 1].absorb(block);
+            } else {
+                index += 1;
+            }
+        }
+        let gap = |a: &Block<'_>, b: &Block<'_>| a.links(b).then_some(b.started - a.ended);
+        let brief = (0..blocks.len())
+            .filter(|&i| blocks[i].main.1 < BRIEF_ABSENCE_MS as u64)
+            .filter_map(|i| {
+                let before = i
+                    .checked_sub(1)
+                    .and_then(|j| gap(&blocks[j], &blocks[i]).map(|g| (g, j)));
+                let after = blocks
+                    .get(i + 1)
+                    .and_then(|next| gap(&blocks[i], next).map(|g| (g, i + 1)));
+                // The nearer neighbour, or on a tie the one focused longer.
+                let target = match (before, after) {
+                    (Some(b), Some(a)) if a.0 < b.0 => a.1,
+                    (Some(b), Some(a)) if a.0 == b.0 && blocks[a.1].main.1 > blocks[b.1].main.1 => {
+                        a.1
+                    }
+                    (Some(b), _) => b.1,
+                    (None, Some(a)) => a.1,
+                    (None, None) => return None,
+                };
+                Some((blocks[i].main.1, i, target))
+            })
+            .min();
+        let Some((_, index, target)) = brief else {
+            break;
+        };
+        let block = blocks.remove(index);
+        let target = if target > index { target - 1 } else { target };
+        blocks[target].absorb(block);
+    }
+    blocks.into_iter().map(Block::into_entry).collect()
+}
+
+/// An application on screen without focus counts as used alongside a row only if
+/// it also had focus within the row or this long before it. Windows cannot tell
+/// whether a shown window is covered, so a window merely left open behind a
+/// maximized one must not join every row.
+const SAME_SCREEN_RECENT_MS: i64 = 10 * 60_000;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ParticipantRole {
+    /// The row's own application, the one holding focus.
+    Main,
+    /// Briefly took focus within the row.
+    Interleaved,
+    /// Stayed on screen for at least half the row and was used recently.
+    SameScreen,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Participant {
+    pub identity: String,
+    pub name: String,
+    pub role: ParticipantRole,
+    pub focused_ms: u64,
+    /// Shown on screen without focus.
+    pub visible_ms: u64,
+}
+
+/// The applications used during a row: its own application first, then the
+/// others by how long they were focused or shown, longest first.
+pub fn participants(snapshot: &TimelineSnapshot, row: &ActivityEntry) -> Vec<Participant> {
+    let Some(main) = row.identity.as_deref() else {
+        return Vec::new();
+    };
+    let (start, end) = (row.started_utc_ms, row.ended_utc_ms);
+    let span = end.abs_diff(start).max(1);
+    let clipped = |segments: &mut dyn Iterator<Item = &timelens_storage::TimelineSegment>,
+                   from: i64| {
+        union_intervals(
+            segments
+                .filter_map(|segment| {
+                    let started = segment.started_utc_ms.max(from);
+                    let ended = segment.ended_utc_ms.min(end);
+                    (started < ended).then_some((started, ended))
+                })
+                .collect(),
+        )
+    };
+    let length = |intervals: &[Interval]| {
+        intervals
+            .iter()
+            .fold(0_u64, |total, (a, b)| total.saturating_add(b.abs_diff(*a)))
+    };
+    // A snapshot may list an identity more than once; judge each identity once.
+    let mut by_identity = BTreeMap::<&str, (&str, Vec<&timelens_storage::TimelineSegment>)>::new();
+    for application in &snapshot.applications {
+        let entry = by_identity
+            .entry(&application.identity)
+            .or_insert((&application.display_name, Vec::new()));
+        entry.1.extend(&application.segments);
+    }
+    let mut participants = Vec::new();
+    for (identity, (name, segments)) in by_identity {
+        let focused = length(&clipped(
+            &mut segments.iter().copied().filter(|s| s.focused),
+            start,
+        ));
+        let shown = length(&clipped(
+            &mut segments
+                .iter()
+                .copied()
+                .filter(|s| s.displayed || s.focused),
+            start,
+        ));
+        let visible = shown.saturating_sub(focused);
+        let role = if identity == main {
+            ParticipantRole::Main
+        } else if focused > 0 {
+            ParticipantRole::Interleaved
+        } else if visible.saturating_mul(2) >= span
+            && !clipped(
+                &mut segments.iter().copied().filter(|s| s.focused),
+                start.saturating_sub(SAME_SCREEN_RECENT_MS),
+            )
+            .is_empty()
+        {
+            ParticipantRole::SameScreen
+        } else {
+            continue;
+        };
+        participants.push(Participant {
+            identity: identity.to_owned(),
+            name: name.to_owned(),
+            role,
+            focused_ms: focused,
+            visible_ms: visible,
+        });
+    }
+    participants.sort_by(|a, b| {
+        (b.role == ParticipantRole::Main)
+            .cmp(&(a.role == ParticipantRole::Main))
+            .then_with(|| (b.focused_ms + b.visible_ms).cmp(&(a.focused_ms + a.visible_ms)))
+            .then_with(|| a.identity.cmp(&b.identity))
     });
-    rows
+    participants
 }
 
 /// Total observed focus time, counting overlapping applications only once.
@@ -199,39 +493,6 @@ fn selected_day_bounds_in<Tz: TimeZone>(
     let ended = resolve_local_boundary(timezone, next_date.and_hms_opt(0, 0, 0)?)?;
     (started < ended && local_datetime_at(timezone, started)?.date() == date)
         .then_some((started, ended))
-}
-
-/// Seven real local dates, Monday through Sunday, containing the anchor date.
-/// `selected` refers to the anchor; `is_today` refers to the current local date.
-/// An unrepresentable anchor or incomplete week returns an empty vector.
-pub fn week_days(anchor: i64) -> Vec<DayEntry> {
-    let Some(selected) = local_datetime_at(&Local, anchor).map(|value| value.date()) else {
-        return Vec::new();
-    };
-    week_days_for_date(selected, Local::now().date_naive())
-}
-
-fn week_days_for_date(selected: NaiveDate, today: NaiveDate) -> Vec<DayEntry> {
-    let selected_index = selected.weekday().num_days_from_monday();
-    let Some(monday) = selected.checked_sub_days(Days::new(u64::from(selected_index))) else {
-        return Vec::new();
-    };
-    if monday.checked_add_days(Days::new(6)).is_none() {
-        return Vec::new();
-    }
-    let weekdays = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"];
-    (0..7)
-        .filter_map(|index| {
-            let date = monday.checked_add_days(Days::new(index))?;
-            Some(DayEntry {
-                date: date.format("%Y-%m-%d").to_string(),
-                weekday: weekdays[index as usize].to_owned(),
-                offset: index as i32 - selected_index as i32,
-                is_today: date == today,
-                selected: date == selected,
-            })
-        })
-        .collect()
 }
 
 fn clipped_interval(snapshot: &TimelineSnapshot, started: i64, ended: i64) -> Option<Interval> {
@@ -333,29 +594,11 @@ fn resolve_local_boundary<Tz: TimeZone>(timezone: &Tz, local: NaiveDateTime) -> 
     None
 }
 
-fn gap_labels(gap: &TimelineGap) -> (String, String) {
-    let (name, data_class) = match gap.data_class.as_str() {
-        "activity" => ("活动记录缺口", "应用活动".to_owned()),
-        "input" => ("输入记录缺口", "键盘与鼠标计数".to_owned()),
-        other => ("记录缺口", format!("未知记录类型（{other}）")),
-    };
-    let reason = match gap.reason.as_str() {
-        "collector_restart" => "采集器重启".to_owned(),
-        "buffer_overflow" => "采集缓冲区溢出".to_owned(),
-        "input_overflow" => "输入缓冲区溢出".to_owned(),
-        "retention_time" => "已按保留时间清理".to_owned(),
-        "retention_space" => "已按空间上限清理".to_owned(),
-        "user_deleted" => "用户已删除".to_owned(),
-        other => format!("未知原因（{other}）"),
-    };
-    (name.to_owned(), format!("{data_class} · {reason}"))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::{FixedOffset, LocalResult};
-    use timelens_storage::{TimelineApplication, TimelineSegment};
+    use chrono::{FixedOffset, LocalResult, NaiveDate};
+    use timelens_storage::{TimelineApplication, TimelineGap, TimelineSegment};
 
     const MINUTE: i64 = 60_000;
 
@@ -446,7 +689,6 @@ mod tests {
             (start + 45 * MINUTE, start + 60 * MINUTE)
         );
         assert_eq!(total_focus_ms(&snapshot), 45 * MINUTE as u64);
-        assert!(rows.iter().all(|row| row.detail == "应用聚焦记录"));
     }
 
     #[test]
@@ -489,6 +731,192 @@ mod tests {
     }
 
     #[test]
+    fn brief_switches_stay_inside_one_row_as_companions() {
+        let start = timestamp(2026, 9, 5, 9, 0);
+        let at = |minute: i64| start + minute * MINUTE;
+        let snapshot = snapshot(
+            start,
+            at(60),
+            vec![
+                application(
+                    "editor",
+                    &[(at(0), at(20)), (at(21), at(40)), (at(41), at(50))],
+                ),
+                application("chat", &[(at(20), at(21))]),
+                application("browser", &[(at(40), at(41))]),
+            ],
+        );
+        let rows = build_activity_rows_in(&snapshot, &zone());
+        assert_eq!(rows.len(), 1);
+        let row = &rows[0];
+        assert_eq!(row.identity.as_deref(), Some("editor"));
+        assert_eq!((row.started_utc_ms, row.ended_utc_ms), (at(0), at(50)));
+        assert_eq!(row.duration_ms, 50 * MINUTE as u64);
+        assert_eq!(row.focused_ms, 48 * MINUTE as u64);
+        assert_eq!(row.interruptions, 2);
+        assert_eq!(
+            row.companions
+                .iter()
+                .map(|c| (c.identity.as_str(), c.focused_ms))
+                .collect::<Vec<_>>(),
+            vec![("browser", MINUTE as u64), ("chat", MINUTE as u64)]
+        );
+    }
+
+    #[test]
+    fn a_leading_glance_joins_the_next_row_and_long_absences_split_rows() {
+        let start = timestamp(2026, 9, 5, 9, 0);
+        let at = |minute: i64| start + minute * MINUTE;
+        let snapshot = snapshot(
+            start,
+            at(90),
+            vec![
+                application("chat", &[(at(0), at(1)), (at(70), at(71))]),
+                application("editor", &[(at(1), at(30))]),
+                application("browser", &[(at(40), at(60))]),
+            ],
+        );
+        let rows = build_activity_rows_in(&snapshot, &zone());
+        let summary = rows
+            .iter()
+            .map(|row| {
+                (
+                    row.identity.as_deref().unwrap(),
+                    (row.started_utc_ms - start) / MINUTE,
+                    (row.ended_utc_ms - start) / MINUTE,
+                    row.companions.len(),
+                )
+            })
+            .collect::<Vec<_>>();
+        // The trailing glance has no row to join, so it stays on its own.
+        assert_eq!(
+            summary,
+            vec![
+                ("editor", 0, 30, 1),
+                ("browser", 40, 60, 0),
+                ("chat", 70, 71, 0)
+            ]
+        );
+        assert!(
+            rows.windows(2)
+                .all(|pair| pair[0].identity != pair[1].identity)
+        );
+    }
+
+    #[test]
+    fn a_row_belongs_to_the_application_focused_longest_not_the_first_one() {
+        let start = timestamp(2026, 10, 9, 18, 19);
+        let second = 1_000;
+        let at = |seconds: i64| start + seconds * second;
+        // Recorded on 2026-10-09: two short visits to Timelens around the browser.
+        let snapshot = snapshot(
+            start,
+            at(900),
+            vec![
+                application("taskmgr", &[(at(0), at(25))]),
+                application("timelens", &[(at(180), at(220)), (at(402), at(442))]),
+                application("browser", &[(at(220), at(400)), (at(442), at(900))]),
+            ],
+        );
+        let rows = build_activity_rows_in(&snapshot, &zone());
+        assert_eq!(rows.len(), 1);
+        let row = &rows[0];
+        assert_eq!(row.identity.as_deref(), Some("browser"));
+        assert_eq!((row.started_utc_ms, row.ended_utc_ms), (at(0), at(900)));
+        assert_eq!(row.focused_ms, 638 * second as u64);
+        assert_eq!(row.interruptions, 3);
+        assert_eq!(
+            row.companions
+                .iter()
+                .map(|c| (c.identity.as_str(), c.focused_ms))
+                .collect::<Vec<_>>(),
+            vec![
+                ("timelens", 80 * second as u64),
+                ("taskmgr", 25 * second as u64)
+            ]
+        );
+    }
+
+    #[test]
+    fn sustained_use_between_stretches_of_another_application_keeps_its_row() {
+        let start = timestamp(2026, 9, 5, 9, 0);
+        let at = |minute: i64| start + minute * MINUTE;
+        let snapshot = snapshot(
+            start,
+            at(60),
+            vec![
+                application("browser", &[(at(0), at(10)), (at(15), at(25))]),
+                application("chat", &[(at(10), at(15)), (at(25), at(26))]),
+            ],
+        );
+        let rows = build_activity_rows_in(&snapshot, &zone());
+        let summary = rows
+            .iter()
+            .map(|row| {
+                (
+                    row.identity.as_deref().unwrap(),
+                    (row.started_utc_ms - start) / MINUTE,
+                    (row.ended_utc_ms - start) / MINUTE,
+                )
+            })
+            .collect::<Vec<_>>();
+        // The trailing minute of chat joins the browser row before it.
+        assert_eq!(
+            summary,
+            vec![("browser", 0, 10), ("chat", 10, 15), ("browser", 15, 26)]
+        );
+    }
+
+    #[test]
+    fn participants_cover_interleaved_and_recently_used_on_screen_apps_only() {
+        let start = timestamp(2026, 9, 5, 9, 0);
+        let at = |minute: i64| start + minute * MINUTE;
+        let segment = |a: i64, b: i64, displayed: bool, focused: bool| TimelineSegment {
+            started_utc_ms: at(a),
+            ended_utc_ms: at(b),
+            displayed,
+            focused,
+            inferred_tray: false,
+        };
+        let mut editor = application("editor", &[(at(0), at(20)), (at(21), at(40))]);
+        editor.display_name = "Editor".into();
+        let chat = application("chat", &[(at(20), at(21))]);
+        // A reference document on the second screen, clicked just before the row.
+        let mut reference = application("reference", &[]);
+        reference.segments = vec![segment(-5, -2, true, true), segment(-2, 40, true, false)];
+        // A window left open behind the editor all day, never touched.
+        let mut forgotten = application("forgotten", &[]);
+        forgotten.segments = vec![segment(-300, 40, true, false)];
+        let mut background = application("music", &[]);
+        background.segments = vec![segment(0, 40, false, false)];
+        let snapshot = snapshot(
+            at(-10),
+            at(40),
+            vec![editor, chat, reference, forgotten, background],
+        );
+        let rows = build_activity_rows_in(&snapshot, &zone());
+        let row = rows
+            .iter()
+            .find(|row| row.identity.as_deref() == Some("editor"))
+            .unwrap();
+        let found = participants(&snapshot, row);
+        assert_eq!(
+            found
+                .iter()
+                .map(|p| (p.identity.as_str(), p.role))
+                .collect::<Vec<_>>(),
+            vec![
+                ("editor", ParticipantRole::Main),
+                ("reference", ParticipantRole::SameScreen),
+                ("chat", ParticipantRole::Interleaved),
+            ]
+        );
+        assert_eq!(found[0].focused_ms, 39 * MINUTE as u64);
+        assert_eq!(found[1].visible_ms, 40 * MINUTE as u64);
+        assert_eq!(found[2].focused_ms, MINUTE as u64);
+    }
+
+    #[test]
     fn query_boundaries_clip_activity_and_gaps_and_drop_empty_or_reversed_ranges() {
         let start = timestamp(2026, 9, 5, 9, 0);
         let end = start + 60 * MINUTE;
@@ -515,17 +943,19 @@ mod tests {
                 reason: "collector_restart".into(),
             },
             TimelineGap {
-                data_class: "input".into(),
-                started_utc_ms: end,
-                ended_utc_ms: end + MINUTE,
-                reason: "input_overflow".into(),
+                data_class: "activity".into(),
+                started_utc_ms: end - MINUTE,
+                ended_utc_ms: end + 5 * MINUTE,
+                reason: "collector_restart".into(),
             },
         ];
         let rows = build_activity_rows_in(&snapshot, &zone());
-        assert_eq!(rows.len(), 3);
-        assert!(rows[0].gap);
+        assert_eq!(rows.len(), 2);
+        // The first gap keeps its in-range two minutes; the second only one.
+        let spans = unrecorded_spans(&snapshot);
+        assert_eq!(spans.len(), 1);
         assert_eq!(
-            (rows[0].started_utc_ms, rows[0].ended_utc_ms),
+            (spans[0].started_utc_ms, spans[0].ended_utc_ms),
             (start, start + 2 * MINUTE)
         );
         assert!(
@@ -539,43 +969,78 @@ mod tests {
     }
 
     #[test]
-    fn monitoring_gaps_preserve_data_class_reason_and_chronological_position() {
+    fn unrecorded_spans_merge_restart_bursts_and_skip_seams_and_removed_data() {
         let start = timestamp(2026, 9, 5, 9, 0);
         let mut snapshot = snapshot(
             start,
-            start + 60 * MINUTE,
+            start + 180 * MINUTE,
             vec![application("editor", &[(start, start + 5 * MINUTE)])],
         );
-        for (data_class, reason, minute) in [
-            ("input", "input_overflow", 30),
-            ("activity", "buffer_overflow", 10),
-            ("input", "buffer_overflow", 10),
+        let second = 1_000;
+        for (data_class, reason, from, to) in [
+            // A burst of restarts a few seconds each, about a minute and a half in all.
+            (
+                "activity",
+                "collector_restart",
+                10 * MINUTE,
+                10 * MINUTE + 30 * second,
+            ),
+            (
+                "activity",
+                "collector_restart",
+                11 * MINUTE,
+                11 * MINUTE + 20 * second,
+            ),
+            (
+                "activity",
+                "collector_restart",
+                12 * MINUTE,
+                12 * MINUTE + 40 * second,
+            ),
+            (
+                "activity",
+                "collector_restart",
+                12 * MINUTE,
+                12 * MINUTE + 40 * second,
+            ),
+            // Restarts that add up to more than two minutes.
+            ("activity", "collector_restart", 40 * MINUTE, 41 * MINUTE),
+            ("activity", "buffer_overflow", 43 * MINUTE, 45 * MINUTE),
+            // A long stop.
+            ("activity", "collector_restart", 60 * MINUTE, 100 * MINUTE),
+            // Not unrecorded activity.
+            ("input", "input_overflow", 120 * MINUTE, 150 * MINUTE),
+            ("activity", "user_deleted", 120 * MINUTE, 150 * MINUTE),
+            ("activity", "retention_time", 155 * MINUTE, 170 * MINUTE),
         ] {
             snapshot.monitoring_gaps.push(TimelineGap {
                 data_class: data_class.into(),
                 reason: reason.into(),
-                started_utc_ms: start + minute * MINUTE,
-                ended_utc_ms: start + (minute + 5) * MINUTE,
+                started_utc_ms: start + from,
+                ended_utc_ms: start + to,
             });
         }
-        let rows = build_activity_rows_in(&snapshot, &zone());
-        assert_eq!(rows.len(), 3);
-        assert!(!rows[0].gap);
-        assert!(
-            rows[1..]
-                .iter()
-                .all(|row| row.gap && row.identity.is_none())
+        let spans = unrecorded_spans(&snapshot);
+        assert_eq!(
+            spans,
+            vec![
+                Unrecorded {
+                    started_utc_ms: start + 40 * MINUTE,
+                    ended_utc_ms: start + 45 * MINUTE,
+                    missing_ms: 3 * MINUTE as u64,
+                    count: 2,
+                    reason: "buffer_overflow".into(),
+                },
+                Unrecorded {
+                    started_utc_ms: start + 60 * MINUTE,
+                    ended_utc_ms: start + 100 * MINUTE,
+                    missing_ms: 40 * MINUTE as u64,
+                    count: 1,
+                    reason: "collector_restart".into(),
+                },
+            ]
         );
-        assert!(
-            rows.iter()
-                .any(|row| row.detail.contains("应用活动") && row.detail.contains("采集缓冲区溢出"))
-        );
-        assert!(
-            rows.iter().any(|row| row.detail.contains("键盘与鼠标计数")
-                && row.detail.contains("采集缓冲区溢出"))
-        );
-        assert_eq!(rows[2].detail, "键盘与鼠标计数 · 输入缓冲区溢出");
-        assert_eq!(total_focus_ms(&snapshot), 5 * MINUTE as u64);
+        assert_eq!(build_activity_rows_in(&snapshot, &zone()).len(), 1);
     }
 
     #[test]
@@ -616,34 +1081,6 @@ mod tests {
     }
 
     #[test]
-    fn week_starts_on_monday_and_preserves_dates_across_the_year_boundary() {
-        let selected = NaiveDate::from_ymd_opt(2026, 1, 1).unwrap();
-        let today = NaiveDate::from_ymd_opt(2025, 12, 31).unwrap();
-        let days = week_days_for_date(selected, today);
-        assert_eq!(
-            days.iter().map(|day| day.date.as_str()).collect::<Vec<_>>(),
-            vec![
-                "2025-12-29",
-                "2025-12-30",
-                "2025-12-31",
-                "2026-01-01",
-                "2026-01-02",
-                "2026-01-03",
-                "2026-01-04",
-            ]
-        );
-        assert_eq!(
-            days.iter().map(|day| day.offset).collect::<Vec<_>>(),
-            vec![-3, -2, -1, 0, 1, 2, 3]
-        );
-        assert_eq!(days[0].weekday, "周一");
-        assert_eq!(days[6].weekday, "周日");
-        assert_eq!(days.iter().filter(|day| day.selected).count(), 1);
-        assert_eq!(days.iter().filter(|day| day.is_today).count(), 1);
-        assert!(days[3].selected && days[2].is_today);
-    }
-
-    #[test]
     fn local_calendar_navigation_handles_months_leap_days_and_invalid_inputs() {
         let anchor = Local
             .with_ymd_and_hms(2026, 1, 31, 23, 30, 0)
@@ -663,13 +1100,8 @@ mod tests {
         let (started, ended) = selected_day_bounds_in(&zone(), leap_anchor, 1).unwrap();
         assert_eq!(started, timestamp(2024, 2, 29, 0, 0));
         assert_eq!(ended, timestamp(2024, 3, 1, 0, 0));
-        let week = week_days(anchor);
-        assert_eq!(week.len(), 7);
-        assert_eq!(week[5].date, "2026-01-31");
-        assert!(week[5].selected);
         for invalid in [i64::MIN, i64::MAX] {
             assert!(selected_day_bounds(invalid, 0).is_none());
-            assert!(week_days(invalid).is_empty());
         }
         assert!(selected_day_bounds(anchor, i32::MAX).is_none());
         assert!(selected_day_bounds(anchor, i32::MIN).is_none());

@@ -18,6 +18,7 @@ serde.workspace = true
 serde_json.workspace = true
 windows-sys.workspace = true
 image.workspace = true
+raw-window-handle.workspace = true
 slint.workspace = true
 timelens-ipc = { path = "../timelens-ipc" }
 timelens-observer = { path = "../timelens-observer" }
@@ -25,6 +26,9 @@ timelens-storage = { path = "../timelens-storage" }
 timelens-ai = { path = "../timelens-ai" }
 windows.workspace = true
 zeroize.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
 
 [build-dependencies]
 embed-resource.workspace = true

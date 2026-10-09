@@ -589,8 +589,14 @@ fn capture_output(target: &OutputTarget) -> Result<CapturedFrame> {
     let mut frame_info = DXGI_OUTDUPL_FRAME_INFO::default();
     let mut resource: Option<IDXGIResource> = None;
     let mut acquired = false;
-    for _ in 0..3 {
+    for _ in 0..6 {
         match unsafe { duplication.AcquireNextFrame(500, &mut frame_info, &mut resource) } {
+            // The first frame after duplicating often carries only the pointer and
+            // a black texture; wait for one that presented the desktop.
+            Ok(()) if frame_info.LastPresentTime == 0 => {
+                resource = None;
+                unsafe { duplication.ReleaseFrame() }?;
+            }
             Ok(()) => {
                 acquired = true;
                 break;
@@ -600,7 +606,7 @@ fn capture_output(target: &OutputTarget) -> Result<CapturedFrame> {
         }
     }
     if !acquired {
-        bail!("desktop duplication timed out");
+        bail!("desktop duplication presented no desktop image");
     }
     let result = (|| {
         let texture: ID3D11Texture2D = resource

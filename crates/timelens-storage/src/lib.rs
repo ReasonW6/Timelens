@@ -8,6 +8,7 @@ mod recovery;
 mod relocation;
 pub use portable::{BackupInfo, BackupOptions, ExportFormat, PreparedRestore};
 pub use recovery::RecoveryReport;
+pub use relocation::RelocationStep;
 
 pub use ai::{
     AiJob, AiJobKind, AiJobSpec, AiMessage, AiRetentionOutcome, AiSettings, AiVersion,

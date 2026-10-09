@@ -6,6 +6,7 @@
 //! The task already carries the elevation, so running it needs no UAC prompt.
 
 use std::{
+    path::PathBuf,
     sync::atomic::{AtomicBool, Ordering},
     thread,
     time::Duration,
@@ -14,14 +15,17 @@ use std::{
 use timelens_ipc::SingleInstanceGuard;
 use windows::{
     Win32::{
-        Foundation::{ERROR_FILE_NOT_FOUND, ERROR_PATH_NOT_FOUND},
+        Foundation::{E_FAIL, ERROR_FILE_NOT_FOUND, ERROR_PATH_NOT_FOUND},
         System::{
             Com::{CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED, CoCreateInstance, CoInitializeEx},
-            TaskScheduler::{ITaskService, TASK_STATE_QUEUED, TASK_STATE_RUNNING, TaskScheduler},
+            TaskScheduler::{
+                IExecAction, IRegisteredTask, ITaskService, TASK_STATE_QUEUED, TASK_STATE_RUNNING,
+                TaskScheduler,
+            },
             Variant::VARIANT,
         },
     },
-    core::{BSTR, HRESULT},
+    core::{BSTR, HRESULT, Interface},
 };
 
 pub const DEFAULT_TASK: &str = r"\Timelens\Collector";
@@ -107,7 +111,41 @@ fn task_missing(error: &windows::core::Error) -> bool {
         .any(|status| error.code() == HRESULT::from_win32(status.0))
 }
 
-fn start_task(task_path: &str) -> windows::core::Result<()> {
+/// The directory of the collector executable that the task runs. The task
+/// definition is writable only by administrators, so it may place the elevated
+/// collector in a protected directory apart from the user-chosen installation.
+/// A missing task yields `None`.
+pub fn registered_directory(task_path: &str) -> windows::core::Result<Option<PathBuf>> {
+    let task_path = task_path.to_owned();
+    // COM is initialized on a short-lived thread so the UI thread keeps its own
+    // apartment model.
+    thread::spawn(move || {
+        unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) }.ok()?;
+        let task = match open_task(&task_path) {
+            Ok(task) => task,
+            Err(error) if task_missing(&error) => return Ok(None),
+            Err(error) => return Err(error),
+        };
+        unsafe {
+            let actions = task.Definition()?.Actions()?;
+            let mut count = 0;
+            actions.Count(&mut count)?;
+            if count != 1 {
+                return Ok(None);
+            }
+            let mut path = BSTR::new();
+            actions
+                .get_Item(1)?
+                .cast::<IExecAction>()?
+                .Path(&mut path)?;
+            Ok(PathBuf::from(path.to_string()).parent().map(PathBuf::from))
+        }
+    })
+    .join()
+    .unwrap_or_else(|_| Err(windows::core::Error::from_hresult(E_FAIL)))
+}
+
+fn open_task(task_path: &str) -> windows::core::Result<IRegisteredTask> {
     let (folder, name) = task_path
         .rsplit_once('\\')
         .filter(|(folder, _)| !folder.is_empty())
@@ -118,9 +156,15 @@ fn start_task(task_path: &str) -> windows::core::Result<()> {
         let service: ITaskService = CoCreateInstance(&TaskScheduler, None, CLSCTX_INPROC_SERVER)?;
         let local = VARIANT::default();
         service.Connect(&local, &local, &local, &local)?;
-        let task = service
+        service
             .GetFolder(&BSTR::from(folder))?
-            .GetTask(&BSTR::from(name))?;
+            .GetTask(&BSTR::from(name))
+    }
+}
+
+fn start_task(task_path: &str) -> windows::core::Result<()> {
+    let task = open_task(task_path)?;
+    unsafe {
         let state = task.State()?;
         if state == TASK_STATE_RUNNING || state == TASK_STATE_QUEUED {
             return Ok(());
@@ -143,5 +187,12 @@ mod tests {
         assert!(!valid_task_path(r"\Timelens\Core"));
         assert!(!valid_task_path(r"\Microsoft\Windows\Collector"));
         assert!(!valid_task_path(r"\Timelens\Nested\Collector"));
+    }
+
+    #[test]
+    fn a_missing_task_registers_no_collector_directory() {
+        let directory =
+            registered_directory(r"\Timelens-Acceptance-00000000-0000\Collector").unwrap();
+        assert_eq!(directory, None);
     }
 }

@@ -12,6 +12,7 @@ $root = (Resolve-Path -LiteralPath $AcceptanceDirectory).Path
 if ($root -ne (Join-Path $repo 'target\acceptance\84d2c6a9')) { throw 'Unexpected acceptance scope.' }
 $product = 'Timelens-Acceptance-84d2c6a9'
 $install = Join-Path $env:ProgramFiles $product
+$elevated = Join-Path $env:CommonProgramW6432 $product
 $taskPath = '\Timelens-Acceptance-84d2c6a9\'
 $setup = Join-Path $root 'installer\Timelens-Acceptance.exe'
 $control = Join-Path $root 'data'
@@ -24,7 +25,7 @@ $external = Join-Path $root 'final-ui-plain.zip'
 $externalHash = (Get-FileHash -LiteralPath $external -Algorithm SHA256).Hash
 $keyHash = (Get-FileHash -LiteralPath $keyPath -Algorithm SHA256).Hash
 $corePath = Join-Path $install 'Timelens.exe'
-$collectorPath = Join-Path $install 'Timelens.Collector.exe'
+$collectorPath = Join-Path $elevated 'Timelens.Collector.exe'
 $workerPath = Join-Path $install 'Timelens.AI.exe'
 $paths = @($corePath, $collectorPath, $workerPath)
 $checks = [ordered]@{}
@@ -47,7 +48,7 @@ function Product-Processes {
     @(Get-Process -Name Timelens, Timelens.Collector, Timelens.AI -ErrorAction SilentlyContinue | Where-Object { $_.Path -in $paths })
 }
 function Invoke-Uninstall([string] $DataMode) {
-    $uninstaller = Join-Path $install 'unins000.exe'
+    $uninstaller = Join-Path $elevated 'unins000.exe'
     $arguments = @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', "/DATA=$DataMode", ('/LOG="{0}"' -f (Join-Path $root "uninstall-$DataMode.log")))
     $process = Start-Process -FilePath $uninstaller -ArgumentList $arguments -WindowStyle Hidden -Wait -PassThru
     Assert-Check "uninstall-$DataMode-exit-zero" ($process.ExitCode -eq 0)
@@ -106,10 +107,11 @@ try {
     Assert-Check 'ai-worker-is-on-demand' (@($processes | Where-Object Path -eq $workerPath).Count -eq 0)
     Assert-Check 'three-payloads-present' ((Test-Path -LiteralPath $corePath) -and (Test-Path -LiteralPath $collectorPath) -and (Test-Path -LiteralPath $workerPath))
     . (Join-Path $repo 'installer\path-safety.ps1')
-    Assert-Check 'protected-installation-ancestors' ((Assert-InstallDirectory $install) -eq $install)
-    $acl = Get-Acl -LiteralPath $install
-    $ordinaryWriteRules = @($acl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier]) | Where-Object {
-        $_.AccessControlType -eq 'Allow' -and $_.IdentityReference.Value -notin @('S-1-5-18', 'S-1-5-32-544') -and ([long]$_.FileSystemRights -band 0xD0156)
+    Assert-Check 'protected-elevated-ancestors' ((Assert-InstallDirectory $elevated -RequireProtectedAncestors) -eq $elevated)
+    $ordinaryWriteRules = @(foreach ($directory in @($install, $elevated)) {
+        (Get-Acl -LiteralPath $directory).GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier]) | Where-Object {
+            $_.AccessControlType -eq 'Allow' -and $_.IdentityReference.Value -notin @('S-1-5-18', 'S-1-5-32-544') -and ([long]$_.FileSystemRights -band 0xD0156)
+        }
     })
     Assert-Check 'ordinary-users-cannot-modify-payload' ($ordinaryWriteRules.Count -eq 0)
     Assert-Check 'install-preserved-data-key' ((Get-FileHash -LiteralPath $keyPath -Algorithm SHA256).Hash -eq $keyHash)

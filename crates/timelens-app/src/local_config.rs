@@ -65,6 +65,19 @@ pub fn publish(control: &Path, destination: &Path) -> timelens_storage::Result<(
     }
     Ok(())
 }
+/// Point a new user's dataset at the empty directory the installer prepared. A
+/// user who already has a dataset or a chosen location keeps it.
+pub fn adopt_initial(control: &Path, destination: &Path) -> Result<bool> {
+    if control.join(LOCATION).exists() || timelens_storage::Storage::holds_dataset(control) {
+        return Ok(false);
+    }
+    let target = timelens_storage::Storage::validate_data_destination(destination)?;
+    if !target.is_dir() || fs::read_dir(&target)?.next().is_some() {
+        bail!("安装器准备的数据目录不存在或不为空：{}", target.display());
+    }
+    publish(control, &target)?;
+    Ok(true)
+}
 pub fn delete_pointer(control: &Path) -> Result<()> {
     for name in [LOCATION, "data-location.next"] {
         match fs::remove_file(control.join(name)) {
@@ -75,4 +88,35 @@ pub fn delete_pointer(control: &Path) -> Result<()> {
     }
     let _ = fs::remove_dir(control);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_new_user_adopts_the_prepared_directory_and_an_existing_one_keeps_theirs() {
+        let root = tempfile::tempdir().unwrap();
+        let control = root.path().join("control");
+        let prepared = root.path().join("Data");
+        fs::create_dir(&prepared).unwrap();
+        assert!(adopt_initial(&control, &prepared).unwrap());
+        assert_eq!(resolve(&control).unwrap(), prepared);
+
+        let other = root.path().join("Other");
+        fs::create_dir(&other).unwrap();
+        assert!(!adopt_initial(&control, &other).unwrap());
+        assert_eq!(resolve(&control).unwrap(), prepared);
+    }
+
+    #[test]
+    fn a_non_empty_directory_is_not_adopted() {
+        let root = tempfile::tempdir().unwrap();
+        let control = root.path().join("control");
+        let prepared = root.path().join("Data");
+        fs::create_dir(&prepared).unwrap();
+        fs::write(prepared.join("notes.txt"), b"x").unwrap();
+        assert!(adopt_initial(&control, &prepared).is_err());
+        assert!(!control.join(LOCATION).exists());
+    }
 }

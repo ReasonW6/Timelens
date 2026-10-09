@@ -1,5 +1,5 @@
 import { ComboBox, LineEdit, ScrollView } from "std-widgets.slint";
-import { Theme, Action, Label, Note, SectionTitle, Rule, CheckBox, StatusLine } from "theme.slint";
+import { Theme, Action, Label, Note, SectionTitle, Rule, CheckBox, StatusLine, Segmented, Segment, Switch, SettingRow, SettingsHeader, SettingsGroup, SettingExpander } from "theme.slint";
 
 export struct KeyCell { label: string, count: string, strength: float, col: float, row: float, units: float }
 export global CollectionState {
@@ -30,125 +30,145 @@ export global CollectionState {
 }
 
 export component CollectionPanel inherits Rectangle {
-    in property <bool> embedded: true;
-    private property <int> application-page: 0;
     background: Theme.paper;
 
     VerticalLayout {
-        padding: root.embedded ? 0px : 28px;
-        spacing: 18px;
-        if !root.embedded || CollectionState.page == 0 : HorizontalLayout {
-            height: 44px;
-            Text { text: CollectionState.page == 0 ? "应用规则" : "键位与系统"; color: Theme.ink; font-size: 28px; font-weight: 500; vertical-alignment: center; }
-            Rectangle { horizontal-stretch: 1; }
-            if !root.embedded : Action { width: 72px; text: "关闭"; enabled: !CollectionState.busy; clicked => { CollectionState.open = false; } }
-        }
-        if !root.embedded : HorizontalLayout {
-            spacing: 8px;
-            Action { text: "排除与暂停"; selected: CollectionState.page == 0; enabled: !CollectionState.busy; clicked => { CollectionState.page = 0; } }
-            Action { text: "键位与系统"; selected: CollectionState.page == 1; enabled: !CollectionState.busy; clicked => { CollectionState.page = 1; CollectionState.action(7); } }
-        }
+        spacing: 10px;
 
         if CollectionState.page == 0 : ScrollView {
             horizontal-scrollbar-policy: always-off;
             VerticalLayout {
                 alignment: start;
-                padding-right: 16px;
-                padding-bottom: 12px;
-                spacing: 16px;
-                HorizontalLayout {
-                    vertical-stretch: 0;
-                    CheckBox { font-size: 14px; text: "全局暂停记录"; checked <=> CollectionState.paused; enabled: !CollectionState.busy; toggled => { CollectionState.action(0); } }
-                    Rectangle { horizontal-stretch: 1; }
-                    Label { text: CollectionState.paused ? "已暂停" : "正在记录"; color: CollectionState.paused ? Theme.accent-ink : Theme.muted; vertical-alignment: center; }
-                }
-                Note { text: "暂停期间保留匿名暂停区间。应用和输入不记录，快照记为暂停缺失；恢复后不会补录。"; }
-                Rule { }
-                Label { text: "当前应用"; }
-                HorizontalLayout {
-                    vertical-stretch: 0;
-                    spacing: 10px;
-                    ComboBox {
-                        height: 36px;
-                        horizontal-stretch: 1;
-                        model: CollectionState.apps;
-                        current-index <=> CollectionState.app-index;
-                        enabled: !CollectionState.busy && CollectionState.apps.length > 0;
-                        selected(value) => { CollectionState.merge-confirmed = false; CollectionState.delete-confirmed = false; CollectionState.choose(CollectionState.app-index); }
+                padding-right: 18px;
+                padding-bottom: 16px;
+                spacing: 10px;
+                SettingsHeader { text: "应用"; }
+                SettingsGroup {
+                    SettingRow {
+                        title: "要设置的应用";
+                        description: CollectionState.apps.length == 0 ? "还没有已记录的应用，可以直接选择一个 EXE。" : "从已记录的应用中选择，或指定一个 EXE。规则只影响之后的记录。";
+                        icon: @image-url("icons/app-window.svg");
+                        HorizontalLayout {
+                            spacing: 8px;
+                            ComboBox {
+                                width: 220px; height: 34px;
+                                model: CollectionState.apps;
+                                current-index <=> CollectionState.app-index;
+                                enabled: !CollectionState.busy && CollectionState.apps.length > 0;
+                                selected(value) => { CollectionState.merge-confirmed = false; CollectionState.delete-confirmed = false; CollectionState.choose(CollectionState.app-index); }
+                            }
+                            Action { text: "选择 EXE"; enabled: !CollectionState.busy; clicked => { CollectionState.action(1); } }
+                        }
                     }
-                    Action { width: 134px; text: "选择其他 EXE"; enabled: !CollectionState.busy; clicked => { CollectionState.action(1); } }
-                }
-                if CollectionState.apps.length == 0 : Note { text: "还没有已记录的应用。可以选择 EXE，为它设置未来的排除规则。"; }
-                HorizontalLayout {
-                    vertical-stretch: 0;
-                    spacing: 8px;
-                    Action { text: "排除规则"; selected: root.application-page == 0; enabled: !CollectionState.busy; clicked => { root.application-page = 0; } }
-                    Action { text: "合并显示"; selected: root.application-page == 1; enabled: !CollectionState.busy; clicked => { root.application-page = 1; } }
-                    Action { text: "删除历史"; selected: root.application-page == 2; danger: root.application-page == 2; enabled: !CollectionState.busy; clicked => { root.application-page = 2; } }
                 }
 
-                if root.application-page == 0 : VerticalLayout {
-                    vertical-stretch: 0; alignment: start;
-                    spacing: 12px;
-                    SectionTitle { text: "为此应用分别设置排除"; font-size: 18px; }
-                    CheckBox { font-size: 13px; text: "排除活动记录"; checked <=> CollectionState.activity; enabled: !CollectionState.busy && CollectionState.app-index >= 0; }
-                    Note { text: "不记录此应用身份和活动。"; }
-                    CheckBox { font-size: 13px; text: "排除输入记录"; checked <=> CollectionState.input; enabled: !CollectionState.busy && CollectionState.app-index >= 0; }
-                    Note { text: "只保留匿名每日总数。"; }
-                    CheckBox { font-size: 13px; text: "排除截图"; checked <=> CollectionState.snapshots; enabled: !CollectionState.busy && CollectionState.app-index >= 0; }
-                    Note { text: "该应用显示时，跳过它所在屏幕。"; }
-                    HorizontalLayout {
-                        Action { width: 170px; text: "保存三份独立规则"; accent: true; enabled: !CollectionState.busy && CollectionState.app-index >= 0; clicked => { CollectionState.action(2); } }
-                        Rectangle { horizontal-stretch: 1; }
+                Rectangle { height: 8px; }
+                SettingsHeader { text: "排除规则"; }
+                Note { text: "三份名单相互独立，切换后立即生效；既有历史和图片保留。"; font-size: 12px; }
+                SettingsGroup {
+                    SettingRow {
+                        title: "不记录活动";
+                        description: "不记录这个应用的身份与使用时间。";
+                        icon: @image-url("icons/activity.svg");
+                        Switch {
+                            label: "不记录活动";
+                            checked: CollectionState.activity;
+                            enabled: !CollectionState.busy && CollectionState.app-index >= 0;
+                            toggled(on) => { CollectionState.activity = on; CollectionState.action(2); }
+                        }
                     }
-                    Note { text: "规则只影响之后的采集，既有历史与图片保留。合并应用的规则会在各份名单内同步。"; }
                     Rule { }
-                    SectionTitle { text: "当前排除名单"; font-size: 16px; }
-                    Note { text: CollectionState.rules != "" ? CollectionState.rules : "尚无排除规则。"; color: Theme.ink; }
+                    SettingRow {
+                        title: "不记录输入";
+                        description: "只保留匿名的每日总数。";
+                        icon: @image-url("icons/keyboard.svg");
+                        Switch {
+                            label: "不记录输入";
+                            checked: CollectionState.input;
+                            enabled: !CollectionState.busy && CollectionState.app-index >= 0;
+                            toggled(on) => { CollectionState.input = on; CollectionState.action(2); }
+                        }
+                    }
+                    Rule { }
+                    SettingRow {
+                        title: "不拍摄快照";
+                        description: "这个应用显示在屏幕上时，跳过它所在的屏幕。";
+                        icon: @image-url("icons/camera.svg");
+                        Switch {
+                            label: "不拍摄快照";
+                            checked: CollectionState.snapshots;
+                            enabled: !CollectionState.busy && CollectionState.app-index >= 0;
+                            toggled(on) => { CollectionState.snapshots = on; CollectionState.action(2); }
+                        }
+                    }
+                    Rule { }
+                    SettingExpander {
+                        title: "全部排除名单";
+                        description: "所有应用的活动、输入与截图排除。";
+                        icon: @image-url("icons/file-description.svg");
+                        Note { text: CollectionState.rules != "" ? CollectionState.rules : "尚无排除规则。"; color: Theme.ink-2; font-size: 12px; }
+                    }
                 }
 
-                if root.application-page == 1 : VerticalLayout {
-                    vertical-stretch: 0; alignment: start;
-                    spacing: 14px;
-                    SectionTitle { text: "与另一个应用合并显示"; }
-                    Note { text: "建立关联后合并显示，原始记录不改写。确认前请查看双方各自的活动、输入和截图名单。"; }
-                    Label { text: "另一个应用"; }
-                    ComboBox {
-                        height: 36px;
-                        model: CollectionState.apps;
-                        current-index <=> CollectionState.merge-index;
-                        enabled: !CollectionState.busy && CollectionState.apps.length > 1;
-                        selected(value) => { CollectionState.merge-confirmed = false; }
-                    }
-                    CheckBox { font-size: 13px; text: "确认三份名单分别取并集，互不联动"; checked <=> CollectionState.merge-confirmed; enabled: !CollectionState.busy && CollectionState.app-index >= 0 && CollectionState.merge-index >= 0 && CollectionState.merge-index != CollectionState.app-index; }
-                    HorizontalLayout {
-                        Action { width: 156px; text: "建立合并关联"; enabled: !CollectionState.busy && CollectionState.app-index >= 0 && CollectionState.merge-index >= 0 && CollectionState.merge-index != CollectionState.app-index && CollectionState.merge-confirmed; clicked => { CollectionState.action(3); } }
-                        Rectangle { horizontal-stretch: 1; }
+                Rectangle { height: 8px; }
+                SettingsHeader { text: "合并显示"; }
+                SettingsGroup {
+                    SettingExpander {
+                        title: "与另一个应用合并显示";
+                        description: "同一款软件的不同版本可以合并成一项显示，原始记录不改写。";
+                        icon: @image-url("icons/link.svg");
+                        HorizontalLayout {
+                            spacing: 8px;
+                            ComboBox {
+                                height: 34px; horizontal-stretch: 1;
+                                model: CollectionState.apps;
+                                current-index <=> CollectionState.merge-index;
+                                enabled: !CollectionState.busy && CollectionState.apps.length > 1;
+                                selected(value) => { CollectionState.merge-confirmed = false; }
+                            }
+                            Action {
+                                text: "建立合并";
+                                enabled: !CollectionState.busy && CollectionState.app-index >= 0 && CollectionState.merge-index >= 0 && CollectionState.merge-index != CollectionState.app-index && CollectionState.merge-confirmed;
+                                clicked => { CollectionState.action(3); }
+                            }
+                        }
+                        CheckBox {
+                            font-size: 13px;
+                            text: "确认两个应用的三份排除名单各自取并集";
+                            checked <=> CollectionState.merge-confirmed;
+                            enabled: !CollectionState.busy && CollectionState.app-index >= 0 && CollectionState.merge-index >= 0 && CollectionState.merge-index != CollectionState.app-index;
+                        }
                     }
                     Rule { }
-                    SectionTitle { text: "已有合并关联"; font-size: 16px; }
-                    ComboBox { height: 36px; model: CollectionState.links; current-index <=> CollectionState.link-index; enabled: !CollectionState.busy && CollectionState.links.length > 0; }
-                    if CollectionState.links.length == 0 : Note { text: "当前没有合并关联。"; }
-                    HorizontalLayout {
-                        Action { width: 156px; text: "解除所选合并"; enabled: !CollectionState.busy && CollectionState.link-index >= 0 && CollectionState.link-index < CollectionState.links.length; clicked => { CollectionState.action(4); } }
-                        Rectangle { horizontal-stretch: 1; }
+                    SettingExpander {
+                        title: "已有合并";
+                        description: CollectionState.links.length == 0 ? "当前没有合并关联。" : CollectionState.links.length + " 组合并关联";
+                        icon: @image-url("icons/layout-grid.svg");
+                        HorizontalLayout {
+                            spacing: 8px;
+                            ComboBox { height: 34px; horizontal-stretch: 1; model: CollectionState.links; current-index <=> CollectionState.link-index; enabled: !CollectionState.busy && CollectionState.links.length > 0; }
+                            Action { text: "解除合并"; enabled: !CollectionState.busy && CollectionState.link-index >= 0 && CollectionState.link-index < CollectionState.links.length; clicked => { CollectionState.action(4); } }
+                        }
+                        Note { text: "解除后恢复合并前的规则；合并期间新增的排除默认保留给双方。"; font-size: 12px; }
                     }
-                    Note { text: "解除后恢复合并前的规则；合并期间新增的排除，默认保留给双方。"; }
                 }
 
-                if root.application-page == 2 : VerticalLayout {
-                    vertical-stretch: 0; alignment: start;
-                    spacing: 14px;
-                    SectionTitle { text: "删除所选应用历史"; color: Theme.danger; }
-                    Note { text: CollectionState.impact != "" ? CollectionState.impact : "选择一个应用后，将显示受影响的窗口、报告与 AI 任务。"; color: Theme.ink; }
-                    Note { text: "删除该组历史，以及引用它的本地报告、AI 总结和对话。此操作不可撤销。"; color: Theme.danger; }
-                    CheckBox { font-size: 13px; text: "确认删除本组历史及上述关联内容"; checked <=> CollectionState.delete-confirmed; enabled: !CollectionState.busy && CollectionState.app-index >= 0; }
-                    HorizontalLayout {
-                        Action { width: 156px; text: "删除历史"; danger: true; enabled: !CollectionState.busy && CollectionState.app-index >= 0 && CollectionState.delete-confirmed; clicked => { CollectionState.action(5); } }
-                        Rectangle { horizontal-stretch: 1; }
+                Rectangle { height: 8px; }
+                SettingsHeader { text: "删除历史"; color: Theme.danger; }
+                SettingsGroup {
+                    border-color: #c8352f2e;
+                    SettingExpander {
+                        title: "删除所选应用的全部历史";
+                        description: "同时删除引用它的本地报告、AI 总结和对话。此操作无法撤销。";
+                        icon: @image-url("icons/trash.svg");
+                        Note { text: CollectionState.impact != "" ? CollectionState.impact : "先在上方选择一个应用，这里会显示受影响的窗口、报告与 AI 任务。"; color: Theme.ink-2; }
+                        Note { text: "匿名累计总数和无法归属应用的每日键位总数会保留，快照图片与外部文件也会保留。"; font-size: 12px; }
+                        CheckBox { font-size: 13px; text: "确认删除这个应用的历史及关联内容"; checked <=> CollectionState.delete-confirmed; enabled: !CollectionState.busy && CollectionState.app-index >= 0; }
+                        HorizontalLayout {
+                            Action { text: "删除历史"; danger: true; enabled: !CollectionState.busy && CollectionState.app-index >= 0 && CollectionState.delete-confirmed; clicked => { CollectionState.action(5); } }
+                            Rectangle { horizontal-stretch: 1; }
+                        }
                     }
-                    Rule { }
-                    Note { text: "匿名永久总数、无法归属应用的每日键位总数会保留。快照图片与外部文件也会保留。"; }
                 }
             }
         }
@@ -187,9 +207,9 @@ export component CollectionPanel inherits Rectangle {
                             height: 46px;
                             border-radius: 5px;
                             border-width: 1px;
-                            border-color: key.strength > 0 ? #ceaa9c : Theme.line;
+                            border-color: key.strength > 0 ? #b6baf0 : Theme.line;
                             // Slint mix() applies the factor to its receiver: zero stays paper-gray.
-                            background: #9d3e28.mix(#f0ebe4, key.strength);
+                            background: #4a50c8.mix(#eceef3, key.strength);
                             VerticalLayout {
                                 padding: 4px;
                                 spacing: 2px;
@@ -202,11 +222,11 @@ export component CollectionPanel inherits Rectangle {
                 HorizontalLayout {
                     spacing: 6px;
                     Note { text: "少"; }
-                    Rectangle { width: 22px; height: 12px; border-radius: 2px; background: #f0ebe4; }
-                    Rectangle { width: 22px; height: 12px; border-radius: 2px; background: #9d3e28.mix(#f0ebe4, 0.25); }
-                    Rectangle { width: 22px; height: 12px; border-radius: 2px; background: #9d3e28.mix(#f0ebe4, 0.5); }
-                    Rectangle { width: 22px; height: 12px; border-radius: 2px; background: #9d3e28.mix(#f0ebe4, 0.75); }
-                    Rectangle { width: 22px; height: 12px; border-radius: 2px; background: #9d3e28; }
+                    Rectangle { width: 22px; height: 12px; border-radius: 2px; background: #eceef3; }
+                    Rectangle { width: 22px; height: 12px; border-radius: 2px; background: #4a50c8.mix(#eceef3, 0.25); }
+                    Rectangle { width: 22px; height: 12px; border-radius: 2px; background: #4a50c8.mix(#eceef3, 0.5); }
+                    Rectangle { width: 22px; height: 12px; border-radius: 2px; background: #4a50c8.mix(#eceef3, 0.75); }
+                    Rectangle { width: 22px; height: 12px; border-radius: 2px; background: #4a50c8; }
                     Note { text: "多"; }
                     Rectangle { horizontal-stretch: 1; }
                 }

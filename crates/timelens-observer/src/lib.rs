@@ -773,6 +773,9 @@ fn query_process_string(
 }
 
 fn resolve_identity(hwnd: HWND, process: &ProcessInfo) -> Option<ResolvedIdentity> {
+    if process.path.as_deref().is_some_and(is_one_time_installer) {
+        return None;
+    }
     let window_aumid = window_app_user_model_id(hwnd);
     if let Some(value) = window_aumid {
         return Some(ResolvedIdentity {
@@ -824,6 +827,28 @@ fn is_identityless_host(path: &str) -> bool {
         name.eq_ignore_ascii_case("ApplicationFrameHost.exe")
             || name.eq_ignore_ascii_case("RuntimeBroker.exe")
     })
+}
+
+/// Installers and uninstallers run once and are not applications the user works
+/// in, so they are never recorded. Like Windows' installer detection, this keys
+/// on the file name; programs launched from a temporary directory are bootstrap
+/// payloads such as Inno Setup's `is-*.tmp` helpers.
+fn is_one_time_installer(path: &str) -> bool {
+    let path = normalize_path(path);
+    let name = path.rsplit('\\').next().unwrap_or_default();
+    let stem = name.rsplit_once('.').map_or(name, |(stem, _)| stem);
+    let named_as_installer = ["setup", "install", "uninst"]
+        .iter()
+        .any(|keyword| stem.contains(keyword))
+        || stem.starts_with("unins")
+        || stem == "msiexec";
+    let temporary = path.contains(r"\appdata\local\temp\")
+        || path.contains(r"\windows\temp\")
+        || std::env::temp_dir()
+            .to_str()
+            .map(normalize_path)
+            .is_some_and(|temp| path.starts_with(temp.trim_end_matches('\\')));
+    named_as_installer || temporary
 }
 
 fn normalize_path(path: &str) -> String {
@@ -1066,6 +1091,30 @@ mod tests {
             r"C:\Windows\System32\RuntimeBroker.exe"
         ));
         assert!(!is_identityless_host(r"C:\Apps\Timelens.exe"));
+    }
+
+    #[test]
+    fn one_time_installers_are_not_applications() {
+        for installer in [
+            r"D:\Downloads\Timelens-0.1.0-x64-setup.exe",
+            r"C:\Users\Me\AppData\Local\Temp\is-ABC12.tmp\Timelens-0.1.0-x64-setup.tmp",
+            r"C:\Program Files\Timelens\unins000.exe",
+            r"C:\Program Files\Tool\Uninstall.exe",
+            r"C:\Windows\System32\msiexec.exe",
+            r"C:\Users\Me\Downloads\VSCodeUserSetup-x64.exe",
+            r"C:\Users\Me\AppData\Local\Temp\7zS1234\payload.exe",
+        ] {
+            assert!(is_one_time_installer(installer), "{installer}");
+        }
+        for application in [
+            r"D:\Software\Microsoft VS Code\Code.exe",
+            r"C:\Program Files\Timelens\Timelens.exe",
+            r"C:\Windows\explorer.exe",
+            // Squirrel-style launchers keep running the real application.
+            r"C:\Users\Me\AppData\Local\Discord\Update.exe",
+        ] {
+            assert!(!is_one_time_installer(application), "{application}");
+        }
     }
 
     #[test]

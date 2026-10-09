@@ -3,9 +3,15 @@ param(
     [Parameter(Mandatory)]
     [string] $InstallDir,
 
+    # Holds the elevated collector; defaults to the installation directory itself.
+    [string] $ElevatedDir = $InstallDir,
+
     [switch] $StartNow,
     [ValidatePattern('^\\Timelens(?:-Acceptance-[a-fA-F0-9-]+)?\\$')][string] $TaskPath = '\Timelens\',
-    [string] $DataDirectory = ''
+    [string] $DataDirectory = '',
+
+    # An empty directory chosen at setup for the signed-in user's new dataset.
+    [string] $UserDataDirectory = ''
 )
 
 Set-StrictMode -Version Latest
@@ -15,13 +21,17 @@ $ErrorActionPreference = 'Stop'
 $taskFolderComPath = $TaskPath.TrimEnd('\')
 $resolvedInstallDir = (Resolve-Path -LiteralPath $InstallDir).Path
 $resolvedInstallDir = Assert-InstallDirectory $resolvedInstallDir
-$drive = [System.IO.DriveInfo]::new([System.IO.Path]::GetPathRoot($resolvedInstallDir))
-if ($drive.DriveType -ne [System.IO.DriveType]::Fixed) {
-    throw 'Timelens tasks can only target an installation on a fixed local drive.'
+$resolvedElevatedDir = (Resolve-Path -LiteralPath $ElevatedDir).Path
+$resolvedElevatedDir = Assert-InstallDirectory $resolvedElevatedDir -RequireProtectedAncestors
+foreach ($directory in @($resolvedInstallDir, $resolvedElevatedDir)) {
+    $drive = [System.IO.DriveInfo]::new([System.IO.Path]::GetPathRoot($directory))
+    if ($drive.DriveType -ne [System.IO.DriveType]::Fixed) {
+        throw 'Timelens tasks can only target an installation on a fixed local drive.'
+    }
 }
 
 $corePath = Join-Path $resolvedInstallDir 'Timelens.exe'
-$collectorPath = Join-Path $resolvedInstallDir 'Timelens.Collector.exe'
+$collectorPath = Join-Path $resolvedElevatedDir 'Timelens.Collector.exe'
 $workerPath = Join-Path $resolvedInstallDir 'Timelens.AI.exe'
 foreach ($path in @($corePath, $collectorPath, $workerPath)) {
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
@@ -87,7 +97,10 @@ function Set-InstallPathAcl {
     ))
     Set-Acl -LiteralPath $Path -AclObject $acl
 
-    Get-ChildItem -LiteralPath $Path -Force -Recurse | ForEach-Object {
+    # The Data folder keeps its own grant to the user, and its dataset is not walked.
+    $children = @(Get-ChildItem -LiteralPath $Path -Force | Where-Object Name -ine 'Data')
+    $nested = @($children | Where-Object PSIsContainer | ForEach-Object { Get-ChildItem -LiteralPath $_.FullName -Force -Recurse })
+    $children + $nested | ForEach-Object {
         $childAcl = Get-Acl -LiteralPath $_.FullName
         $childAcl.SetAccessRuleProtection($false, $false)
         Set-Acl -LiteralPath $_.FullName -AclObject $childAcl
@@ -99,6 +112,9 @@ $interactiveUser = Get-InteractiveUserName
     [System.Security.Principal.SecurityIdentifier]
 ))
 Set-InstallPathAcl -Path $resolvedInstallDir
+if ($resolvedElevatedDir -ine $resolvedInstallDir) {
+    Set-InstallPathAcl -Path $resolvedElevatedDir
+}
 
 $taskService = New-Object -ComObject 'Schedule.Service'
 $taskService.Connect()
@@ -107,6 +123,82 @@ try {
 } catch [System.IO.FileNotFoundException] {
     $rootTaskFolder = $taskService.GetFolder('\')
     [void] $rootTaskFolder.CreateFolder($TaskPath.Trim('\'))
+}
+
+# Creates the chosen directory and lets the signed-in user write to it. Inside the
+# installation directory only its Data folder may hold data, and never anything
+# under the protected collector directory.
+function Initialize-UserDataDirectory {
+    param([Parameter(Mandatory)][string] $Path)
+
+    $data = [IO.Path]::GetFullPath($Path).TrimEnd('\')
+    $root = [IO.Path]::GetPathRoot($data)
+    if ($data.Length -le $root.Length -or $data.Contains('"')) { throw 'Invalid data directory.' }
+    if (([IO.DriveInfo]::new($root)).DriveType -ne [IO.DriveType]::Fixed) {
+        throw 'The data directory must be on a fixed local drive.'
+    }
+    $within = { param($Parent) $data -ieq $Parent -or $data.StartsWith($Parent + '\', [StringComparison]::OrdinalIgnoreCase) }
+    if (& $within $resolvedElevatedDir) { throw 'The data directory cannot be inside the protected collector directory.' }
+    if ((& $within $resolvedInstallDir) -and $data -ine (Join-Path $resolvedInstallDir 'Data')) {
+        throw 'Inside the installation directory only its Data folder can hold data.'
+    }
+    $current = $data
+    while ($current) {
+        if ((Test-Path -LiteralPath $current) -and ((Get-Item -LiteralPath $current -Force).Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+            throw "The data directory cannot pass through a link: $current"
+        }
+        $current = Split-Path -Parent $current
+    }
+    if (Test-Path -LiteralPath $data) {
+        if (-not (Test-Path -LiteralPath $data -PathType Container) -or @(Get-ChildItem -LiteralPath $data -Force).Count -gt 0) {
+            throw "The data directory must be empty: $data"
+        }
+    } else {
+        [void] [IO.Directory]::CreateDirectory($data)
+    }
+    $acl = Get-Acl -LiteralPath $data
+    $acl.AddAccessRule([System.Security.AccessControl.FileSystemAccessRule]::new(
+        [System.Security.Principal.NTAccount]::new($interactiveUser),
+        [System.Security.AccessControl.FileSystemRights]::Modify,
+        ([System.Security.AccessControl.InheritanceFlags]::ContainerInherit -bor
+            [System.Security.AccessControl.InheritanceFlags]::ObjectInherit),
+        [System.Security.AccessControl.PropagationFlags]::None,
+        [System.Security.AccessControl.AccessControlType]::Allow
+    ))
+    Set-Acl -LiteralPath $data -AclObject $acl
+    return $data
+}
+
+# The location pointer lives in the user's own profile, so the core records it
+# with the user's ordinary rights before its logon task first starts.
+function Invoke-CoreAsUser {
+    param([Parameter(Mandatory)][string] $Arguments)
+
+    $name = 'Setup-' + [Guid]::NewGuid().ToString('N')
+    $action = New-ScheduledTaskAction -Execute $corePath -Argument $Arguments -WorkingDirectory $resolvedInstallDir
+    $principal = New-ScheduledTaskPrincipal -UserId $interactiveUser -LogonType Interactive -RunLevel Limited
+    $taskSettings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Minutes 2) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
+    Register-ScheduledTask -TaskPath $TaskPath -TaskName $name -Action $action -Principal $principal -Settings $taskSettings | Out-Null
+    try {
+        $started = Get-Date
+        Start-ScheduledTask -TaskPath $TaskPath -TaskName $name
+        do {
+            Start-Sleep -Milliseconds 200
+            $state = Get-ScheduledTask -TaskPath $TaskPath -TaskName $name
+            $info = Get-ScheduledTaskInfo -TaskPath $TaskPath -TaskName $name
+            if ((Get-Date) - $started -gt [TimeSpan]::FromMinutes(2)) { throw 'Recording the data location timed out.' }
+        } while ($state.State -eq 'Running' -or $state.State -eq 'Queued' -or $info.LastRunTime -lt $started.AddSeconds(-1))
+        if ($info.LastTaskResult -ne 0) { throw "Recording the data location returned $($info.LastTaskResult)." }
+    } finally {
+        Stop-ScheduledTask -TaskPath $TaskPath -TaskName $name -ErrorAction SilentlyContinue
+        Unregister-ScheduledTask -TaskPath $TaskPath -TaskName $name -Confirm:$false -ErrorAction SilentlyContinue
+    }
+}
+
+if ($UserDataDirectory) {
+    if ($DataDirectory) { throw 'An isolated install cannot also choose a user data directory.' }
+    $userData = Initialize-UserDataDirectory -Path $UserDataDirectory
+    Invoke-CoreAsUser -Arguments ('--set-data-location "' + $userData + '"')
 }
 
 $trigger = New-ScheduledTaskTrigger -AtLogOn -User $interactiveUser
@@ -132,6 +224,12 @@ $coreArguments = $arguments
 if ($DataDirectory -or $TaskPath -ne '\Timelens\') {
     $coreArguments += ' --collector-task "' + $TaskPath + 'Collector"'
 }
+# The core reads the collector location from the collector task; the collector
+# learns the core location from this argument. Both definitions are admin-only.
+$collectorArguments = $arguments
+if ($resolvedElevatedDir -ine $resolvedInstallDir) {
+    $collectorArguments += ' --core-dir "' + $resolvedInstallDir + '"'
+}
 $coreTask = New-ScheduledTask `
     -Action (New-ScheduledTaskAction `
         -Execute $corePath `
@@ -150,8 +248,8 @@ $coreTask = New-ScheduledTask `
 $collectorTask = New-ScheduledTask `
     -Action (New-ScheduledTaskAction `
         -Execute $collectorPath `
-        -Argument $arguments `
-        -WorkingDirectory $resolvedInstallDir
+        -Argument $collectorArguments `
+        -WorkingDirectory $resolvedElevatedDir
     ) `
     -Trigger $trigger `
     -Principal (New-ScheduledTaskPrincipal `

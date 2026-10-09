@@ -36,9 +36,11 @@ slint = { version = "1.17.1", default-features = false, features = [
     "accessibility",
     "backend-winit",
     "compat-1-2",
+    "raw-window-handle-06",
     "renderer-software",
     "std",
 ] }
+raw-window-handle = "0.6.2"
 tempfile = "3.27.0"
 thiserror = "2"
 windows = { version = "0.62.2", features = [
