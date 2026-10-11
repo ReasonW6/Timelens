@@ -6,6 +6,7 @@ mod milestone3;
 mod portable;
 mod recovery;
 mod relocation;
+mod snapshot_container;
 pub use portable::{BackupInfo, BackupOptions, ExportFormat, PreparedRestore};
 pub use recovery::RecoveryReport;
 pub use relocation::RelocationStep;
@@ -61,7 +62,7 @@ const BACKUP_FILE: &str = "timelens.sqlite3.migration-backup";
 const KEY_MAGIC: &[u8; 8] = b"TLKEY\0\0\x01";
 const KEY_BYTES: usize = 32;
 const DPAPI_ENTROPY: &[u8] = b"Timelens local data key v1";
-const LATEST_SCHEMA_VERSION: i64 = 12;
+const LATEST_SCHEMA_VERSION: i64 = 13;
 
 #[derive(Debug, thiserror::Error)]
 pub enum StorageError {
@@ -184,6 +185,13 @@ pub struct TimelineApplication {
     pub right_click_count: u64,
     pub windows: Vec<TimelineWindow>,
     pub segments: Vec<TimelineSegment>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ApplicationIconSource {
+    pub identity: String,
+    pub executable_path: Option<String>,
+    pub app_user_model_id: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -770,6 +778,27 @@ impl Storage {
             .to_owned())
     }
 
+    /// Latest recorded sources for AUMIDs that may not be registered in AppsFolder.
+    pub fn application_icon_sources(&self) -> Result<Vec<ApplicationIconSource>> {
+        let mut statement = self.connection.prepare(
+            "SELECT application_identity, executable_path, app_user_model_id
+             FROM application_metadata_revisions
+             WHERE application_identity LIKE 'aumid:%'
+               AND revision_id IN (SELECT MAX(revision_id)
+                   FROM application_metadata_revisions GROUP BY application_identity)",
+        )?;
+        statement
+            .query_map([], |row| {
+                Ok(ApplicationIconSource {
+                    identity: row.get(0)?,
+                    executable_path: row.get(1)?,
+                    app_user_model_id: row.get(2)?,
+                })
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(Into::into)
+    }
+
     pub fn retention_policy(&self) -> Result<RetentionPolicy> {
         self.connection
             .query_row(
@@ -1047,7 +1076,10 @@ impl Storage {
             "local_report_gaps",
             "local_report_applications",
             "local_reports",
+            "snapshot_slot_days",
             "snapshot_slots",
+            "snapshot_container_records",
+            "snapshot_containers",
             "snapshot_blobs",
             "window_state_intervals",
             "window_instances",
@@ -1739,6 +1771,10 @@ const MIGRATIONS: &[Migration] = &[
     Migration {
         version: 12,
         sql: include_str!("recovery-schema.sql"),
+    },
+    Migration {
+        version: 13,
+        sql: include_str!("snapshot-container-schema.sql"),
     },
 ];
 
@@ -2871,6 +2907,48 @@ mod tests {
             first_sequence,
             events,
         }
+    }
+
+    #[test]
+    fn icon_sources_keep_latest_executable_and_original_app_id_case() {
+        let directory = tempfile::tempdir().unwrap();
+        let storage = Storage::open(directory.path()).unwrap();
+        let identity = "aumid:example.desktop.app";
+        let app_id = "Example.Desktop.App";
+        let base = 1_700_000_000_000;
+        let app_event = |kind, offset, executable: &str| {
+            let mut event = window_event(kind, base + offset, offset as u64 + 10, true, true);
+            let Some(collector_event::Body::WindowTransition(transition)) = &mut event.body else {
+                unreachable!()
+            };
+            let window = transition.window.as_mut().unwrap();
+            window.window_id += 1;
+            window.process_id += 1;
+            window.application_identity = identity.into();
+            window.identity_source = IdentitySource::ProcessAppUserModelId as i32;
+            window.app_user_model_id = Some(app_id.into());
+            window.executable_path = Some(executable.into());
+            event
+        };
+        storage
+            .ingest_event_batch(&event_batch(
+                1,
+                1,
+                vec![
+                    window_event(WindowTransitionKind::Opened, base, 10, true, true),
+                    app_event(WindowTransitionKind::Opened, 1, r"C:\Apps\v1\app.exe"),
+                    app_event(WindowTransitionKind::Updated, 2, r"C:\Apps\v2\app.exe"),
+                ],
+            ))
+            .unwrap();
+        assert_eq!(
+            storage.application_icon_sources().unwrap(),
+            vec![ApplicationIconSource {
+                identity: identity.into(),
+                executable_path: Some(r"C:\Apps\v2\app.exe".into()),
+                app_user_model_id: Some(app_id.into()),
+            }]
+        );
     }
 
     #[test]

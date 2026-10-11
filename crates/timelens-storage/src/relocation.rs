@@ -213,12 +213,11 @@ impl Storage {
         let stage = tempfile::Builder::new()
             .prefix("timelens-move-")
             .tempdir_in(destination)?;
-        let names = self
-            .connection
-            .prepare("SELECT file_name FROM snapshot_blobs")?
-            .query_map([], |r| r.get::<_, String>(0))?
-            .collect::<rusqlite::Result<Vec<_>>>()?;
-        if !names.iter().all(|name| owned_snapshot_name(name)) {
+        let names = self.snapshot_container_files()?;
+        if !names
+            .iter()
+            .all(|name| snapshot_container::owned_container_name(name))
+        {
             return Err(invalid("数据集快照路径无效"));
         }
         let mut files = vec![
@@ -248,7 +247,7 @@ impl Storage {
         {
             let staged = Storage::open(stage.path())?;
             staged.verify_integrity()?;
-            let ids=staged.connection.prepare("SELECT MIN(slot_id) FROM snapshot_slots WHERE blob_id IS NOT NULL GROUP BY blob_id")?.query_map([],|r|r.get::<_,i64>(0))?.collect::<rusqlite::Result<Vec<_>>>()?;
+            let ids=staged.connection.prepare("SELECT MIN(s.slot_id) FROM snapshot_slots s JOIN snapshot_slot_days d USING(slot_id) WHERE s.blob_id IS NOT NULL GROUP BY d.local_day,s.blob_id")?.query_map([],|r|r.get::<_,i64>(0))?.collect::<rusqlite::Result<Vec<_>>>()?;
             let count = ids.len() as u64;
             progress(RelocationStep::Verifying, 0, count.max(1));
             for (index, id) in ids.into_iter().enumerate() {
@@ -315,7 +314,10 @@ impl Storage {
             for entry in fs::read_dir(&snapshots)? {
                 let entry = entry?;
                 let name = entry.file_name().to_string_lossy().into_owned();
-                if entry.file_type()?.is_file() && owned_snapshot_name(&name) {
+                if entry.file_type()?.is_file()
+                    && (owned_snapshot_name(&name)
+                        || snapshot_container::owned_container_name(&name))
+                {
                     let mut file = File::open(entry.path())?;
                     let mut header = [0; 8];
                     use std::io::Read;

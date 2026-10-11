@@ -201,7 +201,17 @@ if ($UserDataDirectory) {
     Invoke-CoreAsUser -Arguments ('--set-data-location "' + $userData + '"')
 }
 
-$trigger = New-ScheduledTaskTrigger -AtLogOn -User $interactiveUser
+function New-ProductLogonTrigger([string] $Name) {
+    $trigger = New-ScheduledTaskTrigger -AtLogOn -User $interactiveUser
+    $previous = Get-ScheduledTask -TaskPath $TaskPath -TaskName $Name -ErrorAction SilentlyContinue
+    if ($previous) {
+        $logonTriggers = @($previous.Triggers | Where-Object { $_.CimClass.CimClassName -eq 'MSFT_TaskLogonTrigger' })
+        $trigger.Enabled = $previous.Settings.Enabled -and @($logonTriggers | Where-Object Enabled).Count -gt 0
+    }
+    return $trigger
+}
+$coreTrigger = New-ProductLogonTrigger 'Core'
+$collectorTrigger = New-ProductLogonTrigger 'Collector'
 $settings = New-ScheduledTaskSettingsSet `
     -AllowStartIfOnBatteries `
     -DontStopIfGoingOnBatteries `
@@ -236,7 +246,7 @@ $coreTask = New-ScheduledTask `
         -Argument $coreArguments `
         -WorkingDirectory $resolvedInstallDir
     ) `
-    -Trigger $trigger `
+    -Trigger $coreTrigger `
     -Principal (New-ScheduledTaskPrincipal `
         -UserId $interactiveUser `
         -LogonType Interactive `
@@ -251,7 +261,7 @@ $collectorTask = New-ScheduledTask `
         -Argument $collectorArguments `
         -WorkingDirectory $resolvedElevatedDir
     ) `
-    -Trigger $trigger `
+    -Trigger $collectorTrigger `
     -Principal (New-ScheduledTaskPrincipal `
         -UserId $interactiveUser `
         -LogonType Interactive `

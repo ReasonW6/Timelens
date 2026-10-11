@@ -49,9 +49,16 @@ pub fn resume() {
 /// Accept only the product's own collector tasks, including isolated acceptance
 /// installs such as `\Timelens-Acceptance-<id>\Collector`.
 pub fn valid_task_path(path: &str) -> bool {
-    path.starts_with(r"\Timelens")
-        && path.ends_with(r"\Collector")
-        && path.matches('\\').count() == 2
+    path == DEFAULT_TASK
+        || path
+            .strip_prefix(r"\Timelens-Acceptance-")
+            .and_then(|path| path.strip_suffix(r"\Collector"))
+            .is_some_and(|id| {
+                !id.is_empty()
+                    && id
+                        .bytes()
+                        .all(|byte| byte.is_ascii_hexdigit() || byte == b'-')
+            })
 }
 
 pub fn spawn_watchdog(task_path: String) {
@@ -145,7 +152,7 @@ pub fn registered_directory(task_path: &str) -> windows::core::Result<Option<Pat
     .unwrap_or_else(|_| Err(windows::core::Error::from_hresult(E_FAIL)))
 }
 
-fn open_task(task_path: &str) -> windows::core::Result<IRegisteredTask> {
+pub(crate) fn open_task(task_path: &str) -> windows::core::Result<IRegisteredTask> {
     let (folder, name) = task_path
         .rsplit_once('\\')
         .filter(|(folder, _)| !folder.is_empty())
@@ -187,6 +194,9 @@ mod tests {
         assert!(!valid_task_path(r"\Timelens\Core"));
         assert!(!valid_task_path(r"\Microsoft\Windows\Collector"));
         assert!(!valid_task_path(r"\Timelens\Nested\Collector"));
+        assert!(!valid_task_path(r"\Timelens-Other\Collector"));
+        assert!(!valid_task_path(r"\Timelens-Acceptance-invalid\Collector"));
+        assert!(!valid_task_path(r"\Timelens-Acceptance-\Collector"));
     }
 
     #[test]

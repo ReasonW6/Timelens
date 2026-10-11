@@ -15,6 +15,7 @@ use windows::Win32::{
         DWMWA_BORDER_COLOR, DWMWA_CAPTION_COLOR, DWMWA_TEXT_COLOR, DWMWA_USE_IMMERSIVE_DARK_MODE,
         DwmSetWindowAttribute,
     },
+    UI::WindowsAndMessaging::{IsIconic, SW_RESTORE, SW_SHOW, SetForegroundWindow, ShowWindow},
 };
 
 /// The canvas color at the window's top edge, the title bar text and the frame.
@@ -24,20 +25,45 @@ const BORDER: (u8, u8, u8) = (0xd3, 0xd8, 0xe6);
 
 /// Returns whether the window had a native handle to style.
 pub fn apply(window: &slint::Window) -> bool {
-    let window_handle = window.window_handle();
-    let Ok(handle) = window_handle.window_handle() else {
+    let Some(hwnd) = native_handle(window) else {
         return false;
     };
-    let RawWindowHandle::Win32(handle) = handle.as_raw() else {
-        return false;
-    };
-    let hwnd = HWND(handle.hwnd.get() as *mut _);
     // The UI is light only; keep the caption light even under a dark system theme.
     set(hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE.0, 0_u32);
     set(hwnd, DWMWA_CAPTION_COLOR.0, colorref(CAPTION));
     set(hwnd, DWMWA_TEXT_COLOR.0, colorref(CAPTION_TEXT));
     set(hwnd, DWMWA_BORDER_COLOR.0, colorref(BORDER));
     true
+}
+
+fn native_handle(window: &slint::Window) -> Option<HWND> {
+    let window_handle = window.window_handle();
+    let handle = window_handle.window_handle().ok()?;
+    let RawWindowHandle::Win32(handle) = handle.as_raw() else {
+        return None;
+    };
+    Some(HWND(handle.hwnd.get() as *mut _))
+}
+
+/// Show, restore and activate the main window after an explicit user request.
+pub fn show_and_activate(window: &AppWindow) -> Result<(), slint::PlatformError> {
+    window.show()?;
+    window.window().set_minimized(false);
+    crate::window_placement::fit_after_show(window);
+    if let Some(hwnd) = native_handle(window.window()) {
+        unsafe {
+            // SW_SHOW preserves a maximized window. Only a minimized native
+            // window needs SW_RESTORE; showing alone does not foreground it.
+            let command = if IsIconic(hwnd).as_bool() {
+                SW_RESTORE
+            } else {
+                SW_SHOW
+            };
+            let _ = ShowWindow(hwnd, command);
+            let _ = SetForegroundWindow(hwnd);
+        }
+    }
+    Ok(())
 }
 
 /// Windows discards a software window's pixels while it is minimized or hidden,

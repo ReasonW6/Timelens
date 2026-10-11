@@ -136,7 +136,7 @@ fn collect_window_events(pipe_name: &str, data_directory: PathBuf) -> Result<()>
     let mut filter = collection::Filter::new(&data_directory, now, mono);
     let mut input = InputAggregator::default();
     let mut identities = window_identities(&raw);
-    let mut last_reconcile = Instant::now() - RECONCILE_INTERVAL;
+    let mut last_reconcile = timelens_observer::PollInterval::new(RECONCILE_INTERVAL);
     publish_collection(
         &spool,
         &delivery_wake,
@@ -287,7 +287,7 @@ fn collect_window_events(pipe_name: &str, data_directory: PathBuf) -> Result<()>
                 mono,
             )?;
             fs::remove_file(&reset_paused_path)?;
-            last_reconcile = Instant::now();
+            last_reconcile.mark(Instant::now());
             continue;
         }
         let now = unix_time_ms();
@@ -295,15 +295,15 @@ fn collect_window_events(pipe_name: &str, data_directory: PathBuf) -> Result<()>
             Duration::from_millis((MINUTE_MS - now.rem_euclid(MINUTE_MS)).max(1) as u64);
         let changed = monitor.wait_for_change(
             until_minute
-                .min(RECONCILE_INTERVAL.saturating_sub(last_reconcile.elapsed()))
+                .min(last_reconcile.remaining(Instant::now()))
                 .min(Duration::from_secs(1)),
         );
         filter.refresh(&data_directory);
-        if changed || last_reconcile.elapsed() >= RECONCILE_INTERVAL {
+        if changed || last_reconcile.is_due(Instant::now()) {
             raw = observer.reconcile_transitions()?.current;
             raw_tray = observer.current_tray_presence();
             identities.extend(window_identities(&raw));
-            last_reconcile = Instant::now();
+            last_reconcile.mark(Instant::now());
         }
         let (observed_now, mono) = observer.timestamp();
         let now = match continue_run_clock(last_now, observed_now) {

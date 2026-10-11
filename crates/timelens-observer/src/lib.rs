@@ -1,8 +1,10 @@
 #![cfg(windows)]
 
 mod input;
+mod poll_interval;
 
 pub use input::{InputDrain, InputMonitor, InputSample, InputSampleKind, MouseButton};
+pub use poll_interval::PollInterval;
 
 use std::{
     collections::{HashMap, HashSet},

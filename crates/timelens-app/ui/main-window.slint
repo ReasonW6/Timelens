@@ -1,11 +1,11 @@
 import { LineEdit, ListView, ScrollView, Palette } from "std-widgets.slint";
-import { Theme, Action, NavItem, Label, Note, PageTitle, Eyebrow, Figure, Rule, DetailRow, ConfirmationDialog, CheckBox, Card, Badge, Dot, AppIcon, Segmented, Segment, Switch, SettingRow, SettingsHeader, SettingsGroup, SettingExpander, StatusLine } from "theme.slint";
+import { Theme, AppIcons, Action, NavItem, Label, Note, PageTitle, Eyebrow, Figure, Rule, DetailRow, ConfirmationDialog, CheckBox, Card, Badge, Dot, AppIcon, Segmented, Segment, Switch, SettingRow, SettingsHeader, SettingsGroup, SettingExpander, StatusLine } from "theme.slint";
 import { AppRow, WindowRow, SegmentRow, SnapshotRow, ReportAppRow, HistoryItem, DayAnchor, Participant, ShareSlice, StackApp } from "models.slint";
 import { HistoryRow, StickyDay, ParticipantItem, AppTimes } from "timeline.slint";
 import { AiPanel, AiState } from "ai-panel.slint";
 import { DataPanel, DataState, MoveDialog } from "data-panel.slint";
 import { CollectionPanel, CollectionState, KeyCell } from "collection-panel.slint";
-export { AiState, DataState, CollectionState, KeyCell, AppRow, WindowRow, SegmentRow, SnapshotRow, ReportAppRow, HistoryItem, DayAnchor, Participant, ShareSlice, StackApp }
+export { AppIcons, AiState, DataState, CollectionState, KeyCell, AppRow, WindowRow, SegmentRow, SnapshotRow, ReportAppRow, HistoryItem, DayAnchor, Participant, ShareSlice, StackApp }
 
 component WindowItem inherits Rectangle {
     in property <WindowRow> item;
@@ -266,8 +266,12 @@ export component AppWindow inherits Window {
     in-out property <int> snapshot-selected-index: -1;
     in-out property <int> page: 0;
     // 0 recording and privacy, 1 snapshots, 2 application rules, 3 data and
-    // storage, 4 AI, 5 about.
-    in-out property <int> settings-tab: 0;
+    // storage, 4 AI, 5 about, 6 general.
+    in-out property <int> settings-tab: 6;
+    in property <bool> startup-enabled: false;
+    in property <bool> startup-available: false;
+    in property <bool> startup-busy: false;
+    in property <string> startup-status;
     // 0 applications, 1 keys and system, 2 local report.
     in-out property <int> stats-tab: 0;
     in-out property <bool> windows-expanded: true;
@@ -328,6 +332,8 @@ export component AppWindow inherits Window {
     callback run-cleanup;
     callback clear-all;
     callback snapshot-opened;
+    callback general-opened;
+    callback startup-changed(bool);
     callback snapshot-row-selected(int);
     callback snapshot-delete-selected;
     callback snapshot-capture-now;
@@ -396,6 +402,7 @@ export component AppWindow inherits Window {
         if tab == 1 { root.snapshot-opened(); }
         if tab == 2 { CollectionState.page = 0; CollectionState.opened(); }
         if tab == 4 { AiState.opened(); }
+        if tab == 6 { root.general-opened(); }
     }
     function close-detail() {
         if root.activity-detail { root.history-close(); }
@@ -1026,6 +1033,7 @@ export component AppWindow inherits Window {
                     spacing: 28px;
                     VerticalLayout {
                         width: 200px; spacing: 3px; alignment: start;
+                        NavItem { text: "常规"; icon: @image-url("icons/settings.svg"); selected: root.settings-tab == 6; clicked => { root.show-settings(6); } }
                         NavItem { text: "记录与隐私"; icon: @image-url("icons/shield.svg"); selected: root.settings-tab == 0; clicked => { root.show-settings(0); } }
                         NavItem { text: "快照"; icon: @image-url("icons/camera.svg"); selected: root.settings-tab == 1; clicked => { root.show-settings(1); } }
                         NavItem { text: "应用规则"; icon: @image-url("icons/ban.svg"); selected: root.settings-tab == 2; clicked => { root.show-settings(2); } }
@@ -1040,16 +1048,40 @@ export component AppWindow inherits Window {
                         VerticalLayout {
                             spacing: 4px;
                             Text {
-                                text: root.settings-tab == 0 ? "记录与隐私" : root.settings-tab == 1 ? "快照" : root.settings-tab == 2 ? "应用规则" : root.settings-tab == 3 ? "数据与存储" : root.settings-tab == 4 ? "AI" : "关于";
+                                text: root.settings-tab == 6 ? "常规" : root.settings-tab == 0 ? "记录与隐私" : root.settings-tab == 1 ? "快照" : root.settings-tab == 2 ? "应用规则" : root.settings-tab == 3 ? "数据与存储" : root.settings-tab == 4 ? "AI" : "关于";
                                 color: Theme.ink; font-size: 20px; font-weight: 600;
                             }
                             Note {
-                                text: root.settings-tab == 0 ? "Timelens 记录什么、不记录什么。"
+                                text: root.settings-tab == 6 ? "设置 Timelens 的启动方式。"
+                                    : root.settings-tab == 0 ? "Timelens 记录什么、不记录什么。"
                                     : root.settings-tab == 1 ? "定时拍摄屏幕快照，帮你回忆当时在做什么。"
                                     : root.settings-tab == 2 ? "为单个应用设置排除、合并显示或删除历史。"
                                     : root.settings-tab == 3 ? "保留时长、备份、导出与存储位置。"
                                     : root.settings-tab == 4 ? "连接你自己的 AI 服务，并设置总结与对话的保留方式。"
                                     : "版本与本机状态。";
+                            }
+                        }
+
+                        if root.settings-tab == 6 : ScrollView {
+                            horizontal-scrollbar-policy: always-off;
+                            VerticalLayout {
+                                alignment: start; spacing: 10px; padding-right: 18px; padding-bottom: 20px;
+                                SettingsHeader { text: "启动"; }
+                                SettingsGroup {
+                                    SettingRow {
+                                        title: "开机自启动";
+                                        description: "登录 Windows 后在后台启动 Timelens。";
+                                        icon: @image-url("icons/player-play.svg");
+                                        Switch {
+                                            label: "开机自启动";
+                                            checked: root.startup-enabled;
+                                            enabled: root.startup-available && !root.startup-busy;
+                                            toggled(on) => { root.startup-changed(on); }
+                                        }
+                                    }
+                                }
+                                Note { text: root.startup-status; color: Theme.ink-2; font-size: 12px; }
+                                Note { text: "更改时需要管理员确认。关闭自启动不会停止当前记录，之后仍可手动打开 Timelens。"; font-size: 12px; }
                             }
                         }
 

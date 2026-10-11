@@ -7,12 +7,14 @@ mod app_icon;
 mod collection_ui;
 mod collector_task;
 mod data_ui;
+mod general_ui;
 mod history;
 mod local_config;
 #[cfg(debug_assertions)]
 mod qa;
 mod recovery;
 mod snapshot;
+mod startup;
 mod timeline_ui;
 mod timeline_view;
 mod tray;
@@ -51,7 +53,7 @@ const COLLECTOR_NAMES: &[&str] = &["timelens-collector.exe", "Timelens.Collector
 slint::slint! {
     export { AppWindow, AppRow, WindowRow, SegmentRow, SnapshotRow, ReportAppRow,
              HistoryItem, DayAnchor, Participant, ShareSlice, StackApp, AiState, DataState,
-             CollectionState, KeyCell }
+             CollectionState, KeyCell, AppIcons }
         from "ui/main-window.slint";
 }
 fn main() -> Result<()> {
@@ -192,8 +194,8 @@ fn main() -> Result<()> {
         return Ok(());
     }
     snapshot::spawn_scheduler(Arc::clone(&storage), data_directory.clone());
-    if let Some(task) = collector_task {
-        collector_task::spawn_watchdog(task);
+    if let Some(task) = &collector_task {
+        collector_task::spawn_watchdog(task.clone());
     }
     let ai_service = ai::spawn(Arc::clone(&storage));
     let maintenance_storage = Arc::clone(&storage);
@@ -217,6 +219,7 @@ fn main() -> Result<()> {
         pipe_name,
         ai_service,
         options.background,
+        collector_task,
     )
 }
 
@@ -287,8 +290,10 @@ fn run_window(
     pipe_name: String,
     ai_service: ai::AiService,
     background: bool,
+    collector_task: Option<String>,
 ) -> Result<()> {
     let window = AppWindow::new()?;
+    window.global::<AppIcons>().on_resize(app_icon::for_display);
     // A debug-only viewport override keeps native visual QA reproducible.
     #[cfg(debug_assertions)]
     if let Ok(viewport) = std::env::var("TIMELENS_QA_VIEWPORT")
@@ -470,6 +475,7 @@ fn run_window(
         Rc::clone(&snapshot_ui_state),
     );
     let _tray_timer = tray::install(&window, Arc::clone(&storage))?;
+    let _general_timer = general_ui::install(&window, collector_task);
     let _collection_timer =
         collection_ui::install(&window, Arc::clone(&storage), Rc::clone(&ui_state))?;
 
@@ -703,7 +709,7 @@ fn refresh_timeline(
             state.range_ended_utc_ms.min(unix_time_ms()),
         )
     };
-    let (snapshot, policy, paused) = {
+    let (snapshot, policy, paused, icon_sources) = {
         let Some(storage) = try_lock_storage(storage)? else {
             return Ok(false);
         };
@@ -711,8 +717,10 @@ fn refresh_timeline(
             storage.timeline_snapshot(range_started, range_ended)?,
             storage.retention_policy()?,
             storage.collection_policy()?.paused,
+            storage.application_icon_sources()?,
         )
     };
+    app_icon::register_sources(icon_sources);
     window.global::<CollectionState>().set_paused(paused);
     render_snapshot(window, ui_state, snapshot, policy);
     Ok(true)

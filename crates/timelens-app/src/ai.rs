@@ -74,7 +74,7 @@ pub fn spawn(storage: Arc<Mutex<Storage>>) -> AiService {
     let (sender, commands) = mpsc::channel();
     let (events, receiver) = mpsc::channel();
     thread::spawn(move || {
-        let mut schedule_tick = Instant::now() - Duration::from_secs(20);
+        let mut schedule_tick = timelens_observer::PollInterval::new(Duration::from_secs(15));
         let mut generation = crate::ai_ui::data_generation();
         loop {
             if paused() {
@@ -89,7 +89,7 @@ pub fn spawn(storage: Arc<Mutex<Storage>>) -> AiService {
             if generation != crate::ai_ui::data_generation() {
                 while commands.try_recv().is_ok() {}
                 generation = crate::ai_ui::data_generation();
-                schedule_tick = Instant::now() - Duration::from_secs(20);
+                schedule_tick.reset();
             }
             match commands.recv_timeout(Duration::from_millis(250)) {
                 Ok(AiCommand::Test(mut profile)) => {
@@ -151,7 +151,7 @@ pub fn spawn(storage: Arc<Mutex<Storage>>) -> AiService {
                 Ok(AiCommand::Wake) | Err(mpsc::RecvTimeoutError::Timeout) => {}
                 Err(mpsc::RecvTimeoutError::Disconnected) => break,
             }
-            if schedule_tick.elapsed() >= Duration::from_secs(15) {
+            if schedule_tick.is_due(Instant::now()) {
                 let result = crate::snapshot::run_heavy_task(|| {
                     let s = lock(&storage)?;
                     s.enqueue_due_ai_schedules(crate::unix_time_ms())?;
@@ -161,7 +161,7 @@ pub fn spawn(storage: Arc<Mutex<Storage>>) -> AiService {
                 if let Err(e) = result {
                     let _ = events.send(AiEvent::Status(format!("AI 计划检查失败：{e}")));
                 }
-                schedule_tick = Instant::now();
+                schedule_tick.mark(Instant::now());
             }
             let job = match lock(&storage).and_then(|s| Ok(s.claim_ai_job(crate::unix_time_ms())?))
             {
@@ -394,7 +394,7 @@ fn job_request(
     let mut text = String::new();
     let mut reasoning = String::new();
     let mut usage = TokenUsage::default();
-    let mut last = Instant::now() - Duration::from_secs(1);
+    let mut last = timelens_observer::PollInterval::new(Duration::from_millis(250));
     let result = run_worker(
         &request,
         || {
@@ -409,7 +409,7 @@ fn job_request(
                 WorkerEvent::Usage(u) => usage.update(u.clone()),
                 _ => {}
             }
-            if last.elapsed() >= Duration::from_millis(250) {
+            if last.is_due(Instant::now()) {
                 let mut total = accumulated.clone();
                 total.add(&usage);
                 lock(storage)?.persist_ai_progress(
@@ -420,7 +420,7 @@ fn job_request(
                     crate::unix_time_ms(),
                 )?;
                 let _ = events.send(AiEvent::Changed);
-                last = Instant::now();
+                last.mark(Instant::now());
             }
             Ok(())
         },

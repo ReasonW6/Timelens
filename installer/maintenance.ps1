@@ -3,7 +3,8 @@ param(
     [Parameter(Mandatory)][string] $InstallDir,
     # Holds the elevated collector; defaults to the installation directory itself.
     [string] $ElevatedDir = $InstallDir,
-    [ValidateSet('PrepareUpgrade', 'Uninstall')][string] $Mode = 'PrepareUpgrade',
+    [ValidateSet('PrepareUpgrade', 'Uninstall', 'SetStartup')][string] $Mode = 'PrepareUpgrade',
+    [ValidateSet('Enabled', 'Disabled')][string] $StartupState = 'Enabled',
     [ValidateSet('Keep', 'Delete')][string] $DataMode = 'Delete',
     [ValidatePattern('^\\Timelens(?:-Acceptance-[a-fA-F0-9-]+)?\\$')][string] $TaskPath = '\Timelens\',
     [string] $DataDirectory = '',
@@ -64,6 +65,62 @@ foreach ($task in $tasks) {
         throw "Refusing to alter a task with an unexpected executable: $($task.TaskName)"
     }
 }
+
+function Set-TaskStartup($Folder, [bool] $Enabled) {
+    # TASK_UPDATE | TASK_DONT_ADD_PRINCIPAL_ACE | TASK_IGNORE_REGISTRATION_TRIGGERS.
+    # Retain the existing definition and DACL; only logon triggers are changed.
+    $flags = 4 -bor 16 -bor 32
+    $updates = @('Core', 'Collector' | ForEach-Object {
+        $registered = $Folder.GetTask($_)
+        $definition = $registered.Definition
+        $originalXml = $registered.Xml
+        $logonTriggers = @($definition.Triggers | Where-Object Type -eq 9)
+        if ($logonTriggers.Count -eq 0) { throw "The $_ task has no logon trigger." }
+        foreach ($trigger in $logonTriggers) { $trigger.Enabled = $Enabled }
+        # Keep manual starts and the collector watchdog available when startup is off.
+        $definition.Settings.Enabled = $true
+        [pscustomobject]@{
+            Name = $_
+            Definition = $definition
+            OriginalXml = $originalXml
+            Security = $registered.GetSecurityDescriptor(4)
+            LogonType = $definition.Principal.LogonType
+        }
+    })
+    $attempted = @()
+    try {
+        foreach ($update in $updates) {
+            $attempted += $update
+            [void]$Folder.RegisterTaskDefinition($update.Name, $update.Definition, $flags, $null, $null, $update.LogonType, $update.Security)
+        }
+        foreach ($update in $updates) {
+            $saved = $Folder.GetTask($update.Name)
+            $logonTriggers = @($saved.Definition.Triggers | Where-Object Type -eq 9)
+            if (-not $saved.Enabled -or $logonTriggers.Count -eq 0 -or @($logonTriggers | Where-Object Enabled -ne $Enabled).Count -gt 0) {
+                throw "The $($update.Name) startup setting was not saved."
+            }
+        }
+    } catch {
+        $failure = $_.Exception.Message
+        $rollbackFailures = @()
+        foreach ($update in $attempted) {
+            try {
+                [void]$Folder.RegisterTask($update.Name, $update.OriginalXml, $flags, $null, $null, $update.LogonType, $update.Security)
+            } catch { $rollbackFailures += $_.Exception.Message }
+        }
+        if ($rollbackFailures.Count -gt 0) { throw "Startup update failed: $failure. Rollback failed: $($rollbackFailures -join '; ')" }
+        throw "Startup update failed; previous settings restored: $failure"
+    }
+}
+
+if ($Mode -eq 'SetStartup') {
+    if ($tasks.Count -ne 2) { throw 'Both Timelens tasks must be installed before changing startup.' }
+    $service = New-Object -ComObject 'Schedule.Service'
+    $service.Connect()
+    Set-TaskStartup -Folder $service.GetFolder($TaskPath.TrimEnd('\')) -Enabled ($StartupState -eq 'Enabled')
+    exit 0
+}
+
 $dataArgument = ''
 if ($DataDirectory) {
     $data = Assert-FixedDirectory $DataDirectory

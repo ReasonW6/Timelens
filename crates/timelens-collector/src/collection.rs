@@ -21,7 +21,7 @@ pub struct Filter {
     pub tray: Vec<TrayPresence>,
     pub blocked: bool,
     session: Option<&'static str>,
-    checked: Instant,
+    checked: timelens_observer::PollInterval,
     modified: Option<(SystemTime, u64)>,
     system_kind: String,
     system_start: i64,
@@ -43,7 +43,7 @@ impl Filter {
             tray: vec![],
             blocked: false,
             session: session_kind(),
-            checked: Instant::now() - Duration::from_secs(2),
+            checked: timelens_observer::PollInterval::new(Duration::from_secs(1)),
             modified: None,
             system_kind: "active".into(),
             system_start: now,
@@ -66,10 +66,10 @@ impl Filter {
         )
     }
     pub fn refresh(&mut self, directory: &Path) -> bool {
-        if self.checked.elapsed() < Duration::from_secs(1) {
+        if !self.checked.is_due(Instant::now()) {
             return false;
         }
-        self.checked = Instant::now();
+        self.checked.mark(Instant::now());
         self.session = session_kind();
         let info = std::fs::metadata(directory.join(POLICY_FILE))
             .ok()

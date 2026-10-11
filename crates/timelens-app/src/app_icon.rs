@@ -12,6 +12,7 @@ use std::{
     os::windows::ffi::OsStrExt,
     path::{Component, Path, PathBuf, Prefix},
     ptr::{NonNull, null_mut},
+    time::{Duration, Instant},
 };
 
 use slint::{Image, Rgba8Pixel, SharedPixelBuffer};
@@ -19,8 +20,9 @@ use windows::{
     Win32::{
         Foundation::SIZE,
         Graphics::Gdi::{
-            BI_RGB, BITMAPINFO, CreateCompatibleDC, CreateDIBSection, DIB_RGB_COLORS, DeleteDC,
-            DeleteObject, GdiFlush, GetDIBits, HBITMAP, HDC, HGDIOBJ, SelectObject,
+            BI_RGB, BITMAP, BITMAPINFO, CreateCompatibleDC, CreateDIBSection, DIB_RGB_COLORS,
+            DeleteDC, DeleteObject, GdiFlush, GetDIBits, GetObjectW, HBITMAP, HDC, HGDIOBJ,
+            SelectObject,
         },
         Storage::FileSystem::{
             FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_OFFLINE, FILE_ATTRIBUTE_REPARSE_POINT,
@@ -32,7 +34,7 @@ use windows::{
         UI::{
             Shell::{
                 IShellItem, IShellItemImageFactory, SHCreateItemFromParsingName, SHDefExtractIconW,
-                SIGDN_NORMALDISPLAY, SIIGBF_ICONONLY,
+                SIGDN_NORMALDISPLAY, SIIGBF_BIGGERSIZEOK, SIIGBF_ICONONLY,
             },
             WindowsAndMessaging::{DI_NORMAL, DestroyIcon, DrawIconEx, HICON},
         },
@@ -40,7 +42,7 @@ use windows::{
     core::{Interface, PCWSTR},
 };
 
-const ICON_SIZE: u32 = 48;
+const ICON_SIZE: u32 = 256;
 // At 32 bits per pixel every scanline is already DWORD aligned. The negative
 // DIB height below makes its memory order top-to-bottom, matching Slint.
 const STRIDE: usize = ICON_SIZE as usize * 4;
@@ -50,23 +52,47 @@ const MAX_VERSION_RESOURCE_BYTES: u32 = 4 * 1024 * 1024;
 const MAX_DESCRIPTION_UTF16_UNITS: usize = 1_024;
 
 thread_local! {
-    static CACHE: RefCell<VecDeque<(String, Image)>> = const { RefCell::new(VecDeque::new()) };
+    static CACHE: RefCell<VecDeque<(String, Image, Instant)>> = const { RefCell::new(VecDeque::new()) };
     static NAME_CACHE: RefCell<VecDeque<(String, Option<String>)>> = const { RefCell::new(VecDeque::new()) };
     static TINT_CACHE: RefCell<VecDeque<(String, slint::Color)>> = const { RefCell::new(VecDeque::new()) };
+    static SOURCES: RefCell<Vec<timelens_storage::ApplicationIconSource>> = const { RefCell::new(Vec::new()) };
+    static SIZED_CACHE: RefCell<VecDeque<(Image, u32, Image)>> = const { RefCell::new(VecDeque::new()) };
 }
 
-/// Return the application's actual 48-pixel icon, or an empty image for the
+pub fn register_sources(sources: Vec<timelens_storage::ApplicationIconSource>) {
+    SOURCES.with(|previous| {
+        let mut previous = previous.borrow_mut();
+        if *previous == sources {
+            return;
+        }
+        for source in &sources {
+            if !previous.contains(source) {
+                CACHE.with(|c| c.borrow_mut().retain(|(id, _, _)| id != &source.identity));
+                NAME_CACHE.with(|c| c.borrow_mut().retain(|(id, _)| id != &source.identity));
+                TINT_CACHE.with(|c| c.borrow_mut().retain(|(id, _)| id != &source.identity));
+            }
+        }
+        *previous = sources;
+    });
+}
+
+/// Return the application's high-resolution icon, or an empty image for the
 /// caller's generic fallback. `path:` identities on local drives and `aumid:`
-/// identities registered in the Start menu qualify.
+/// identities registered in the Start menu qualify. Other AUMIDs fall back to
+/// the executable recorded for that identity; no application-name allowlist is used.
 ///
 /// The bounded cache includes failures, so periodic timeline refreshes do not
 /// repeatedly touch the executable. Icons remain cached for this process's
-/// lifetime unless evicted; an updated executable may keep its previous icon.
+/// lifetime unless evicted or their recorded source changes. Failed reads retry
+/// after 30 seconds so a transient installation/permission failure can recover.
 pub fn for_identity(identity: &str) -> Image {
     if let Some(image) = CACHE.with(|cache| {
         let mut cache = cache.borrow_mut();
-        let index = cache.iter().position(|(key, _)| key == identity)?;
+        let index = cache.iter().position(|(key, _, _)| key == identity)?;
         let entry = cache.remove(index)?;
+        if entry.1.size().width == 0 && entry.2.elapsed() >= Duration::from_secs(30) {
+            return None;
+        }
         let image = entry.1.clone();
         cache.push_front(entry);
         Some(image)
@@ -75,17 +101,132 @@ pub fn for_identity(identity: &str) -> Image {
     }
 
     // Do not hold the RefCell borrow while calling Shell or GDI.
+    let source = SOURCES.with(|s| s.borrow().iter().find(|s| s.identity == identity).cloned());
+    let registered_identity = source
+        .as_ref()
+        .and_then(|s| s.app_user_model_id.as_ref())
+        .map(|id| format!("aumid:{id}"));
     let image = extract(identity)
-        .or_else(|| extract_app_item(identity))
+        .or_else(|| extract_app_item(registered_identity.as_deref().unwrap_or(identity)))
+        .or_else(|| {
+            source
+                .as_ref()
+                .and_then(|s| s.executable_path.as_ref())
+                .and_then(|path| extract(&format!("path:{path}")))
+        })
+        .map(readable_icon)
         .unwrap_or_default();
     CACHE.with(|cache| {
         let mut cache = cache.borrow_mut();
         if cache.len() >= CACHE_CAPACITY {
             cache.pop_back();
         }
-        cache.push_front((identity.to_owned(), image.clone()));
+        cache.push_front((identity.to_owned(), image.clone(), Instant::now()));
     });
     image
+}
+
+/// The software renderer samples raster images without a reduction filter.
+/// Resize once to the displayed physical pixels, including the window's DPI,
+/// so thin strokes retain their coverage instead of disappearing between samples.
+pub fn for_display(image: Image, physical_size: i32) -> Image {
+    let size = physical_size.clamp(1, ICON_SIZE as i32) as u32;
+    let original = image.size();
+    if original.width == 0 || original.height == 0 {
+        return image;
+    }
+    let longest = u64::from(original.width.max(original.height));
+    let dimension =
+        |value| ((u64::from(value) * u64::from(size) + longest / 2) / longest).max(1) as u32;
+    let width = dimension(original.width);
+    let height = dimension(original.height);
+    if original.width == width && original.height == height {
+        return image;
+    }
+    if let Some(scaled) = SIZED_CACHE.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        let index = cache
+            .iter()
+            .position(|(source, pixels, _)| *source == image && *pixels == size)?;
+        let entry = cache.remove(index)?;
+        let scaled = entry.2.clone();
+        cache.push_front(entry);
+        Some(scaled)
+    }) {
+        return scaled;
+    }
+    let Some(pixels) = image.to_rgba8_premultiplied() else {
+        return image;
+    };
+    let source =
+        image::RgbaImage::from_raw(pixels.width(), pixels.height(), pixels.as_bytes().to_vec())
+            .expect("RGBA buffers contain four bytes per pixel");
+    let mut resized = image::imageops::resize(
+        &source,
+        width,
+        height,
+        image::imageops::FilterType::Lanczos3,
+    );
+    // A sharp filter can overshoot at an edge. Keep the premultiplied channels
+    // within alpha so transparent edges neither acquire halos nor overflow.
+    for pixel in resized.pixels_mut() {
+        for channel in 0..3 {
+            pixel[channel] = pixel[channel].min(pixel[3]);
+        }
+    }
+    let scaled = Image::from_rgba8_premultiplied(SharedPixelBuffer::clone_from_slice(
+        resized.as_raw(),
+        width,
+        height,
+    ));
+    SIZED_CACHE.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        if cache.len() >= CACHE_CAPACITY {
+            cache.pop_back();
+        }
+        cache.push_front((image, size, scaled.clone()));
+    });
+    scaled
+}
+
+/// White transparent artwork needs a backing on the light native surfaces.
+/// Keep colored and dark icons unchanged, and preserve the original artwork.
+fn readable_icon(image: Image) -> Image {
+    let Some(mut pixels) = image.to_rgba8() else {
+        return image;
+    };
+    let visible: Vec<_> = pixels.as_slice().iter().filter(|p| p.a >= 96).collect();
+    let white = visible
+        .iter()
+        .filter(|p| p.r.min(p.g).min(p.b) >= 225)
+        .count();
+    if visible.is_empty()
+        || white * 4 < visible.len() * 3
+        || pixels.as_slice().iter().all(|p| p.a == 255)
+    {
+        return image;
+    }
+    let width = pixels.width();
+    let height = pixels.height();
+    let radius = width.min(height) as f32 * 0.22;
+    for (index, pixel) in pixels.make_mut_slice().iter_mut().enumerate() {
+        let x = (index as u32 % width) as f32 + 0.5;
+        let y = (index as u32 / width) as f32 + 0.5;
+        let dx = (radius - x).max(x - (width as f32 - radius)).max(0.0);
+        let dy = (radius - y).max(y - (height as f32 - radius)).max(0.0);
+        if dx * dx + dy * dy > radius * radius {
+            continue;
+        }
+        let a = u16::from(pixel.a);
+        let blend = |v: u8| ((u16::from(v) * a + 32 * (255 - a) + 127) / 255) as u8;
+        *pixel = Rgba8Pixel {
+            r: blend(pixel.r),
+            g: blend(pixel.g),
+            b: blend(pixel.b),
+            a: 255,
+        };
+    }
+    Image::from_rgba8(pixels)
 }
 
 /// Hues chosen to stay distinct from each other and readable on white.
@@ -412,37 +553,55 @@ fn extract_app_item(identity: &str) -> Option<Image> {
         cx: ICON_SIZE as i32,
         cy: ICON_SIZE as i32,
     };
-    let bitmap = OwnedBitmap(unsafe { factory.GetImage(size, SIIGBF_ICONONLY) }.ok()?);
+    let bitmap =
+        OwnedBitmap(unsafe { factory.GetImage(size, SIIGBF_ICONONLY | SIIGBF_BIGGERSIZEOK) }.ok()?);
+    let mut dimensions = BITMAP::default();
+    if unsafe {
+        GetObjectW(
+            bitmap.0.into(),
+            std::mem::size_of_val(&dimensions) as i32,
+            Some((&mut dimensions as *mut BITMAP).cast()),
+        )
+    } == 0
+        || dimensions.bmWidth <= 0
+        || dimensions.bmHeight <= 0
+        || dimensions.bmWidth > ICON_SIZE as i32 * 4
+        || dimensions.bmHeight > ICON_SIZE as i32 * 4
+    {
+        return None;
+    }
+    let width = dimensions.bmWidth as u32;
+    let height = dimensions.bmHeight as u32;
     let dc = OwnedDc(unsafe { CreateCompatibleDC(None) });
     if dc.0.is_invalid() {
         return None;
     }
     let mut info = BITMAPINFO::default();
     info.bmiHeader.biSize = std::mem::size_of_val(&info.bmiHeader) as u32;
-    info.bmiHeader.biWidth = ICON_SIZE as i32;
-    info.bmiHeader.biHeight = -(ICON_SIZE as i32);
+    info.bmiHeader.biWidth = dimensions.bmWidth;
+    info.bmiHeader.biHeight = -dimensions.bmHeight;
     info.bmiHeader.biPlanes = 1;
     info.bmiHeader.biBitCount = 32;
     info.bmiHeader.biCompression = BI_RGB.0;
-    let mut bgra = vec![0_u8; BYTE_COUNT];
+    let mut bgra = vec![0_u8; width as usize * height as usize * 4];
     let rows = unsafe {
         GetDIBits(
             dc.0,
             bitmap.0,
             0,
-            ICON_SIZE,
+            height,
             Some(bgra.as_mut_ptr().cast()),
             &mut info,
             DIB_RGB_COLORS,
         )
     };
-    if rows != ICON_SIZE as i32 {
+    if rows != dimensions.bmHeight {
         return None;
     }
     let pixels = SharedPixelBuffer::<Rgba8Pixel>::clone_from_slice(
         &premultiplied_from_bgra(&bgra),
-        ICON_SIZE,
-        ICON_SIZE,
+        width,
+        height,
     );
     Some(Image::from_rgba8_premultiplied(pixels))
 }
@@ -709,6 +868,144 @@ mod tests {
         );
     }
     use slint::{Image, Rgba8Pixel, SharedPixelBuffer};
+
+    #[test]
+    fn downsampling_retains_fine_strokes_and_transparent_edge_colors() {
+        let mut stripes = SharedPixelBuffer::<Rgba8Pixel>::new(48, 48);
+        for (index, pixel) in stripes.make_mut_slice().iter_mut().enumerate() {
+            let channel = if index % 2 == 0 { 0 } else { 255 };
+            *pixel = Rgba8Pixel {
+                r: channel,
+                g: channel,
+                b: channel,
+                a: 255,
+            };
+        }
+        let resized = super::for_display(Image::from_rgba8(stripes), 24)
+            .to_rgba8()
+            .unwrap();
+        // Point sampling the old 48px buffer at 24px loses alternate strokes.
+        // Proper reduction retains their roughly half-pixel coverage.
+        assert!(resized.as_slice().iter().all(|p| p.r > 0 && p.r < 255));
+        for row in resized.as_slice().chunks_exact(24) {
+            assert!(row[3..21].iter().all(|p| (124..=131).contains(&p.r)));
+        }
+        let average = resized
+            .as_slice()
+            .iter()
+            .map(|p| u32::from(p.r))
+            .sum::<u32>()
+            / resized.as_slice().len() as u32;
+        assert!((126..=129).contains(&average));
+
+        let mut edge = SharedPixelBuffer::<Rgba8Pixel>::new(2, 2);
+        for row in 0..2 {
+            edge.make_mut_slice()[row * 2] = Rgba8Pixel {
+                r: 0,
+                g: 0,
+                b: 255,
+                a: 255,
+            };
+            edge.make_mut_slice()[row * 2 + 1] = Rgba8Pixel {
+                r: 255,
+                g: 0,
+                b: 0,
+                a: 0,
+            };
+        }
+        let pixel = super::for_display(Image::from_rgba8(edge), 1)
+            .to_rgba8()
+            .unwrap()
+            .as_slice()[0];
+        assert_eq!((pixel.r, pixel.g, pixel.b), (0, 0, 255));
+        assert!((126..=129).contains(&pixel.a));
+    }
+
+    #[test]
+    fn display_sizes_are_cached_independently_and_keep_aspect_ratio() {
+        let original = solid_icon(40, 120, 200);
+        for size in [24, 28, 30, 35, 36, 42, 44, 48, 55, 56, 66, 88] {
+            let first = super::for_display(original.clone(), size);
+            assert_eq!(
+                (first.size().width, first.size().height),
+                (size as u32, size as u32)
+            );
+            assert_eq!(first, super::for_display(original.clone(), size));
+        }
+        let rectangle = Image::from_rgba8(SharedPixelBuffer::<Rgba8Pixel>::new(64, 32));
+        let fitted = super::for_display(rectangle, 28);
+        assert_eq!((fitted.size().width, fitted.size().height), (28, 14));
+        assert_eq!(super::for_display(Image::default(), 24).size().width, 0);
+    }
+
+    #[test]
+    fn light_transparent_icons_get_contrast_without_recoloring_other_icons() {
+        let mut buffer = SharedPixelBuffer::<Rgba8Pixel>::new(16, 16);
+        buffer.make_mut_slice()[8 * 16 + 8] = Rgba8Pixel {
+            r: 255,
+            g: 255,
+            b: 255,
+            a: 255,
+        };
+        let readable = super::readable_icon(Image::from_rgba8(buffer))
+            .to_rgba8()
+            .unwrap();
+        assert_eq!(
+            readable.as_slice()[8 * 16 + 8],
+            Rgba8Pixel {
+                r: 255,
+                g: 255,
+                b: 255,
+                a: 255
+            }
+        );
+        assert_eq!(
+            readable.as_slice()[8 * 16 + 7],
+            Rgba8Pixel {
+                r: 32,
+                g: 32,
+                b: 32,
+                a: 255
+            }
+        );
+        assert_eq!(readable.as_slice()[0].a, 0);
+        for original in [
+            solid_icon(40, 120, 200),
+            solid_icon(32, 32, 32),
+            solid_icon(255, 255, 255),
+        ] {
+            let pixels = original.to_rgba8().unwrap();
+            assert_eq!(
+                super::readable_icon(original)
+                    .to_rgba8()
+                    .unwrap()
+                    .as_slice(),
+                pixels.as_slice()
+            );
+        }
+    }
+
+    #[test]
+    fn unregistered_app_ids_use_recorded_executables_and_invalidate_failed_reads() {
+        let executable = std::env::current_exe().unwrap();
+        let path = format!("path:{}", executable.display());
+        let expected = super::for_identity(&path);
+        assert!(
+            expected.size().width > 0,
+            "the app test executable carries its icon resource"
+        );
+        let identity = "aumid:Timelens.Unregistered.Icon.Regression";
+        assert_eq!(super::for_identity(identity).size().width, 0);
+        super::register_sources(vec![timelens_storage::ApplicationIconSource {
+            identity: identity.into(),
+            executable_path: Some(executable.to_string_lossy().into_owned()),
+            app_user_model_id: Some("Timelens.Unregistered.Icon.Regression".into()),
+        }]);
+        assert_eq!(
+            super::for_identity(identity).to_rgba8().unwrap().as_slice(),
+            expected.to_rgba8().unwrap().as_slice()
+        );
+    }
 
     fn solid_icon(r: u8, g: u8, b: u8) -> Image {
         let mut buffer = SharedPixelBuffer::<Rgba8Pixel>::new(16, 16);

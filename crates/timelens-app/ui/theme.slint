@@ -131,6 +131,10 @@ export component Dot inherits Rectangle {
     Rectangle { width: 8px; height: 8px; border-radius: 4px; background: root.tone; }
 }
 
+export global AppIcons {
+    pure callback resize(image, int) -> image;
+}
+
 // The app's own icon, or a tinted tile with a generic window glyph.
 export component AppIcon inherits Rectangle {
     in property <image> icon;
@@ -139,7 +143,7 @@ export component AppIcon inherits Rectangle {
     width: root.size; height: root.size;
     if root.icon.width > 0 : Image {
         width: root.size; height: root.size;
-        source: root.icon;
+        source: AppIcons.resize(root.icon, round(root.size / 1phx));
         image-fit: contain;
     }
     if root.icon.width <= 0 : Rectangle {

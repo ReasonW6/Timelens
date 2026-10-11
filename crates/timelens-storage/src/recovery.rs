@@ -3,7 +3,6 @@
 use super::*;
 use portable::{quoted, table_names};
 use rusqlite::{params_from_iter, types::Value};
-use std::io::Read;
 
 #[derive(Debug, Default)]
 pub struct RecoveryReport {
@@ -216,15 +215,13 @@ impl Storage {
                 }
                 let directory = relocation::validate_fixed_directory(&source.join("snapshots"))?;
                 let hash: [u8; 32] = hash.try_into().map_err(|_| invalid("快照哈希无效"))?;
-                let mut encrypted = vec![];
-                File::open(directory.join(name))?
-                    .take(4 * 1024 * 1024 + 1024)
-                    .read_to_end(&mut encrypted)?;
-                let plain = Zeroizing::new(milestone3::decrypt_snapshot(
-                    &original_key,
-                    &encrypted,
-                    &hash,
-                )?);
+                let plain = snapshot_container::read_payload(
+                    &repaired.connection,
+                    &directory,
+                    &source.join(KEY_FILE),
+                    id,
+                    None,
+                )?;
                 if plain.len() as u64 != size
                     || milestone3::snapshot_pixel_hash(&plain, width, height)? != hash
                 {
@@ -247,6 +244,9 @@ impl Storage {
                 report.unavailable_images += 1;
             }
         }
+        repaired.connection.execute_batch("DELETE FROM snapshot_container_records; DELETE FROM snapshot_containers; DELETE FROM snapshot_slot_days WHERE slot_id IN(SELECT slot_id FROM snapshot_slots WHERE result<>'success');")?;
+        repaired.reconcile_snapshot_files()?;
+        repaired.verify_snapshot_containers()?;
         portable::sanitize(&repaired.connection, "main", true)?;
         let now = unix_time_ms();
         let earliest: Option<i64> = repaired.connection.query_row(

@@ -179,6 +179,7 @@ pub(crate) fn sanitize(c: &Connection, schema: &str, has_snapshots: bool) -> Res
     }
     if !has_snapshots {
         c.execute_batch(&format!("UPDATE {prefix}.snapshot_slots SET blob_id=NULL,result='missing',missing_reason='backup_omitted' WHERE blob_id IS NOT NULL; DELETE FROM {prefix}.snapshot_blobs;"))?;
+        c.execute_batch(&format!("DELETE FROM {prefix}.snapshot_slot_days;"))?;
     }
     Ok(())
 }
@@ -274,6 +275,9 @@ impl Storage {
                 LATEST_SCHEMA_VERSION,
             )?;
             sanitize(&self.connection, "portable", options.include_snapshots)?;
+            // Container keys and offsets are local storage details. A portable
+            // archive contains original WebP bytes and stable local-day metadata.
+            self.connection.execute_batch("DELETE FROM portable.snapshot_container_records; DELETE FROM portable.snapshot_containers;")?;
             if options.include_snapshots {
                 let blobs=self.connection.prepare("SELECT blob_id,MIN(slot_id) FROM snapshot_slots WHERE blob_id IS NOT NULL GROUP BY blob_id")?.query_map([],|r|Ok((r.get::<_,i64>(0)?,r.get::<_,i64>(1)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
                 for (blob, slot) in blobs {
@@ -382,6 +386,9 @@ impl Storage {
         }
         plain.pragma_update(None, "user_version", LATEST_SCHEMA_VERSION)?;
         sanitize(&plain, "main", info.includes_snapshots)?;
+        plain.execute_batch(
+            "DELETE FROM snapshot_container_records; DELETE FROM snapshot_containers;",
+        )?;
         let directory = tempfile::Builder::new()
             .prefix("timelens-restore-")
             .tempdir_in(stage_parent)?;
@@ -442,6 +449,8 @@ impl Storage {
                 params![name, encrypted.len() as i64, id],
             )?;
         }
+        storage.reconcile_snapshot_files()?;
+        storage.verify_snapshot_containers()?;
         full_check(&storage.connection)?;
         storage.checkpoint()?;
         Ok(PreparedRestore {
@@ -463,26 +472,67 @@ impl Storage {
         if populated && !confirm_replace {
             return Err(invalid("替换非空数据集需要确认；可先主动导出安全备份"));
         }
-        let key = load_key(&self.key_path)?;
+        prepared.storage.verify_snapshot_containers()?;
         let stage_key = load_key(&prepared.storage.key_path)?;
-        let blob_slots=prepared.storage.connection.prepare("SELECT blob_id,MIN(slot_id) FROM snapshot_slots WHERE blob_id IS NOT NULL GROUP BY blob_id")?.query_map([],|r|Ok((r.get::<_,i64>(0)?,r.get::<_,i64>(1)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
-        fs::create_dir_all(self.data_directory.join("snapshots"))?;
-        for (id, slot) in blob_slots {
-            let image = prepared.storage.load_snapshot_image(slot)?;
-            let bytes = Zeroizing::new(image.webp);
-            let hash =
-                snapshot_pixel_hash(&bytes, image.slot.pixel_width, image.slot.pixel_height)?;
-            let encrypted = encrypt_snapshot(&key, &bytes, &hash)?;
-            let name = random_snapshot_file_name()?;
-            milestone3::write_new_file(
-                &self.data_directory.join("snapshots").join(&name),
-                &encrypted,
-            )?;
-            prepared.storage.connection.execute(
-                "UPDATE snapshot_blobs SET file_name=?,encrypted_bytes=? WHERE blob_id=?",
-                params![name, encrypted.len() as i64, id],
-            )?;
+        fs::create_dir_all(self.snapshot_directory())?;
+        let containers = prepared
+            .storage
+            .connection
+            .prepare("SELECT local_day,file_name,committed_bytes FROM snapshot_containers")?
+            .query_map([], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    milestone3::row_u64(r, 2)?,
+                ))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        let mut installed = Vec::new();
+        let install: Result<()> = (|| {
+            for (day, old_name, expected_bytes) in containers {
+                let name = random_snapshot_file_name()?.replace(".tlsnap", ".tlsday");
+                let path = self.snapshot_directory().join(&name);
+                let mut target = OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(&path)?;
+                installed.push(path);
+                let mut source = File::open(prepared.storage.snapshot_directory().join(old_name))?;
+                let copied = std::io::copy(&mut source, &mut target)?;
+                target.sync_all()?;
+                if copied != expected_bytes {
+                    return Err(invalid("恢复快照容器复制不完整"));
+                }
+                prepared.storage.connection.execute(
+                    "UPDATE snapshot_containers SET file_name=? WHERE local_day=?",
+                    params![name, day],
+                )?;
+            }
+            let ids = prepared.storage.connection.prepare("SELECT MIN(s.slot_id) FROM snapshot_slots s JOIN snapshot_slot_days d USING(slot_id) WHERE s.result='success' GROUP BY d.local_day,s.blob_id")?
+                .query_map([], |r| r.get::<_,i64>(0))?.collect::<rusqlite::Result<Vec<_>>>()?;
+            for id in ids {
+                let blob = prepared.storage.connection.query_row(
+                    "SELECT blob_id FROM snapshot_slots WHERE slot_id=?",
+                    [id],
+                    |r| r.get::<_, i64>(0),
+                )?;
+                snapshot_container::read_payload(
+                    &prepared.storage.connection,
+                    &self.snapshot_directory(),
+                    &prepared.storage.key_path,
+                    blob,
+                    Some(id),
+                )?;
+            }
+            Ok(())
+        })();
+        if let Err(error) = install {
+            for path in installed {
+                let _ = fs::remove_file(path);
+            }
+            return Err(error);
         }
+        let _durable = snapshot_container::SnapshotWrite::new(&self.connection)?;
         prepared.storage.checkpoint()?;
         self.connection.execute(
             "ATTACH DATABASE ? AS restore_source KEY ?",
