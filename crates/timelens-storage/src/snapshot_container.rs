@@ -694,6 +694,9 @@ impl Storage {
         slot_id: i64,
         reason: SnapshotMissingReason,
     ) -> Result<Option<u64>> {
+        if let Some(released) = self.delete_legacy_snapshot(slot_id, reason)? {
+            return Ok(Some(released));
+        }
         let Some(day) = self.stored_snapshot_day(slot_id)? else {
             return Ok(None);
         };
@@ -712,13 +715,27 @@ impl Storage {
         slot_ids: &[i64],
         reason: SnapshotMissingReason,
     ) -> Result<SnapshotDeletion> {
+        let mut total = SnapshotDeletion::default();
         let mut days = BTreeMap::<String, Vec<i64>>::new();
         for &slot_id in slot_ids {
+            match self.delete_legacy_snapshot(slot_id, reason) {
+                Ok(Some(released)) => {
+                    total.deleted += 1;
+                    total.released_bytes += released;
+                    continue;
+                }
+                Err(StorageError::SnapshotCleanupPending(error)) => {
+                    total.deleted += 1;
+                    total.cleanup_pending.get_or_insert(error);
+                    continue;
+                }
+                Ok(None) => {}
+                Err(error) => return Err(error),
+            }
             if let Some(day) = self.stored_snapshot_day(slot_id)? {
                 days.entry(day).or_default().push(slot_id);
             }
         }
-        let mut total = SnapshotDeletion::default();
         for (day, ids) in days {
             if let Some(deletion) = self.delete_day_snapshots(&day, &ids, reason)? {
                 total.deleted += deletion.deleted;
@@ -901,6 +918,45 @@ impl Storage {
         Ok(Some(deletion))
     }
 
+    /// A stopped format upgrade leaves later days without a container while their
+    /// images are still read from the old per-image files; delete those directly.
+    fn delete_legacy_snapshot(
+        &self,
+        slot_id: i64,
+        reason: SnapshotMissingReason,
+    ) -> Result<Option<u64>> {
+        let legacy = self.connection.query_row("SELECT b.blob_id,b.file_name FROM snapshot_slots s JOIN snapshot_blobs b USING(blob_id) LEFT JOIN snapshot_slot_days d USING(slot_id)
+            WHERE s.slot_id=? AND s.result='success' AND NOT EXISTS(SELECT 1 FROM snapshot_containers c WHERE c.local_day=d.local_day)",
+            [slot_id], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?))).optional()?;
+        let Some((blob, name)) = legacy else {
+            return Ok(None);
+        };
+        self.ensure_writable()?;
+        let _durable = SnapshotWrite::new(&self.connection)?;
+        let tx = Transaction::new_unchecked(&self.connection, TransactionBehavior::Immediate)?;
+        tx.execute("UPDATE snapshot_slots SET captured_at_utc_ms=NULL,pixel_width=0,pixel_height=0,blob_id=NULL,capture_method='none',result='cleaned',missing_reason=? WHERE slot_id=?",params![reason.as_str(),slot_id])?;
+        tx.execute("DELETE FROM snapshot_slot_days WHERE slot_id=?", [slot_id])?;
+        // The old file is shared by every slot and day of the image; it goes only
+        // with the last one, and never while a day container still holds a copy.
+        let orphan = tx.execute("DELETE FROM snapshot_blobs WHERE blob_id=?1 AND NOT EXISTS(SELECT 1 FROM snapshot_slots WHERE blob_id=?1)
+            AND NOT EXISTS(SELECT 1 FROM snapshot_container_records WHERE blob_id=?1)", [blob])? == 1;
+        tx.commit()?;
+        self.snapshot_files_settled.set(false);
+        let mut released = 0;
+        self.finish_snapshot_key_cleanup()
+            .and_then(|()| {
+                let path = image_path(&self.snapshot_directory(), &name)?;
+                if orphan && path.exists() {
+                    let bytes = fs::metadata(&path)?.len();
+                    fs::remove_file(path)?;
+                    released = bytes;
+                }
+                Ok(())
+            })
+            .map_err(cleanup_pending)?;
+        Ok(Some(released))
+    }
+
     fn finish_snapshot_key_cleanup(&self) -> Result<()> {
         let (busy, remaining): (i64, i64) =
             self.connection
@@ -914,6 +970,11 @@ impl Storage {
         }
         Ok(())
     }
+}
+
+/// After a deletion commits, a failure only delays scrubbing; the slot stays deleted.
+fn cleanup_pending(error: StorageError) -> StorageError {
+    StorageError::SnapshotCleanupPending(error.to_string())
 }
 
 pub(crate) fn read_payload(
@@ -997,7 +1058,11 @@ pub(crate) mod tests {
         }
     }
 
-    fn store_on_day(storage: &Storage, request: &SnapshotStoreRequest, day: &str) -> i64 {
+    pub(crate) fn store_on_day(
+        storage: &Storage,
+        request: &SnapshotStoreRequest,
+        day: &str,
+    ) -> i64 {
         let hash =
             snapshot_pixel_hash(&request.webp, request.pixel_width, request.pixel_height).unwrap();
         storage.append_snapshot_on_day(request, &hash, day).unwrap()
@@ -1619,6 +1684,50 @@ pub(crate) mod tests {
         fs::write(&originals[0].0, &originals[0].1).unwrap();
         let repaired = Storage::open(directory.path()).unwrap();
         assert_eq!(repaired.load_snapshot_image(id).unwrap().webp, a.webp);
+    }
+
+    #[test]
+    fn images_a_stopped_migration_left_in_old_files_can_still_be_deleted() {
+        let directory = tempfile::tempdir().unwrap();
+        let storage = Storage::open(directory.path()).unwrap();
+        let a = request(1_700_000_000_000, 10);
+        let b = request(a.slot_started_utc_ms + 86_400_000, 20);
+        let first = storage.store_snapshot(&a).unwrap();
+        let second = storage.store_snapshot(&b).unwrap();
+        let originals = make_legacy(&storage);
+        drop(storage);
+        // The earlier day is damaged, so migration stops before the later one.
+        let mut corrupt = originals[0].1.clone();
+        corrupt[25] ^= 1;
+        fs::write(&originals[0].0, &corrupt).unwrap();
+        let opened = Storage::open(directory.path()).unwrap();
+        assert_eq!(opened.load_snapshot_image(second).unwrap().webp, b.webp);
+        assert!(opened.delete_snapshot(second).unwrap());
+        assert!(opened.load_snapshot_image(second).is_err());
+        assert!(!originals[1].0.exists());
+        assert_eq!(fs::read(&originals[0].0).unwrap(), corrupt);
+        assert!(opened.load_snapshot_image(first).is_err());
+    }
+
+    #[test]
+    fn batch_delete_also_removes_images_a_stopped_migration_left_in_old_files() {
+        let directory = tempfile::tempdir().unwrap();
+        let storage = Storage::open(directory.path()).unwrap();
+        let a = request(1_700_000_000_000, 10);
+        let b = request(a.slot_started_utc_ms + 86_400_000, 20);
+        storage.store_snapshot(&a).unwrap();
+        let second = storage.store_snapshot(&b).unwrap();
+        let originals = make_legacy(&storage);
+        drop(storage);
+        let mut corrupt = originals[0].1.clone();
+        corrupt[25] ^= 1;
+        fs::write(&originals[0].0, &corrupt).unwrap();
+        let opened = Storage::open(directory.path()).unwrap();
+        let deletion = opened.delete_snapshots(&[second]).unwrap();
+        assert_eq!(deletion.deleted, 1);
+        assert_eq!(deletion.cleanup_pending, None);
+        assert!(opened.load_snapshot_image(second).is_err());
+        assert!(!originals[1].0.exists());
     }
 
     #[test]

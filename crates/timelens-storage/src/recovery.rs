@@ -217,13 +217,25 @@ impl Storage {
                 }
                 let directory = relocation::validate_fixed_directory(&source.join("snapshots"))?;
                 let hash: [u8; 32] = hash.try_into().map_err(|_| invalid("快照哈希无效"))?;
-                let plain = snapshot_container::read_payload(
-                    &repaired.connection,
-                    &directory,
-                    &source.join(KEY_FILE),
-                    id,
-                    None,
-                )?;
+                // Each day keeps its own copy of a shared image, and any authenticated
+                // copy restores it. The blob-wide read stays as the final attempt.
+                let days = repaired.connection.prepare("SELECT MIN(s.slot_id) FROM snapshot_slots s JOIN snapshot_slot_days d USING(slot_id) WHERE s.blob_id=? GROUP BY d.local_day ORDER BY d.local_day")?
+                    .query_map([id], |r| r.get::<_, i64>(0))?
+                    .collect::<rusqlite::Result<Vec<_>>>()?;
+                let mut plain = Err(invalid("快照记录无效"));
+                for slot in days.into_iter().map(Some).chain([None]) {
+                    plain = snapshot_container::read_payload(
+                        &repaired.connection,
+                        &directory,
+                        &source.join(KEY_FILE),
+                        id,
+                        slot,
+                    );
+                    if plain.is_ok() {
+                        break;
+                    }
+                }
+                let plain = plain?;
                 if plain.len() as u64 != size
                     || milestone3::snapshot_pixel_hash(&plain, width, height)? != hash
                 {
@@ -334,6 +346,38 @@ mod tests {
                 .unwrap(),
             2
         );
+    }
+    #[test]
+    fn recovery_restores_an_image_from_a_later_day_when_the_first_copy_is_damaged() {
+        use snapshot_container::tests::{request, store_on_day};
+        let (source, s) = ai::tests::fixture();
+        let a = request(1_700_000_000_000, 10);
+        let first = store_on_day(&s, &a, "2023-11-14");
+        let mut later = a.clone();
+        later.slot_started_utc_ms += 86_400_000;
+        later.captured_at_utc_ms += 86_400_000;
+        let second = store_on_day(&s, &later, "2023-11-15");
+        let name: String = s
+            .connection
+            .query_row(
+                "SELECT file_name FROM snapshot_containers WHERE local_day='2023-11-14'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        s.checkpoint().unwrap();
+        drop(s);
+        let damaged = source.path().join("snapshots").join(name);
+        let mut bytes = fs::read(&damaged).unwrap();
+        *bytes.last_mut().unwrap() ^= 1;
+        fs::write(&damaged, bytes).unwrap();
+        let parent = tempfile::tempdir().unwrap();
+        let (repaired, report) =
+            Storage::recover_to_new_directory(source.path(), &parent.path().join("recovered"))
+                .unwrap();
+        assert_eq!(report.unavailable_images, 0);
+        assert_eq!(repaired.load_snapshot_image(first).unwrap().webp, a.webp);
+        assert_eq!(repaired.load_snapshot_image(second).unwrap().webp, a.webp);
     }
     #[test]
     fn unreadable_header_does_not_replace_original_or_publish_target() {
