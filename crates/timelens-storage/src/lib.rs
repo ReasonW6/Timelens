@@ -154,6 +154,8 @@ impl std::ops::DerefMut for GuardedConnection {
 
 pub struct Storage {
     timeline_cache: std::cell::RefCell<timeline_cache::TimelineCache>,
+    /// No image key or file is left over from a deletion; retention skips cleanup.
+    snapshot_files_settled: std::cell::Cell<bool>,
     connection: GuardedConnection,
     data_directory: PathBuf,
     control_directory: PathBuf,
@@ -283,6 +285,7 @@ impl Storage {
 
         let storage = Self {
             timeline_cache: Default::default(),
+            snapshot_files_settled: Default::default(),
             connection: connection.into(),
             data_directory: data_directory.to_owned(),
             control_directory: data_directory.to_owned(),

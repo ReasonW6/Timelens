@@ -409,6 +409,7 @@ impl Storage {
         export?;
         let storage = Storage {
             timeline_cache: Default::default(),
+            snapshot_files_settled: Default::default(),
             connection: open_encrypted(&database, &key, false)?.into(),
             data_directory: directory.path().into(),
             control_directory: directory.path().into(),

@@ -195,6 +195,7 @@ impl Storage {
             migrate_database(&database, &stage.path().join(BACKUP_FILE), &key, MIGRATIONS)?;
         let repaired = Self {
             timeline_cache: Default::default(),
+            snapshot_files_settled: Default::default(),
             cipher_version: cipher_version(&connection)?,
             connection: connection.into(),
             data_directory: stage.path().into(),

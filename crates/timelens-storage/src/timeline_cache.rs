@@ -396,6 +396,7 @@ mod tests {
             cipher_version: cipher_version(&connection).unwrap(),
             connection: connection.into(),
             timeline_cache: Default::default(),
+            snapshot_files_settled: Default::default(),
             data_directory: directory.clone(),
             control_directory: directory,
             key_path,

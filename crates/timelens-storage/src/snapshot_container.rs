@@ -550,7 +550,9 @@ impl Storage {
         }
         self.migrate_snapshot_containers()?;
         self.finish_snapshot_key_cleanup()?;
-        self.purge_unreferenced_snapshot_files()
+        self.purge_unreferenced_snapshot_files()?;
+        self.snapshot_files_settled.set(true);
+        Ok(())
     }
 
     fn purge_unreferenced_snapshot_files(&self) -> Result<()> {
@@ -593,8 +595,17 @@ impl Storage {
         &self,
         now_utc_ms: i64,
     ) -> Result<SnapshotRetentionOutcome> {
-        self.finish_snapshot_key_cleanup()?;
-        self.purge_unreferenced_snapshot_files()?;
+        // Finish what an earlier deletion or open left behind. A reader holding
+        // the log only postpones it; the rest of retention still runs.
+        if !self.snapshot_files_settled.get() {
+            match self
+                .finish_snapshot_key_cleanup()
+                .and_then(|()| self.purge_unreferenced_snapshot_files())
+            {
+                Ok(()) => self.snapshot_files_settled.set(true),
+                Err(error) => eprintln!("snapshot cleanup postponed: {error}"),
+            }
+        }
         let policy = self.snapshot_policy()?;
         let today = local_day(now_utc_ms)?;
         let cutoff = policy
@@ -647,6 +658,7 @@ impl Storage {
         tx.execute("DELETE FROM snapshot_containers WHERE local_day=?", [day])?;
         tx.execute("DELETE FROM snapshot_blobs WHERE NOT EXISTS(SELECT 1 FROM snapshot_slots s WHERE s.blob_id=snapshot_blobs.blob_id)",[])?;
         tx.commit()?;
+        self.snapshot_files_settled.set(false);
         self.finish_snapshot_key_cleanup()?;
         let mut released = 0;
         if let Some((name, _)) = container {
@@ -682,6 +694,7 @@ impl Storage {
         let remaining: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM snapshot_slots s JOIN snapshot_slot_days d USING(slot_id) WHERE s.blob_id=? AND d.local_day=?)",params![blob,day],|r|r.get(0))?;
         if remaining {
             tx.commit()?;
+            self.snapshot_files_settled.set(false);
             self.finish_snapshot_key_cleanup()?;
             return Ok(Some(0));
         }
@@ -766,6 +779,7 @@ impl Storage {
             file.committed = true;
         }
         tx.commit()?;
+        self.snapshot_files_settled.set(false);
         let new_bytes = if let Some(file) = replacement {
             file.bytes
         } else {
@@ -1061,6 +1075,44 @@ mod tests {
         assert_eq!(storage.load_snapshot_image(new).unwrap().webp, a.webp);
         assert_eq!(files(&storage).len(), 1);
         assert!(storage.snapshot_live_bytes().unwrap() <= policy.max_bytes);
+    }
+
+    #[test]
+    fn retention_skips_settled_files_and_retries_cleanup_a_reader_delayed() {
+        let directory = tempfile::tempdir().unwrap();
+        let storage = Storage::open(directory.path()).unwrap();
+        let a = request(1_700_000_000_000, 10);
+        let b = request(a.slot_started_utc_ms + 1000, 20);
+        let first = storage.store_snapshot(&a).unwrap();
+        let second = storage.store_snapshot(&b).unwrap();
+        let now = b.captured_at_utc_ms + 1000;
+        // Only a cleanup pass looks for unreferenced files, so this one marks when a pass ran.
+        let stray = storage.snapshot_directory().join(container_name().unwrap());
+        fs::write(&stray, MAGIC).unwrap();
+        storage.apply_retention(now).unwrap();
+        assert!(stray.exists());
+
+        storage
+            .connection
+            .execute_batch("PRAGMA busy_timeout=0")
+            .unwrap();
+        let key = load_key(&storage.key_path).unwrap();
+        let reader = super::super::open_encrypted(&storage.database_path, &key, true).unwrap();
+        reader
+            .execute_batch("BEGIN; SELECT COUNT(*) FROM snapshot_slots;")
+            .unwrap();
+        // The deletion commits; its key cleanup and old-file removal wait for the reader.
+        let _ = storage.delete_snapshot(first);
+        assert_eq!(files(&storage).len(), 3);
+        storage.apply_retention(now).unwrap();
+        assert_eq!(files(&storage).len(), 3);
+
+        drop(reader);
+        storage.apply_retention(now).unwrap();
+        assert!(!stray.exists());
+        assert_eq!(files(&storage).len(), 1);
+        assert!(storage.load_snapshot_image(first).is_err());
+        assert_eq!(storage.load_snapshot_image(second).unwrap().webp, b.webp);
     }
 
     fn large_request(utc: i64, seed: usize) -> SnapshotStoreRequest {
