@@ -9,6 +9,7 @@ mod collector_task;
 mod data_ui;
 mod general_ui;
 mod history;
+mod icon_cache;
 mod local_config;
 #[cfg(debug_assertions)]
 mod qa;
@@ -38,7 +39,7 @@ use std::{
 };
 
 use anyhow::{Context, Result, bail};
-use slint::{Image, ModelRc, Rgba8Pixel, SharedPixelBuffer, Timer, TimerMode, VecModel};
+use slint::{Image, ModelRc, Timer, TimerMode, VecModel};
 use timelens_ipc::{
     BatchRejection, COLLECTOR_RESET_PAUSED_FILE, COLLECTOR_RESET_REQUEST_FILE, PROTOCOL_VERSION,
     SingleInstanceGuard, current_pipe_name, run_server_collector_message, run_server_probe,
@@ -260,9 +261,9 @@ struct AppsState {
     /// When the totals were last requested and whether they covered today only;
     /// `None` requests them again.
     requested: Option<(bool, Instant)>,
-    pending: Option<(bool, mpsc::Receiver<Result<TimelineSnapshot>>)>,
+    pending: Option<(bool, mpsc::Receiver<Result<Arc<TimelineSnapshot>>>)>,
     /// The totals on screen, kept to show another selection without a reload.
-    shown: Option<(bool, TimelineSnapshot)>,
+    shown: Option<(bool, Arc<TimelineSnapshot>)>,
     /// The history generation these totals belong to; a merge changes it.
     generation: u64,
 }
@@ -396,7 +397,7 @@ fn run_window(
             if let Some((today, snapshot)) = shown
                 && let Some(window) = weak.upgrade()
             {
-                render_apps(&window, &ui_state, snapshot, today);
+                render_apps(&window, &ui_state, &snapshot, today);
             }
         });
     }
@@ -793,7 +794,7 @@ fn request_apps(
                 Ok(if today {
                     storage.timeline_snapshot_cached(started, now)?
                 } else {
-                    storage.timeline_snapshot(started, now)?
+                    Arc::new(storage.timeline_snapshot(started, now)?)
                 })
             });
         let _ = sender.send(result);
@@ -822,7 +823,7 @@ fn poll_apps(window: &AppWindow, ui_state: &Rc<RefCell<UiState>>) -> Result<()> 
     }
     state.apps.shown = Some((today, snapshot.clone()));
     drop(state);
-    render_apps(window, ui_state, snapshot, today);
+    render_apps(window, ui_state, &snapshot, today);
     Ok(())
 }
 
@@ -858,23 +859,26 @@ fn render_snapshot(
 fn render_apps(
     window: &AppWindow,
     ui_state: &Rc<RefCell<UiState>>,
-    mut snapshot: TimelineSnapshot,
+    snapshot: &TimelineSnapshot,
     today: bool,
 ) {
     // All history starts with the first record, not at the query's lower bound.
-    if !today
-        && let Some(earliest) = snapshot
+    let range_start = if !today {
+        snapshot
             .applications
             .iter()
             .flat_map(|application| &application.segments)
             .map(|segment| segment.started_utc_ms)
             .min()
-    {
-        snapshot.range_started_utc_ms = earliest.max(snapshot.range_started_utc_ms);
-    }
+            .map_or(snapshot.range_started_utc_ms, |earliest| {
+                earliest.max(snapshot.range_started_utc_ms)
+            })
+    } else {
+        snapshot.range_started_utc_ms
+    };
     let range_ms = snapshot
         .range_ended_utc_ms
-        .saturating_sub(snapshot.range_started_utc_ms)
+        .saturating_sub(range_start)
         .max(1) as f64;
     let mut state = ui_state.borrow_mut();
     if state.selected_identity.as_ref().is_none_or(|selected| {
@@ -945,8 +949,8 @@ fn render_apps(
         )
         .into(),
     );
-    window.set_focus_total(format_duration(timeline_view::total_focus_ms(&snapshot)).into());
-    window.set_apps_range(timeline_ui::apps_range_label(&snapshot, today).into());
+    window.set_focus_total(format_duration(timeline_view::total_focus_ms(snapshot)).into());
+    window.set_apps_range(timeline_ui::apps_range_label(snapshot, range_start, today).into());
     window.set_apps(ui_model::sync(window.get_apps(), app_rows, |a, b| {
         a.identity == b.identity
     }));
@@ -954,7 +958,7 @@ fn render_apps(
     window.set_selected_index(selected_index);
 
     let selected = (selected_index >= 0).then(|| &snapshot.applications[selected_index as usize]);
-    render_application(window, selected, &snapshot);
+    render_application(window, selected, snapshot);
 }
 
 fn render_application(
@@ -1248,17 +1252,10 @@ fn install_snapshot_callbacks(
                     .lock()
                     .map_err(|_| anyhow::anyhow!("storage lock poisoned"))?
                     .load_snapshot_image(slot.id)?;
-                let rgba = image::load_from_memory(&image.webp)?.to_rgba8();
-                if rgba.dimensions() != (slot.pixel_width, slot.pixel_height) {
-                    bail!("解密图片尺寸与元数据不一致");
-                }
-                let pixels = SharedPixelBuffer::<Rgba8Pixel>::clone_from_slice(
-                    rgba.as_raw(),
-                    rgba.width(),
-                    rgba.height(),
-                );
+                let preview =
+                    snapshot::decode_preview(image.webp, slot.pixel_width, slot.pixel_height)?;
                 Ok((
-                    Image::from_rgba8(pixels),
+                    preview,
                     format!(
                         "{} × {} · {} · 完整性校验通过",
                         slot.pixel_width,

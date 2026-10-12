@@ -12,7 +12,7 @@ use std::{
     os::windows::ffi::OsStrExt,
     path::{Component, Path, PathBuf, Prefix},
     ptr::{NonNull, null_mut},
-    time::{Duration, Instant},
+    time::Instant,
 };
 
 use slint::{Image, Rgba8Pixel, SharedPixelBuffer};
@@ -52,11 +52,10 @@ const MAX_VERSION_RESOURCE_BYTES: u32 = 4 * 1024 * 1024;
 const MAX_DESCRIPTION_UTF16_UNITS: usize = 1_024;
 
 thread_local! {
-    static CACHE: RefCell<VecDeque<(String, Image, Instant)>> = const { RefCell::new(VecDeque::new()) };
+    static CACHE: RefCell<crate::icon_cache::IconCache> = RefCell::new(crate::icon_cache::IconCache::default());
     static NAME_CACHE: RefCell<VecDeque<(String, Option<String>)>> = const { RefCell::new(VecDeque::new()) };
     static TINT_CACHE: RefCell<VecDeque<(String, slint::Color)>> = const { RefCell::new(VecDeque::new()) };
     static SOURCES: RefCell<Vec<timelens_storage::ApplicationIconSource>> = const { RefCell::new(Vec::new()) };
-    static SIZED_CACHE: RefCell<VecDeque<(Image, u32, Image)>> = const { RefCell::new(VecDeque::new()) };
 }
 
 pub fn register_sources(sources: Vec<timelens_storage::ApplicationIconSource>) {
@@ -67,7 +66,7 @@ pub fn register_sources(sources: Vec<timelens_storage::ApplicationIconSource>) {
         }
         for source in &sources {
             if !previous.contains(source) {
-                CACHE.with(|c| c.borrow_mut().retain(|(id, _, _)| id != &source.identity));
+                CACHE.with(|c| c.borrow_mut().invalidate(&source.identity));
                 NAME_CACHE.with(|c| c.borrow_mut().retain(|(id, _)| id != &source.identity));
                 TINT_CACHE.with(|c| c.borrow_mut().retain(|(id, _)| id != &source.identity));
             }
@@ -86,17 +85,7 @@ pub fn register_sources(sources: Vec<timelens_storage::ApplicationIconSource>) {
 /// lifetime unless evicted or their recorded source changes. Failed reads retry
 /// after 30 seconds so a transient installation/permission failure can recover.
 pub fn for_identity(identity: &str) -> Image {
-    if let Some(image) = CACHE.with(|cache| {
-        let mut cache = cache.borrow_mut();
-        let index = cache.iter().position(|(key, _, _)| key == identity)?;
-        let entry = cache.remove(index)?;
-        if entry.1.size().width == 0 && entry.2.elapsed() >= Duration::from_secs(30) {
-            return None;
-        }
-        let image = entry.1.clone();
-        cache.push_front(entry);
-        Some(image)
-    }) {
+    if let Some(image) = CACHE.with(|cache| cache.borrow_mut().get(identity, Instant::now())) {
         return image;
     }
 
@@ -116,14 +105,7 @@ pub fn for_identity(identity: &str) -> Image {
         })
         .map(readable_icon)
         .unwrap_or_default();
-    CACHE.with(|cache| {
-        let mut cache = cache.borrow_mut();
-        if cache.len() >= CACHE_CAPACITY {
-            cache.pop_back();
-        }
-        cache.push_front((identity.to_owned(), image.clone(), Instant::now()));
-    });
-    image
+    CACHE.with(|cache| cache.borrow_mut().insert(identity, image, Instant::now()))
 }
 
 /// The software renderer samples raster images without a reduction filter.
@@ -143,24 +125,18 @@ pub fn for_display(image: Image, physical_size: i32) -> Image {
     if original.width == width && original.height == height {
         return image;
     }
-    if let Some(scaled) = SIZED_CACHE.with(|cache| {
-        let mut cache = cache.borrow_mut();
-        let index = cache
-            .iter()
-            .position(|(source, pixels, _)| *source == image && *pixels == size)?;
-        let entry = cache.remove(index)?;
-        let scaled = entry.2.clone();
-        cache.push_front(entry);
-        Some(scaled)
-    }) {
+    if let Some(scaled) = CACHE.with(|cache| cache.borrow_mut().get_size(&image, size)) {
         return scaled;
     }
     let Some(pixels) = image.to_rgba8_premultiplied() else {
         return image;
     };
-    let source =
-        image::RgbaImage::from_raw(pixels.width(), pixels.height(), pixels.as_bytes().to_vec())
-            .expect("RGBA buffers contain four bytes per pixel");
+    let source = image::ImageBuffer::<image::Rgba<u8>, &[u8]>::from_raw(
+        pixels.width(),
+        pixels.height(),
+        pixels.as_bytes(),
+    )
+    .expect("RGBA buffers contain four bytes per pixel");
     let mut resized = image::imageops::resize(
         &source,
         width,
@@ -179,13 +155,7 @@ pub fn for_display(image: Image, physical_size: i32) -> Image {
         width,
         height,
     ));
-    SIZED_CACHE.with(|cache| {
-        let mut cache = cache.borrow_mut();
-        if cache.len() >= CACHE_CAPACITY {
-            cache.pop_back();
-        }
-        cache.push_front((image, size, scaled.clone()));
-    });
+    CACHE.with(|cache| cache.borrow_mut().insert_size(image, size, scaled.clone()));
     scaled
 }
 
@@ -195,15 +165,16 @@ fn readable_icon(image: Image) -> Image {
     let Some(mut pixels) = image.to_rgba8() else {
         return image;
     };
-    let visible: Vec<_> = pixels.as_slice().iter().filter(|p| p.a >= 96).collect();
-    let white = visible
-        .iter()
-        .filter(|p| p.r.min(p.g).min(p.b) >= 225)
-        .count();
-    if visible.is_empty()
-        || white * 4 < visible.len() * 3
-        || pixels.as_slice().iter().all(|p| p.a == 255)
-    {
+    let (visible, white) = pixels.as_slice().iter().filter(|p| p.a >= 96).fold(
+        (0usize, 0usize),
+        |(visible, white), pixel| {
+            (
+                visible + 1,
+                white + usize::from(pixel.r.min(pixel.g).min(pixel.b) >= 225),
+            )
+        },
+    );
+    if visible == 0 || white * 4 < visible * 3 || pixels.as_slice().iter().all(|p| p.a == 255) {
         return image;
     }
     let width = pixels.width();

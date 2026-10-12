@@ -1,6 +1,7 @@
 //! Bounded, memory-only view cache. Durable storage and its encryption are unchanged.
 use super::*;
 use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
+use std::sync::Arc;
 
 #[derive(Default)]
 pub(crate) struct TimelineCache {
@@ -9,7 +10,7 @@ pub(crate) struct TimelineCache {
 }
 
 struct Cached {
-    snapshot: TimelineSnapshot,
+    snapshot: Arc<TimelineSnapshot>,
     projections: HashMap<String, Projection>,
     next_boundary: i64,
     dirty: BTreeSet<String>,
@@ -103,8 +104,9 @@ fn sort_applications(applications: &mut [TimelineApplication]) {
 
 impl Cached {
     fn advance(&mut self, end: i64) {
-        let delta = end.saturating_sub(self.snapshot.range_ended_utc_ms) as u64;
-        for app in &mut self.snapshot.applications {
+        let snapshot = Arc::make_mut(&mut self.snapshot);
+        let delta = end.saturating_sub(snapshot.range_ended_utc_ms) as u64;
+        for app in &mut snapshot.applications {
             let Some(p) = self.projections.get(&app.identity) else {
                 continue;
             };
@@ -128,15 +130,15 @@ impl Cached {
             app.segments
                 .sort_unstable_by_key(|s| (s.started_utc_ms, s.ended_utc_ms));
         }
-        self.snapshot.range_ended_utc_ms = end;
-        sort_applications(&mut self.snapshot.applications);
+        snapshot.range_ended_utc_ms = end;
+        sort_applications(&mut snapshot.applications);
     }
 }
 
 impl Storage {
     /// Reuse completed application statistics, replacing only changed applications
     /// and extending ongoing intervals. Late batches invalidate their identities.
-    pub fn timeline_snapshot_cached(&self, start: i64, end: i64) -> Result<TimelineSnapshot> {
+    pub fn timeline_snapshot_cached(&self, start: i64, end: i64) -> Result<Arc<TimelineSnapshot>> {
         let changes = self.connection.total_changes();
         let cached = {
             let mut cache = self.timeline_cache.borrow_mut();
@@ -171,17 +173,17 @@ impl Storage {
                 let filter = serde_json::to_string(&sources)
                     .map_err(|e| StorageError::Integrity(e.to_string()))?;
                 let refreshed = self.timeline_snapshot_selected(start, end, Some(&filter))?;
-                cached
-                    .snapshot
+                let snapshot = Arc::make_mut(&mut cached.snapshot);
+                snapshot
                     .applications
                     .retain(|a| !roots.contains(&a.identity));
-                cached.snapshot.applications.extend(refreshed.applications);
-                cached.snapshot.keyboard_count = refreshed.keyboard_count;
-                cached.snapshot.left_click_count = refreshed.left_click_count;
-                cached.snapshot.middle_click_count = refreshed.middle_click_count;
-                cached.snapshot.right_click_count = refreshed.right_click_count;
-                cached.snapshot.monitoring_gaps = refreshed.monitoring_gaps;
-                sort_applications(&mut cached.snapshot.applications);
+                snapshot.applications.extend(refreshed.applications);
+                snapshot.keyboard_count = refreshed.keyboard_count;
+                snapshot.left_click_count = refreshed.left_click_count;
+                snapshot.middle_click_count = refreshed.middle_click_count;
+                snapshot.right_click_count = refreshed.right_click_count;
+                snapshot.monitoring_gaps = refreshed.monitoring_gaps;
+                sort_applications(&mut snapshot.applications);
                 cached.dirty.clear();
                 cached.projections = self.timeline_projections(&cached.snapshot)?;
                 cached.next_boundary = self.timeline_next_boundary(end)?;
@@ -192,7 +194,7 @@ impl Storage {
             Cached {
                 projections: self.timeline_projections(&snapshot)?,
                 next_boundary: self.timeline_next_boundary(end)?,
-                snapshot,
+                snapshot: Arc::new(snapshot),
                 dirty: BTreeSet::new(),
             }
         };
@@ -411,7 +413,7 @@ mod tests {
             cached_ms += time.elapsed().as_secs_f64() * 1000.0;
             cached_cpu += process_cpu_seconds() - cpu;
             app_count = full.applications.len();
-            assert!(cached == full, "incremental frame {index} differs");
+            assert!(*cached == full, "incremental frame {index} differs");
         }
         s.connection.execute_batch("ROLLBACK;").unwrap();
         let policy = s.snapshot_policy().unwrap();
@@ -504,12 +506,12 @@ mod tests {
         })
         .unwrap();
     }
-    fn check(s: &Storage, start: i64, end: i64) -> TimelineSnapshot {
+    fn check(s: &Storage, start: i64, end: i64) -> Arc<TimelineSnapshot> {
         let cached = s
             .timeline_snapshot_cached(BASE + start, BASE + end)
             .unwrap();
         assert_eq!(
-            cached,
+            *cached,
             s.timeline_snapshot(BASE + start, BASE + end).unwrap()
         );
         cached

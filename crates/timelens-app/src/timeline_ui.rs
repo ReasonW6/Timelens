@@ -326,11 +326,11 @@ pub fn render(window: &AppWindow, state: &Rc<RefCell<UiState>>, snapshot: &Timel
 }
 
 /// What the application totals cover: all records since the first, or today.
-pub fn apps_range_label(snapshot: &TimelineSnapshot, today: bool) -> String {
+pub fn apps_range_label(snapshot: &TimelineSnapshot, range_start: i64, today: bool) -> String {
     if today {
         format!(
             "今天 {}–{}",
-            local_label(snapshot.range_started_utc_ms, "%H:%M"),
+            local_label(range_start, "%H:%M"),
             local_label(snapshot.range_ended_utc_ms, "%H:%M")
         )
     } else if snapshot.applications.is_empty() {
@@ -338,7 +338,7 @@ pub fn apps_range_label(snapshot: &TimelineSnapshot, today: bool) -> String {
     } else {
         format!(
             "全部记录 · {}起",
-            local_label(snapshot.range_started_utc_ms, "%Y年%-m月%-d日")
+            local_label(range_start, "%Y年%-m月%-d日")
         )
     }
 }
@@ -346,6 +346,46 @@ pub fn apps_range_label(snapshot: &TimelineSnapshot, today: bool) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shared_all_time_snapshot_keeps_the_first_activity_date_in_its_label() {
+        let start = Local
+            .with_ymd_and_hms(2026, 9, 5, 12, 0, 0)
+            .earliest()
+            .unwrap()
+            .timestamp_millis();
+        let snapshot = TimelineSnapshot {
+            range_started_utc_ms: 1,
+            range_ended_utc_ms: start + 60_000,
+            applications: vec![timelens_storage::TimelineApplication {
+                identity: "fixture".into(),
+                display_name: "Fixture".into(),
+                opened_ms: 0,
+                displayed_ms: 0,
+                focused_ms: 0,
+                background_ms: 0,
+                window_count: 0,
+                keyboard_count: 0,
+                left_click_count: 0,
+                middle_click_count: 0,
+                right_click_count: 0,
+                windows: Default::default(),
+                segments: Default::default(),
+            }],
+            keyboard_count: 0,
+            left_click_count: 0,
+            middle_click_count: 0,
+            right_click_count: 0,
+            monitoring_gaps: Vec::new(),
+        };
+        assert_eq!(
+            apps_range_label(&snapshot, start, false),
+            "全部记录 · 2026年9月5日起"
+        );
+        assert_eq!(apps_range_label(&snapshot, start, true), "今天 12:00–12:01");
+        assert_eq!(snapshot.range_started_utc_ms, 1);
+    }
+
     #[test]
     fn exact_local_range_and_invalid_or_future_ranges() {
         let anchor = Local

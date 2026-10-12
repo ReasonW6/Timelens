@@ -8,9 +8,11 @@ mod recovery;
 mod relocation;
 mod snapshot_container;
 mod timeline_cache;
+mod timeline_series;
 pub use portable::{BackupInfo, BackupOptions, ExportFormat, PreparedRestore};
 pub use recovery::RecoveryReport;
 pub use relocation::RelocationStep;
+pub use timeline_series::TimelineSeries;
 
 pub use ai::{
     AiJob, AiJobKind, AiJobSpec, AiMessage, AiRetentionOutcome, AiSettings, AiVersion,
@@ -185,8 +187,8 @@ pub struct TimelineApplication {
     pub left_click_count: u64,
     pub middle_click_count: u64,
     pub right_click_count: u64,
-    pub windows: Vec<TimelineWindow>,
-    pub segments: Vec<TimelineSegment>,
+    pub windows: TimelineSeries<TimelineWindow>,
+    pub segments: TimelineSeries<TimelineSegment>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -712,8 +714,8 @@ impl Storage {
                 left_click_count: working.left_click_count,
                 middle_click_count: working.middle_click_count,
                 right_click_count: working.right_click_count,
-                windows,
-                segments: working.segments,
+                windows: windows.into(),
+                segments: working.segments.into(),
             });
         }
         timeline_applications.sort_by(|left, right| {

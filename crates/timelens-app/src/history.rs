@@ -22,6 +22,8 @@ use crate::{
     timeline_view::{self, ActivityEntry, ParticipantRole, Unrecorded},
     try_lock_storage, unix_time_ms,
 };
+#[path = "history_cache.rs"]
+mod paging;
 
 // Row heights; the view lays rows out with these, and the sticky day header
 // needs the same numbers to know which day is at the top.
@@ -62,15 +64,15 @@ struct Day {
     /// Days before today: 0 is today.
     offset: i32,
     date: NaiveDate,
-    entries: Vec<DayEntry>,
+    entries: Vec<Arc<DayEntry>>,
     unrecorded: Vec<Unrecorded>,
     totals: Vec<(String, u64)>,
     focus_ms: u64,
-    source: Option<TimelineSnapshot>,
+    source: Option<Arc<TimelineSnapshot>>,
 }
 
 pub struct HistoryState {
-    days: BTreeMap<i32, Day>,
+    days: BTreeMap<i32, Arc<Day>>,
     /// The oldest day offset fetched so far.
     loaded: i32,
     horizon: i32,
@@ -78,6 +80,7 @@ pub struct HistoryState {
     selected: Option<String>,
     past_refreshed: Instant,
     generation: u64,
+    paging: paging::Paging,
 }
 
 impl HistoryState {
@@ -90,6 +93,7 @@ impl HistoryState {
             selected: None,
             past_refreshed: Instant::now(),
             generation: GENERATION.load(Ordering::Acquire),
+            paging: paging::Paging::default(),
         }
     }
 }
@@ -106,14 +110,16 @@ fn load_day(storage: &Storage, offset: i32, previous: Option<&Day>) -> anyhow::R
     let snapshot = if offset == 0 {
         storage.timeline_snapshot_cached(start, end)?
     } else {
-        storage.timeline_snapshot(start, end)?
+        Arc::new(storage.timeline_snapshot(start, end)?)
     };
     let date = Local
         .timestamp_millis_opt(start)
         .single()
         .map(|d| d.date_naive())
         .unwrap_or_default();
-    Ok(Some(build_day(offset, date, &snapshot, previous)))
+    let mut day = build_day(offset, date, &snapshot, previous);
+    day.source = (offset == 0).then_some(snapshot);
+    Ok(Some(day))
 }
 
 fn earliest_change(old: &TimelineSnapshot, new: &TimelineSnapshot) -> i64 {
@@ -194,14 +200,16 @@ fn build_day(
     entries.extend(
         timeline_view::build_activity_rows(&tail)
             .into_iter()
-            .map(|entry| DayEntry {
-                key: format!(
-                    "{date}:{}:{}",
-                    entry.started_utc_ms,
-                    entry.identity.as_deref().unwrap_or_default()
-                ),
-                participants: timeline_view::participants(snapshot, &entry),
-                entry,
+            .map(|entry| {
+                Arc::new(DayEntry {
+                    key: format!(
+                        "{date}:{}:{}",
+                        entry.started_utc_ms,
+                        entry.identity.as_deref().unwrap_or_default()
+                    ),
+                    participants: timeline_view::participants(snapshot, &entry),
+                    entry,
+                })
             }),
     );
     let mut totals = BTreeMap::<String, u64>::new();
@@ -220,7 +228,7 @@ fn build_day(
         unrecorded: timeline_view::unrecorded_spans(snapshot),
         totals,
         focus_ms: timeline_view::total_focus_ms(snapshot),
-        source: (offset == 0).then(|| snapshot.clone()),
+        source: (offset == 0).then(|| Arc::new(snapshot.clone())),
     }
 }
 
@@ -348,8 +356,25 @@ impl Row<'_> {
 }
 
 /// Flatten loaded days into rows, earliest first, with the offsets of each day.
+#[cfg(test)]
 fn flatten(state: &HistoryState) -> (Vec<HistoryItem>, Vec<DayAnchor>) {
-    let query = state.query.trim().to_lowercase();
+    flatten_days(
+        state.days.values().rev().map(Arc::as_ref),
+        &state.query,
+        state.loaded,
+        state.horizon,
+        Some((f32::MIN, f32::MAX)),
+    )
+}
+
+fn flatten_days<'a>(
+    days: impl Iterator<Item = &'a Day>,
+    query: &str,
+    loaded: i32,
+    horizon: i32,
+    render: Option<(f32, f32)>,
+) -> (Vec<HistoryItem>, Vec<DayAnchor>) {
+    let query = query.trim().to_lowercase();
     let mut items = Vec::<HistoryItem>::new();
     let mut anchors = Vec::<DayAnchor>::new();
     let blank = || HistoryItem {
@@ -369,7 +394,7 @@ fn flatten(state: &HistoryState) -> (Vec<HistoryItem>, Vec<DayAnchor>) {
         rail_bottom: false,
     };
     // More history waits above; the row loads it when clicked.
-    let can_load = query.is_empty() && state.loaded >= 0 && state.loaded < state.horizon;
+    let can_load = query.is_empty() && loaded >= 0 && loaded < horizon;
     items.push(HistoryItem {
         kind: KIND_END,
         key: "end".into(),
@@ -386,11 +411,12 @@ fn flatten(state: &HistoryState) -> (Vec<HistoryItem>, Vec<DayAnchor>) {
         ..blank()
     });
     let mut top = END_HEIGHT;
-    for day in state.days.values().rev() {
+    for day in days {
         let entries = day
             .entries
             .iter()
             .filter(|e| matches_query(e, &query))
+            .map(Arc::as_ref)
             .collect::<Vec<_>>();
         if entries.is_empty() && (day.offset != 0 || !query.is_empty()) {
             continue;
@@ -424,7 +450,11 @@ fn flatten(state: &HistoryState) -> (Vec<HistoryItem>, Vec<DayAnchor>) {
             subtitle: subtitle.clone().into(),
             time: apps.clone().into(),
             duration: duration.clone().into(),
-            shares: shares(&day.totals),
+            shares: if render.is_some_and(|(from, to)| top + DAY_HEIGHT >= from && top <= to) {
+                shares(&day.totals)
+            } else {
+                ModelRc::default()
+            },
             ..blank()
         });
         top += DAY_HEIGHT;
@@ -489,6 +519,8 @@ fn flatten(state: &HistoryState) -> (Vec<HistoryItem>, Vec<DayAnchor>) {
                         top += PAUSE_HEIGHT;
                     }
                     let identity = entry.identity.as_deref().unwrap_or_default();
+                    let visible =
+                        render.is_some_and(|(from, to)| top + ENTRY_HEIGHT >= from && top <= to);
                     let others = item
                         .participants
                         .iter()
@@ -498,23 +530,43 @@ fn flatten(state: &HistoryState) -> (Vec<HistoryItem>, Vec<DayAnchor>) {
                         kind: KIND_ENTRY,
                         key: item.key.clone().into(),
                         height: ENTRY_HEIGHT,
-                        title: app_icon::display_name(identity, &entry.name).into(),
-                        subtitle: entry_note(&item.participants).into(),
+                        title: if visible {
+                            app_icon::display_name(identity, &entry.name).into()
+                        } else {
+                            SharedString::new()
+                        },
+                        subtitle: if visible {
+                            entry_note(&item.participants).into()
+                        } else {
+                            SharedString::new()
+                        },
                         time: clock(entry.started_utc_ms).into(),
                         duration: format_duration(entry.duration_ms).into(),
-                        icon: app_icon::for_identity(identity),
-                        tint: app_icon::tint(identity),
-                        stack: ModelRc::new(VecModel::from(
-                            others
-                                .iter()
-                                .take(STACK_SHOWN)
-                                .map(|p| StackApp {
-                                    name: app_icon::display_name(&p.identity, &p.name).into(),
-                                    icon: app_icon::for_identity(&p.identity),
-                                    tint: app_icon::tint(&p.identity),
-                                })
-                                .collect::<Vec<_>>(),
-                        )),
+                        icon: if visible {
+                            app_icon::for_identity(identity)
+                        } else {
+                            Default::default()
+                        },
+                        tint: if visible {
+                            app_icon::tint(identity)
+                        } else {
+                            Default::default()
+                        },
+                        stack: if visible {
+                            ModelRc::new(VecModel::from(
+                                others
+                                    .iter()
+                                    .take(STACK_SHOWN)
+                                    .map(|p| StackApp {
+                                        name: app_icon::display_name(&p.identity, &p.name).into(),
+                                        icon: app_icon::for_identity(&p.identity),
+                                        tint: app_icon::tint(&p.identity),
+                                    })
+                                    .collect::<Vec<_>>(),
+                            ))
+                        } else {
+                            ModelRc::default()
+                        },
                         more: others.len().saturating_sub(STACK_SHOWN) as i32,
                         ..blank()
                     });
@@ -528,7 +580,11 @@ fn flatten(state: &HistoryState) -> (Vec<HistoryItem>, Vec<DayAnchor>) {
             subtitle: subtitle.into(),
             duration: duration.into(),
             apps: apps.into(),
-            shares: shares(&day.totals),
+            shares: if render.is_some_and(|(from, to)| top >= from && day_top <= to) {
+                shares(&day.totals)
+            } else {
+                ModelRc::default()
+            },
             top: day_top,
             bottom: top,
         });
@@ -573,7 +629,7 @@ fn patch(model: &VecModel<HistoryItem>, items: Vec<HistoryItem>) {
     }
 }
 
-/// Where each row starts, by key.
+#[cfg(test)]
 fn row_tops(items: impl Iterator<Item = HistoryItem>) -> Vec<(SharedString, f32, f32)> {
     let mut top = 0.0;
     items
@@ -585,37 +641,6 @@ fn row_tops(items: impl Iterator<Item = HistoryItem>) -> Vec<(SharedString, f32,
         .collect()
 }
 
-fn publish(window: &AppWindow, state: &HistoryState) {
-    let (items, anchors) = flatten(state);
-    let current = window.get_history();
-    // Unless the view follows now, keep the row at its top where it was while
-    // rows come and go around it.
-    let scroll = -window.get_history_scroll();
-    let anchor = (!window.get_history_follow())
-        .then(|| {
-            row_tops(current.iter())
-                .into_iter()
-                .find(|(_, top, height)| top + height > scroll)
-        })
-        .flatten();
-    match current.as_any().downcast_ref::<VecModel<HistoryItem>>() {
-        Some(model) => patch(model, items),
-        None => window.set_history(ModelRc::new(VecModel::from(items))),
-    }
-    if let Some((key, old_top, _)) = anchor
-        && let Some((_, new_top, _)) = row_tops(window.get_history().iter())
-            .into_iter()
-            .find(|(k, _, _)| *k == key)
-        && new_top != old_top
-    {
-        window.set_history_scroll(-(scroll + new_top - old_top));
-    }
-    window.set_day_anchors(ModelRc::new(VecModel::from(anchors)));
-    window.set_history_selected(state.selected.clone().unwrap_or_default().into());
-}
-
-/// How many days back the oldest retained record lies; nothing older needs
-/// loading, and retention never keeps anything beyond its period.
 fn reach(storage: &Storage) -> Option<i32> {
     let policy = storage.retention_policy().ok()?;
     let oldest = match storage.earliest_activity_utc_ms().ok()? {
@@ -630,102 +655,12 @@ fn reach(storage: &Storage) -> Option<i32> {
     Some(policy.days.map_or(oldest, |days| oldest.min(days as i32)))
 }
 
-/// Fetch more days until `until` is loaded. Returns false when storage is busy.
-fn load_until(
-    storage: &Arc<Mutex<Storage>>,
-    state: &mut HistoryState,
-    until: i32,
-) -> anyhow::Result<bool> {
-    let Some(storage) = try_lock_storage(storage)? else {
-        return Ok(false);
-    };
-    if let Some(reach) = reach(&storage) {
-        state.horizon = reach;
-    }
-    let until = until.min(state.horizon);
-    while state.loaded < until {
-        let offset = state.loaded + 1;
-        if let Some(day) = load_day(&storage, offset, state.days.get(&offset))? {
-            state.days.insert(offset, day);
-        }
-        state.loaded = offset;
-    }
-    Ok(true)
-}
-
-/// Rebuild today, and earlier loaded days now and then.
 pub fn refresh(
     window: &AppWindow,
     storage: &Arc<Mutex<Storage>>,
     state: &Rc<RefCell<HistoryState>>,
 ) -> anyhow::Result<()> {
-    let mut state = state.borrow_mut();
-    if state.loaded < 0 {
-        // Start with today and yesterday; keep going until something shows.
-        if !load_until(storage, &mut state, 1)? {
-            return Ok(());
-        }
-        let mut until = 1;
-        while state
-            .days
-            .values()
-            .filter(|d| !d.entries.is_empty())
-            .count()
-            < 2
-            && state.loaded < state.horizon
-            && until < 14
-        {
-            until += DAYS_PER_LOAD;
-            load_until(storage, &mut state, until)?;
-        }
-    } else {
-        // A new day began while the app was open: every cached offset is now one
-        // day off, so start over before reloading any of them.
-        if state
-            .days
-            .get(&0)
-            .is_some_and(|d| d.date != Local::now().date_naive())
-        {
-            state.days.clear();
-            state.loaded = -1;
-            return Ok(());
-        }
-        let Some(guard) = try_lock_storage(storage)? else {
-            return Ok(());
-        };
-        let generation = GENERATION.load(Ordering::Acquire);
-        let past = state.past_refreshed.elapsed() >= PAST_REFRESH;
-        let offsets = if generation != state.generation {
-            (0..=state.loaded).collect::<Vec<_>>()
-        } else if past {
-            (0..=state.loaded.min(1)).collect()
-        } else {
-            vec![0]
-        };
-        state.generation = generation;
-        for offset in offsets {
-            match load_day(&guard, offset, state.days.get(&offset))? {
-                Some(day) => {
-                    state.days.insert(offset, day);
-                }
-                None => {
-                    state.days.remove(&offset);
-                }
-            }
-        }
-        if past {
-            state.past_refreshed = Instant::now();
-            // Retention removes whole days at the far end; stop showing them.
-            if let Some(reach) = reach(&guard) {
-                state.horizon = reach;
-                let horizon = state.horizon;
-                state.days.retain(|offset, _| *offset <= horizon);
-                state.loaded = state.loaded.min(horizon);
-            }
-        }
-    }
-    publish(window, &state);
-    Ok(())
+    paging::refresh(window, storage, state)
 }
 
 /// Every loaded day reads differently, for example after merging applications;
@@ -743,6 +678,7 @@ pub fn generation() -> u64 {
 pub fn reset(state: &Rc<RefCell<HistoryState>>) {
     let mut state = state.borrow_mut();
     state.days.clear();
+    paging::reset(&mut state);
     state.loaded = -1;
     state.selected = None;
 }
@@ -753,6 +689,7 @@ fn find<'a>(state: &'a HistoryState, key: &str) -> Option<&'a DayEntry> {
         .values()
         .flat_map(|day| &day.entries)
         .find(|entry| entry.key == key)
+        .map(Arc::as_ref)
 }
 
 fn show_detail(
@@ -901,30 +838,32 @@ pub fn install(
         let weak = window.as_weak();
         let storage = Arc::clone(&storage);
         let state = Rc::clone(&state);
+        window.on_history_viewport_changed(move || {
+            if let Some(window) = weak.upgrade() {
+                paging::viewport(&window, &storage, &state);
+            }
+        });
+    }
+    {
+        let weak = window.as_weak();
+        let storage = Arc::clone(&storage);
+        let state = Rc::clone(&state);
+        window.on_history_data_ready(move || {
+            if let Some(window) = weak.upgrade()
+                && let Err(error) = paging::refresh(&window, &storage, &state)
+            {
+                window.set_action_status(format!("读取历史失败：{error}").into());
+            }
+        });
+    }
+    {
+        let weak = window.as_weak();
+        let storage = Arc::clone(&storage);
+        let state = Rc::clone(&state);
         window.on_history_load_more(move || {
-            let Some(window) = weak.upgrade() else {
-                return;
-            };
-            let mut s = state.borrow_mut();
-            if s.loaded < 0 || s.loaded >= s.horizon {
-                return;
+            if let Some(window) = weak.upgrade() {
+                paging::more(&window, &storage, &state);
             }
-            // Skip over days without records so scrolling always reveals something.
-            let shown =
-                |s: &HistoryState| s.days.values().filter(|d| !d.entries.is_empty()).count();
-            let before = shown(&s);
-            while shown(&s) == before && s.loaded < s.horizon {
-                let until = s.loaded + DAYS_PER_LOAD;
-                match load_until(&storage, &mut s, until) {
-                    Ok(true) => {}
-                    Ok(false) => break,
-                    Err(error) => {
-                        window.set_action_status(format!("载入更早的记录失败：{error}").into());
-                        break;
-                    }
-                }
-            }
-            publish(&window, &s);
         });
     }
     {
@@ -932,18 +871,9 @@ pub fn install(
         let storage = Arc::clone(&storage);
         let state = Rc::clone(&state);
         window.on_history_search(move |query| {
-            let Some(window) = weak.upgrade() else {
-                return;
-            };
-            let mut s = state.borrow_mut();
-            s.query = query.to_string();
-            // Searching looks through a month at most, then whatever is loaded.
-            if !s.query.trim().is_empty()
-                && let Err(error) = load_until(&storage, &mut s, 30)
-            {
-                window.set_action_status(format!("搜索失败：{error}").into());
+            if let Some(window) = weak.upgrade() {
+                paging::search(&window, &storage, &state, &query);
             }
-            publish(&window, &s);
         });
     }
     {
@@ -994,32 +924,13 @@ pub fn install(
                 window.set_action_status("日期不能晚于今天".into());
                 return;
             }
-            let mut s = state.borrow_mut();
+            let s = state.borrow();
             if offset as i32 > s.horizon {
                 window.set_action_status("这一天早于最早的记录".into());
                 return;
             }
-            if let Err(error) = load_until(&storage, &mut s, offset as i32) {
-                window.set_action_status(format!("跳转失败：{error}").into());
-                return;
-            }
-            s.query.clear();
-            window.set_history_query(SharedString::new());
-            window.set_history_follow(false);
-            publish(&window, &s);
-            let target = s
-                .days
-                .get(&(offset as i32))
-                .filter(|day| !day.entries.is_empty());
-            match target {
-                Some(day) => {
-                    let (title, _) = day_title(day);
-                    if let Some(anchor) = flatten(&s).1.into_iter().find(|a| a.title == title) {
-                        window.set_history_scroll(-anchor.top);
-                    }
-                }
-                None => window.set_action_status("这一天没有记录".into()),
-            }
+            drop(s);
+            paging::jump(&window, &storage, &state, offset as i32);
         });
     }
     // Actions from the detail pane act on the selected entry's span.
@@ -1059,7 +970,7 @@ mod tests {
     use super::*;
     use timelens_storage::{TimelineApplication, TimelineSegment};
 
-    fn history_fixture(end: i64) -> TimelineSnapshot {
+    pub(super) fn history_fixture(end: i64) -> TimelineSnapshot {
         let start = 1_700_000_000_000;
         let spans = [(start, start + 300_000), (start + 900_000, end)];
         TimelineSnapshot {
@@ -1077,7 +988,7 @@ mod tests {
                 left_click_count: 0,
                 middle_click_count: 0,
                 right_click_count: 0,
-                windows: vec![],
+                windows: vec![].into(),
                 segments: spans
                     .into_iter()
                     .map(|(began, ended)| TimelineSegment {

@@ -3,6 +3,7 @@
 
 mod collection;
 mod data_directory;
+mod input_identity;
 mod spool;
 
 use std::{
@@ -302,12 +303,12 @@ fn collect_window_events(pipe_name: &str, data_directory: PathBuf) -> Result<()>
         if changes.reconcile || last_reconcile.is_due(Instant::now()) {
             raw = observer.reconcile_transitions()?.current;
             raw_tray = observer.current_tray_presence();
-            identities.extend(window_identities(&raw));
+            identities.refresh(&raw);
             last_reconcile.mark(Instant::now());
         } else if !changes.events.is_empty() {
             raw = observer.apply_window_events(changes)?.current;
             raw_tray = observer.current_tray_presence();
-            identities.extend(window_identities(&raw));
+            identities.refresh(&raw);
         }
         let (observed_now, mono) = observer.timestamp();
         let now = match continue_run_clock(last_now, observed_now) {
@@ -401,6 +402,7 @@ fn collect_window_events(pipe_name: &str, data_directory: PathBuf) -> Result<()>
             &filter.policy,
             filter.blocked,
         )?;
+        identities.settled();
         if input.take_new_overflow() {
             let gap = CollectorEvent {
                 observed_at_utc_ms: now,
@@ -945,7 +947,7 @@ impl InputAggregator {
     fn add(&mut self, drain: InputDrain, identities: &HashMap<u64, String>) -> Result<()> {
         self.add_private(
             drain,
-            identities,
+            &input_identity::InputIdentities::for_test(identities),
             &timelens_ipc::privacy::Policy::default(),
             false,
         )
@@ -953,7 +955,7 @@ impl InputAggregator {
     fn add_private(
         &mut self,
         drain: InputDrain,
-        identities: &HashMap<u64, String>,
+        identities: &input_identity::InputIdentities,
         policy: &timelens_ipc::privacy::Policy,
         blocked: bool,
     ) -> Result<()> {
@@ -976,12 +978,10 @@ impl InputAggregator {
             let key = InputBucketKey {
                 local_time,
                 focused_application_identity: identities
-                    .get(&sample.window_id)
+                    .identity(&sample)
                     .filter(|id| !policy.activity.contains(*id) && !policy.input.contains(*id))
-                    .cloned(),
-                anonymous_only: identities
-                    .get(&sample.window_id)
-                    .is_some_and(|id| policy.input.contains(id)),
+                    .map(str::to_owned),
+                anonymous_only: identities.anonymous_only(&sample, policy),
             };
             if !self.buckets.contains_key(&key)
                 && self.buckets.len() >= MAX_INPUT_BUCKETS_PER_MINUTE
@@ -1119,11 +1119,10 @@ fn input_minute(key: InputBucketKey, counts: InputBucketCounts) -> Option<InputM
     })
 }
 
-fn window_identities(windows: &[timelens_observer::WindowObservation]) -> HashMap<u64, String> {
-    windows
-        .iter()
-        .map(|window| (window.window_id, window.application_identity.clone()))
-        .collect()
+fn window_identities(
+    windows: &[timelens_observer::WindowObservation],
+) -> input_identity::InputIdentities {
+    input_identity::InputIdentities::from_windows(windows)
 }
 
 fn local_time_facts(utc_ms: i64) -> Result<LocalTimeFacts> {
@@ -1413,6 +1412,7 @@ mod tests {
                         InputSample {
                             minute_started_at_utc_ms: minute.minute_started_at_utc_ms,
                             window_id: 42,
+                            window_process_id: 0,
                             kind: InputSampleKind::Keyboard {
                                 scan_code: 0x1e,
                                 keyboard_layout: 0x0804_0804,
@@ -1422,12 +1422,14 @@ mod tests {
                         InputSample {
                             minute_started_at_utc_ms: minute.minute_started_at_utc_ms,
                             window_id: 42,
+                            window_process_id: 0,
                             kind: InputSampleKind::Mouse(MouseButton::Left),
                             count: 2,
                         },
                         InputSample {
                             minute_started_at_utc_ms: minute.minute_started_at_utc_ms,
                             window_id: 42,
+                            window_process_id: 0,
                             kind: InputSampleKind::Mouse(MouseButton::Middle),
                             count: 1,
                         },
@@ -1495,6 +1497,7 @@ mod tests {
                     samples: vec![InputSample {
                         minute_started_at_utc_ms: minute.minute_started_at_utc_ms,
                         window_id: 42,
+                        window_process_id: 0,
                         kind: InputSampleKind::Mouse(MouseButton::Left),
                         count: 1,
                     }],

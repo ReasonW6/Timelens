@@ -217,6 +217,9 @@ export component AppWindow inherits Window {
     in property <bool> can-next-day;
     // The home history and the activity picked in it.
     in property <[HistoryItem]> history;
+    in property <[float]> history-positions;
+    in property <length> history-content-height;
+    out property <length> history-visible-height;
     in property <[DayAnchor]> day-anchors;
     in-out property <length> history-scroll: 0px;
     // The history stays at its newest rows until the user scrolls up.
@@ -319,6 +322,8 @@ export component AppWindow inherits Window {
     callback today-selected;
     callback time-range-selected(string, string);
     callback history-load-more;
+    callback history-viewport-changed;
+    callback history-data-ready;
     callback history-search(string);
     callback history-select(string);
     callback history-close;
@@ -536,16 +541,24 @@ export component AppWindow inherits Window {
                                             property <length> bottom: min(0px, self.visible-height - self.viewport-height);
                                             property <int> to-end: root.history-to-end;
                                             viewport-y <=> root.history-scroll;
+                                            viewport-height: root.history-content-height + 20px;
+                                            changed visible-height => {
+                                                root.history-visible-height = self.visible-height;
+                                                root.history-viewport-changed();
+                                            }
                                             changed bottom => { if root.history-follow { self.viewport-y = self.bottom; } }
                                             changed to-end => { self.viewport-y = self.bottom; }
                                             changed viewport-y => {
                                                 root.history-follow = self.viewport-y <= self.bottom + 2px;
                                                 if -self.viewport-y < 160px && self.viewport-y > self.bottom { root.history-load-more(); }
+                                                root.history-viewport-changed();
                                             }
-                                            VerticalLayout {
-                                                alignment: start;
-                                                padding-bottom: 20px;
-                                                for item in root.history : HistoryRow {
+                                            Rectangle {
+                                                width: history-list.visible-width;
+                                                height: root.history-content-height + 20px;
+                                                for item[index] in root.history : HistoryRow {
+                                                    y: root.history-positions[index] * 1px;
+                                                    width: parent.width;
                                                     item: item;
                                                     selected: item.key != "" && item.key == root.history-selected;
                                                     select => { if item.kind == 5 { root.history-load-more(); } else { root.history-select(item.key); } }
