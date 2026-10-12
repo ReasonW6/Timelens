@@ -21,8 +21,8 @@ pub use ai::{
 
 pub use milestone3::{
     LocalReport, LocalReportApplication, LocalReportGap, LocalReportSnapshotReason,
-    SnapshotDisplay, SnapshotImage, SnapshotMissingReason, SnapshotPolicy, SnapshotSlot,
-    SnapshotStoreRequest, SnapshotTrigger,
+    SnapshotDeletion, SnapshotDisplay, SnapshotImage, SnapshotMissingReason, SnapshotPolicy,
+    SnapshotSlot, SnapshotStoreRequest, SnapshotTrigger,
 };
 
 use std::{

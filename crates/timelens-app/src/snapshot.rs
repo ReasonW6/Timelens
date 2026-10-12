@@ -199,6 +199,21 @@ pub(crate) fn decode_preview(webp: Vec<u8>, width: u32, height: u32) -> Result<s
     Ok(slint::Image::from_rgba8(pixels))
 }
 
+/// Grid thumbnails are small enough that a screenful costs a few MiB.
+const THUMBNAIL_WIDTH: u32 = 240;
+const THUMBNAIL_HEIGHT: u32 = 135;
+
+pub(crate) fn decode_thumbnail(webp: &[u8]) -> Result<slint::SharedPixelBuffer<slint::Rgb8Pixel>> {
+    let thumbnail = image::load_from_memory(webp)?
+        .thumbnail(THUMBNAIL_WIDTH, THUMBNAIL_HEIGHT)
+        .into_rgb8();
+    Ok(slint::SharedPixelBuffer::clone_from_slice(
+        thumbnail.as_raw(),
+        thumbnail.width(),
+        thumbnail.height(),
+    ))
+}
+
 fn try_run_heavy_task<T>(operation: impl FnOnce() -> Result<T>) -> Option<Result<T>> {
     match HEAVY_TASK_GATE.try_lock() {
         Ok(_guard) => Some(operation()),
@@ -1349,6 +1364,20 @@ mod tests {
             .unwrap();
         assert_eq!(actual.as_bytes(), previous.as_raw());
         assert!(decode_preview(webp, 7, 3).is_err());
+    }
+
+    #[test]
+    fn thumbnails_fit_the_grid_and_keep_the_aspect_ratio() {
+        for (width, height, expected) in [(1920, 1080, (240, 135)), (1080, 1920, (76, 135))] {
+            let pixels = RgbaImage::from_pixel(width, height, image::Rgba([40, 90, 200, 255]));
+            let mut webp = Vec::new();
+            image::codecs::webp::WebPEncoder::new_lossless(&mut webp)
+                .write_image(pixels.as_raw(), width, height, ExtendedColorType::Rgba8)
+                .unwrap();
+            let thumbnail = decode_thumbnail(&webp).unwrap();
+            assert_eq!((thumbnail.width(), thumbnail.height()), expected);
+            assert_eq!(thumbnail.as_slice()[0], slint::Rgb8Pixel::new(40, 90, 200));
+        }
     }
 
     #[test]

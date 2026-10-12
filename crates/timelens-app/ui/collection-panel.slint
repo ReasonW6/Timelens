@@ -1,7 +1,9 @@
 import { ComboBox, LineEdit, ScrollView } from "std-widgets.slint";
 import { Theme, Action, Label, Note, SectionTitle, Rule, CheckBox, StatusLine, Segmented, Segment, Switch, SettingRow, SettingsHeader, SettingsGroup, SettingExpander } from "theme.slint";
 
-export struct KeyCell { label: string, count: string, strength: float, col: float, row: float, units: float }
+// A key's position and size are in key units on the 108-key board.
+export struct KeyCell { label: string, count: string, strength: float, x: float, y: float, w: float, h: float }
+export struct ButtonHeat { count: string, strength: float }
 export global CollectionState {
     in-out property <bool> open: false;
     in-out property <int> page: 0;
@@ -24,13 +26,96 @@ export global CollectionState {
     in-out property <string> totals;
     in-out property <string> system;
     in-out property <[KeyCell]> keys;
+    in-out property <string> unplaced-keys;
+    in-out property <ButtonHeat> mouse-left;
+    in-out property <ButtonHeat> mouse-middle;
+    in-out property <ButtonHeat> mouse-right;
     callback opened;
     callback choose(int);
     callback action(int);
 }
 
+// A heat color stays readable under its label.
+global Heat {
+    public pure function ink(strength: float) -> color {
+        return strength >= 0.8 ? #ffffff : strength > 0.5 ? #000000 : Theme.ink;
+    }
+}
+
+// One mouse button: the body's outline clipped to the button's part, so each
+// button keeps the rounded corners of the mouse it sits on.
+component MouseButtonArea inherits Rectangle {
+    in property <ButtonHeat> heat;
+    in property <length> body-x;
+    in property <length> body-width;
+    in property <length> body-height;
+    in property <length> body-radius;
+    clip: true;
+    Rectangle {
+        x: -root.body-x; y: 0px;
+        width: root.body-width; height: root.body-height;
+        border-radius: root.body-radius;
+        background: #4a50c8.mix(#eceef3, root.heat.strength);
+    }
+    Text {
+        y: root.height - 30px; height: 20px;
+        text: root.heat.count;
+        color: Heat.ink(root.heat.strength);
+        font-size: 12px; font-weight: 600;
+        horizontal-alignment: center;
+    }
+}
+
+component MouseHeatMap inherits Rectangle {
+    private property <length> body-width: 128px;
+    private property <length> body-height: 200px;
+    private property <length> radius: 60px;
+    private property <length> button-height: 92px;
+    width: root.body-width;
+    height: root.body-height;
+    // The palm below the buttons.
+    Rectangle { border-radius: root.radius; background: Theme.surface-2; }
+    MouseButtonArea {
+        x: 0px; y: 0px; width: root.body-width / 2 - 1px; height: root.button-height;
+        heat: CollectionState.mouse-left;
+        body-x: 0px; body-width: root.body-width; body-height: root.body-height; body-radius: root.radius;
+    }
+    MouseButtonArea {
+        x: root.body-width / 2 + 1px; y: 0px; width: root.body-width / 2 - 1px; height: root.button-height;
+        heat: CollectionState.mouse-right;
+        body-x: root.body-width / 2 + 1px; body-width: root.body-width; body-height: root.body-height; body-radius: root.radius;
+    }
+    // The wheel sits on the seam between both buttons.
+    Rectangle {
+        x: (root.body-width - self.width) / 2; y: 18px;
+        width: 22px; height: 46px;
+        border-radius: 11px;
+        border-width: 2px;
+        border-color: Theme.layer;
+        background: #4a50c8.mix(#eceef3, CollectionState.mouse-middle.strength);
+    }
+    Rectangle { y: root.button-height; height: 1px; background: Theme.line; }
+    Rectangle { border-radius: root.radius; border-width: 1px; border-color: #c9cdd8; }
+    Image {
+        y: root.button-height + 40px; width: 20px; height: 20px;
+        source: @image-url("icons/mouse.svg");
+        colorize: Theme.ink-4;
+    }
+}
+
+component MouseLegend inherits HorizontalLayout {
+    in property <string> label;
+    in property <ButtonHeat> heat;
+    spacing: 10px;
+    VerticalLayout { alignment: center; Rectangle { width: 14px; height: 14px; border-radius: 3px; border-width: 1px; border-color: Theme.line; background: #4a50c8.mix(#eceef3, root.heat.strength); } }
+    Text { width: 128px; text: root.label; color: Theme.ink-2; font-size: 13px; vertical-alignment: center; }
+    Text { text: root.heat.count + " 次"; color: Theme.ink; font-size: 14px; font-weight: 600; font-family: Theme.font-display; vertical-alignment: center; }
+}
+
 export component CollectionPanel inherits Rectangle {
     background: Theme.paper;
+    // One key unit; the 22.5-unit board scrolls sideways once it no longer fits.
+    private property <length> key-unit: max(38px, min(46px, (root.width - 34px) / 22.5));
 
     VerticalLayout {
         spacing: 10px;
@@ -191,30 +276,31 @@ export component CollectionPanel inherits Rectangle {
                 SectionTitle { text: "物理键位热度"; }
                 Note { text: "按键抬起后再次按下计为一次。键帽标记物理位置，不代表输入内容。"; }
                 keyboard-scroll := ScrollView {
-                    height: 268px;
+                    height: root.key-unit * 6.5 + 14px;
                     vertical-stretch: 0;
-                    viewport-width: max(704px, self.visible-width);
-                    viewport-height: 250px;
+                    viewport-width: max(root.key-unit * 22.5, self.visible-width);
+                    viewport-height: root.key-unit * 6.5;
                     horizontal-scrollbar-policy: as-needed;
                     vertical-scrollbar-policy: always-off;
                     Rectangle {
                         width: keyboard-scroll.viewport-width;
-                        height: 250px;
+                        height: root.key-unit * 6.5;
                         for key in CollectionState.keys : Rectangle {
-                            x: key.col * parent.width / 16;
-                            y: key.row * 50px;
-                            width: key.units * parent.width / 16 - 4px;
-                            height: 46px;
+                            x: key.x * root.key-unit;
+                            y: key.y * root.key-unit;
+                            width: key.w * root.key-unit - 4px;
+                            height: key.h * root.key-unit - 4px;
                             border-radius: 5px;
                             border-width: 1px;
                             border-color: key.strength > 0 ? #b6baf0 : Theme.line;
                             // Slint mix() applies the factor to its receiver: zero stays paper-gray.
                             background: #4a50c8.mix(#eceef3, key.strength);
                             VerticalLayout {
-                                padding: 4px;
-                                spacing: 2px;
-                                Text { text: key.label; color: key.strength >= 0.8 ? #ffffff : key.strength > 0.5 ? #000000 : Theme.ink; font-size: 11px; horizontal-alignment: center; }
-                                Text { text: key.count; color: key.strength >= 0.8 ? #ffffff : key.strength > 0.5 ? #000000 : Theme.ink; font-size: 10px; horizontal-alignment: center; }
+                                padding: 3px;
+                                spacing: 1px;
+                                alignment: center;
+                                Text { text: key.label; color: Heat.ink(key.strength); font-size: 11px; horizontal-alignment: center; overflow: elide; }
+                                Text { text: key.count; color: Heat.ink(key.strength); font-size: 10px; horizontal-alignment: center; overflow: elide; }
                             }
                         }
                     }
@@ -228,6 +314,24 @@ export component CollectionPanel inherits Rectangle {
                     Rectangle { width: 22px; height: 12px; border-radius: 2px; background: #4a50c8.mix(#eceef3, 0.75); }
                     Rectangle { width: 22px; height: 12px; border-radius: 2px; background: #4a50c8; }
                     Note { text: "多"; }
+                    Rectangle { horizontal-stretch: 1; }
+                }
+                if CollectionState.unplaced-keys != "" : Note { text: CollectionState.unplaced-keys; font-size: 12px; }
+                Rule { }
+                SectionTitle { text: "鼠标按键热度"; font-size: 18px; }
+                Note { text: "当天鼠标左键、中键和右键的按下次数，颜色与上方键位使用同一色阶。"; }
+                HorizontalLayout {
+                    spacing: 32px;
+                    padding-left: 8px;
+                    MouseHeatMap { }
+                    VerticalLayout {
+                        alignment: center;
+                        horizontal-stretch: 0;
+                        spacing: 10px;
+                        MouseLegend { label: "左键"; heat: CollectionState.mouse-left; }
+                        MouseLegend { label: "中键（滚轮按下）"; heat: CollectionState.mouse-middle; }
+                        MouseLegend { label: "右键"; heat: CollectionState.mouse-right; }
+                    }
                     Rectangle { horizontal-stretch: 1; }
                 }
                 Rule { }

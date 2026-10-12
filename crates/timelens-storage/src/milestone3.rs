@@ -235,6 +235,15 @@ pub struct LocalReportSnapshotReason {
     pub slot_count: u64,
 }
 
+/// The outcome of deleting several snapshot images at once.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct SnapshotDeletion {
+    pub deleted: u64,
+    pub released_bytes: u64,
+    /// The images are deleted; only scrubbing their old data waits for the next cleanup.
+    pub cleanup_pending: Option<String>,
+}
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) struct SnapshotRetentionOutcome {
     pub snapshot_items: u64,
@@ -475,6 +484,10 @@ impl Storage {
     pub fn delete_snapshot(&self, slot_id: i64) -> Result<bool> {
         self.delete_snapshot_from_container(slot_id, SnapshotMissingReason::UserDeleted)
             .map(|outcome| outcome.is_some())
+    }
+
+    pub fn delete_snapshots(&self, slot_ids: &[i64]) -> Result<SnapshotDeletion> {
+        self.delete_snapshots_from_containers(slot_ids, SnapshotMissingReason::UserDeleted)
     }
 
     pub fn generate_local_report(

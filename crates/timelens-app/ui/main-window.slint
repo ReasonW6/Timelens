@@ -4,8 +4,8 @@ import { AppRow, WindowRow, SegmentRow, SnapshotRow, ReportAppRow, HistoryItem, 
 import { HistoryRow, StickyDay, ParticipantItem, AppTimes } from "timeline.slint";
 import { AiPanel, AiState } from "ai-panel.slint";
 import { DataPanel, DataState, MoveDialog } from "data-panel.slint";
-import { CollectionPanel, CollectionState, KeyCell } from "collection-panel.slint";
-export { AppIcons, AiState, DataState, CollectionState, KeyCell, AppRow, WindowRow, SegmentRow, SnapshotRow, ReportAppRow, HistoryItem, DayAnchor, Participant, ShareSlice, StackApp }
+import { CollectionPanel, CollectionState, KeyCell, ButtonHeat } from "collection-panel.slint";
+export { AppIcons, AiState, DataState, CollectionState, KeyCell, ButtonHeat, AppRow, WindowRow, SegmentRow, SnapshotRow, ReportAppRow, HistoryItem, DayAnchor, Participant, ShareSlice, StackApp }
 
 component WindowItem inherits Rectangle {
     in property <WindowRow> item;
@@ -97,6 +97,56 @@ component DetailDrawer inherits Rectangle {
     // Clicks and wheel turns on the pane must not reach the list beneath it.
     TouchArea { scroll-event(event) => { return accept; } }
     Rectangle { clip: true; @children }
+}
+
+// A snapshot in the grid: its thumbnail above its time. While selecting, a
+// click ticks it and Shift extends the ticks over the span from the last one.
+component SnapshotTile inherits Rectangle {
+    in property <SnapshotRow> item;
+    in property <bool> current;
+    in property <bool> selecting;
+    callback activate(bool);
+    private property <bool> shift;
+    private property <bool> marked: root.selecting ? root.item.checked : root.current;
+    border-radius: 10px;
+    background: root.marked ? Theme.brand-soft : touch.has-hover ? Theme.hover-tint : transparent;
+    border-width: key.has-focus || root.marked ? 2px : 0px;
+    border-color: key.has-focus ? Theme.focus : Theme.brand;
+    forward-focus: key;
+    accessible-role: button;
+    accessible-checkable: root.selecting && root.item.success;
+    accessible-checked: root.selecting && root.item.checked;
+    accessible-label: root.item.time + "，" + root.item.display + "，" + root.item.result;
+    accessible-enabled: !Theme.modal-open;
+    accessible-action-default => { if !Theme.modal-open { root.activate(false); } }
+    VerticalLayout {
+        padding: 4px; spacing: 4px;
+        Rectangle {
+            height: (root.width - 8px) * 9 / 16;
+            border-radius: 6px;
+            background: root.item.success ? #141925 : Theme.surface-3;
+            clip: true;
+            if root.item.thumb.width > 0 : Image { width: parent.width; height: parent.height; source: root.item.thumb; image-fit: cover; }
+            if root.item.thumb.width == 0 : Image {
+                width: 16px; height: 16px;
+                source: root.item.success ? @image-url("icons/photo.svg") : @image-url("icons/ban.svg");
+                colorize: root.item.success ? #ffffff59 : Theme.ink-4;
+            }
+            if root.selecting && root.item.success : Rectangle {
+                x: 6px; y: 6px; width: 18px; height: 18px; border-radius: 9px;
+                background: root.item.checked ? Theme.brand : #0d111b80;
+                border-width: 1.5px; border-color: #ffffff;
+                if root.item.checked : Image { width: 12px; height: 12px; source: @image-url("icons/check.svg"); colorize: #ffffff; }
+            }
+        }
+        Text { text: root.item.time; color: root.item.success ? Theme.ink-2 : Theme.ink-4; font-size: 11px; horizontal-alignment: center; overflow: elide; }
+    }
+    touch := TouchArea {
+        mouse-cursor: pointer;
+        pointer-event(event) => { if event.kind == PointerEventKind.down { root.shift = event.modifiers.shift; } }
+        clicked => { key.focus(); root.activate(root.shift); }
+    }
+    key := FocusScope { width: 0px; key-pressed(event) => { if event.text == " " || event.text == "\n" { root.activate(event.modifiers.shift); return accept; } return reject; } }
 }
 
 // Day stepping and the range picker for pages that look at one range.
@@ -258,6 +308,9 @@ export component AppWindow inherits Window {
     in property <string> snapshot-capacity;
     in property <bool> snapshot-all-displays;
     in property <bool> snapshot-deletable;
+    // Ticking snapshots to delete several at once.
+    in-out property <bool> snapshot-selecting: false;
+    in property <int> snapshot-checked-count: 0;
     in property <[ReportAppRow]> report-apps;
     in property <string> report-summary: "为当前时段生成一份本地报告。";
     in property <bool> report-ready;
@@ -290,11 +343,15 @@ export component AppWindow inherits Window {
     private property <string> jump-date;
     private property <bool> clear-confirm-open: false;
     private property <bool> delete-snapshot-confirm: false;
+    private property <bool> delete-checked-confirm: false;
+    // The selected snapshot over the whole window, fitted or at its own pixels.
+    private property <bool> snapshot-viewer-open: false;
+    private property <bool> snapshot-viewer-actual: false;
     // A shorter retention deletes history at once, so it is confirmed first.
     private property <int> pending-retention-days: -1;
     private property <bool> pending-retention-snapshots: false;
     private property <bool> retention-confirm-open: root.pending-retention-days >= 0;
-    private property <bool> any-modal-open: root.clear-confirm-open || root.delete-snapshot-confirm || root.retention-confirm-open || DataState.move-phase != 0;
+    private property <bool> any-modal-open: root.clear-confirm-open || root.delete-snapshot-confirm || root.delete-checked-confirm || root.retention-confirm-open || DataState.move-phase != 0 || root.snapshot-viewer-open;
     changed any-modal-open => { Theme.modal-open = root.any-modal-open; }
     private property <bool> recording-unavailable: !CollectionState.paused && root.collector-state == 2;
     private property <color> recording-tone: CollectionState.paused ? Theme.warn-line : root.collector-state == 2 ? Theme.danger : root.collector-state == 1 ? Theme.ink-4 : Theme.ok;
@@ -341,6 +398,12 @@ export component AppWindow inherits Window {
     callback startup-changed(bool);
     callback snapshot-row-selected(int);
     callback snapshot-delete-selected;
+    // The grid's first and last visible snapshot, which get thumbnails.
+    callback snapshot-visible(int, int);
+    // Tick or untick one snapshot; with Shift, tick the span from the last one.
+    callback snapshot-check(int, bool);
+    callback snapshot-check-all(bool);
+    callback snapshot-delete-checked;
     callback snapshot-capture-now;
     callback snapshot-toggle-enabled;
     callback snapshot-interval-selected(int);
@@ -409,6 +472,10 @@ export component AppWindow inherits Window {
         if tab == 4 { AiState.opened(); }
         if tab == 6 { root.general-opened(); }
     }
+    function stop-selecting() {
+        root.snapshot-selecting = false;
+        root.snapshot-check-all(false);
+    }
     function close-detail() {
         if root.activity-detail { root.history-close(); }
         root.app-detail-open = false;
@@ -422,6 +489,10 @@ export component AppWindow inherits Window {
             if root.any-modal-open { return accept; }
             if event.text == Key.Escape && (root.activity-detail || root.app-detail) {
                 root.close-detail();
+                return accept;
+            }
+            if event.text == Key.Escape && root.page == 2 && root.snapshot-selecting {
+                root.stop-selecting();
                 return accept;
             }
             return reject;
@@ -587,6 +658,15 @@ export component AppWindow inherits Window {
                                         }
                                         Rectangle { width: 6px; }
                                         VerticalLayout { alignment: center; Action { quiet: true; icon: @image-url("icons/settings.svg"); accessible-label: "快照设置"; clicked => { root.open-settings(1); } } }
+                                        if root.snapshots.length > 0 : VerticalLayout {
+                                            alignment: center;
+                                            Action {
+                                                text: root.snapshot-selecting ? "完成" : "批量删除";
+                                                icon: root.snapshot-selecting ? @image-url("icons/check.svg") : @image-url("icons/trash.svg");
+                                                selected: root.snapshot-selecting;
+                                                clicked => { if root.snapshot-selecting { root.stop-selecting(); } else { root.snapshot-selecting = true; } }
+                                            }
+                                        }
                                         VerticalLayout { alignment: center; Action { text: "立即拍摄"; icon: @image-url("icons/camera.svg"); accent: true; enabled: !root.action-busy; clicked => { root.snapshot-capture-now(); } } }
                                     }
                                     if root.page == 2 && root.range-options : RangeOptions {
@@ -598,41 +678,43 @@ export component AppWindow inherits Window {
                                     if root.page == 2 && root.snapshots.length > 0 : HorizontalLayout {
                                         vertical-stretch: 1;
                                         spacing: 16px;
-                                        ListView {
-                                            width: 300px;
-                                            for item[index] in root.snapshots : Rectangle {
-                                                height: 58px;
-                                                Rectangle {
-                                                    y: 2px; height: 54px;
-                                                    border-radius: 10px;
-                                                    background: index == root.snapshot-selected-index ? Theme.surface : shot-touch.has-hover ? Theme.hover-tint : transparent;
-                                                    border-width: shot-key.has-focus ? 2px : index == root.snapshot-selected-index ? 1px : 0px;
-                                                    border-color: shot-key.has-focus ? Theme.focus : Theme.line;
-                                                    drop-shadow-blur: index == root.snapshot-selected-index ? 8px : 0px;
-                                                    drop-shadow-color: #161c2d14;
-                                                    forward-focus: shot-key;
-                                                    accessible-role: button;
-                                                    accessible-label: item.time + "，" + item.display + "，" + item.result;
-                                                    accessible-enabled: !Theme.modal-open;
-                                                    accessible-action-default => { if !Theme.modal-open { root.snapshot-row-selected(index); } }
-                                                    HorizontalLayout {
-                                                        padding-left: 12px; padding-right: 12px; spacing: 12px;
-                                                        VerticalLayout {
-                                                            alignment: center;
-                                                            Rectangle {
-                                                                width: 30px; height: 30px; border-radius: 8px;
-                                                                background: Theme.surface-2;
-                                                                Image { width: 15px; height: 15px; source: @image-url("icons/photo.svg"); colorize: Theme.ink-3; }
+                                        VerticalLayout {
+                                            width: 432px;
+                                            spacing: 8px;
+                                            if root.snapshot-selecting : HorizontalLayout {
+                                                height: 34px; spacing: 6px;
+                                                Text { text: "已选 " + root.snapshot-checked-count + " 张"; color: Theme.ink; font-size: 13px; font-weight: 600; vertical-alignment: center; }
+                                                Rectangle { horizontal-stretch: 1; }
+                                                VerticalLayout { alignment: center; Action { quiet: true; text: "全选"; clicked => { root.snapshot-check-all(true); } } }
+                                                VerticalLayout { alignment: center; Action { quiet: true; text: "全不选"; enabled: root.snapshot-checked-count > 0; clicked => { root.snapshot-check-all(false); } } }
+                                                VerticalLayout { alignment: center; Action { text: "删除所选…"; icon: @image-url("icons/trash.svg"); danger: true; enabled: root.snapshot-checked-count > 0 && !root.action-busy; clicked => { root.delete-checked-confirm = true; } } }
+                                            }
+                                            if root.snapshot-selecting : Note { text: "点选图片，按住 Shift 再点另一张可选中这段时间；全选只含当前列表，可先用上方的时段缩小范围。"; font-size: 12px; }
+                                            snapshot-grid := ListView {
+                                                vertical-stretch: 1;
+                                                // Three a row, clear of the scroll bar. Rows have fixed
+                                                // heights, so the visible snapshots follow from the scroll position.
+                                                property <length> tile-width: (self.visible-width - 20px) / 3;
+                                                property <length> row-height: (self.tile-width - 8px) * 9 / 16 + 31px;
+                                                property <int> first-row: max(0, floor(-self.viewport-y / self.row-height));
+                                                property <int> last-row: floor((-self.viewport-y + self.visible-height) / self.row-height);
+                                                changed first-row => { root.snapshot-visible(self.first-row * 3, self.last-row * 3 + 2); }
+                                                changed last-row => { root.snapshot-visible(self.first-row * 3, self.last-row * 3 + 2); }
+                                                for row in Math.ceil(root.snapshots.length / 3) : Rectangle {
+                                                    height: snapshot-grid.row-height;
+                                                    for column in 3 : Rectangle {
+                                                        x: column * (snapshot-grid.tile-width + 4px);
+                                                        width: snapshot-grid.tile-width;
+                                                        if row * 3 + column < root.snapshots.length : SnapshotTile {
+                                                            width: parent.width; height: parent.height - 4px;
+                                                            item: root.snapshots[row * 3 + column];
+                                                            current: row * 3 + column == root.snapshot-selected-index;
+                                                            selecting: root.snapshot-selecting;
+                                                            activate(shift) => {
+                                                                if root.snapshot-selecting { root.snapshot-check(row * 3 + column, shift); } else { root.snapshot-row-selected(row * 3 + column); }
                                                             }
                                                         }
-                                                        VerticalLayout {
-                                                            alignment: center; spacing: 2px; horizontal-stretch: 1;
-                                                            Text { text: item.time; color: Theme.ink; font-size: 13px; font-weight: 600; font-family: Theme.font-display; overflow: elide; }
-                                                            Text { text: item.display + " · " + item.result; color: Theme.ink-3; font-size: 11px; overflow: elide; }
-                                                        }
                                                     }
-                                                    shot-touch := TouchArea { mouse-cursor: pointer; clicked => { shot-key.focus(); root.snapshot-row-selected(index); } }
-                                                    shot-key := FocusScope { width: 0px; key-pressed(event) => { if event.text == " " || event.text == "\n" { root.snapshot-row-selected(index); return accept; } return reject; } }
                                                 }
                                             }
                                         }
@@ -641,7 +723,14 @@ export component AppWindow inherits Window {
                                             border-radius: 14px;
                                             background: #141925;
                                             clip: true;
-                                            Image { x: 14px; y: 14px; width: parent.width - 28px; height: parent.height - 76px; source: root.snapshot-preview; image-fit: contain; }
+                                            Image {
+                                                x: 14px; y: 14px; width: parent.width - 28px; height: parent.height - 76px;
+                                                source: root.snapshot-preview; image-fit: contain;
+                                                if root.snapshot-preview.width > 0 : TouchArea {
+                                                    mouse-cursor: pointer;
+                                                    clicked => { root.snapshot-viewer-actual = false; root.snapshot-viewer-open = true; }
+                                                }
+                                            }
                                             if root.snapshot-preview.width == 0 : VerticalLayout {
                                                 y: 0px; height: parent.height - 62px;
                                                 alignment: center; spacing: 10px;
@@ -654,6 +743,7 @@ export component AppWindow inherits Window {
                                                 HorizontalLayout {
                                                     padding-left: 18px; padding-right: 12px; spacing: 8px;
                                                     Text { text: root.snapshot-detail; color: #ffffffd9; font-size: 12px; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; }
+                                                    VerticalLayout { alignment: center; Action { text: "放大"; icon: @image-url("icons/search.svg"); enabled: root.snapshot-preview.width > 0; clicked => { root.snapshot-viewer-actual = false; root.snapshot-viewer-open = true; } } }
                                                     VerticalLayout { alignment: center; Action { text: "导出"; icon: @image-url("icons/download.svg"); enabled: root.snapshot-deletable && !DataState.busy; clicked => { DataState.action(7); } } }
                                                     VerticalLayout { alignment: center; Action { text: "删除…"; icon: @image-url("icons/trash.svg"); danger: true; enabled: root.snapshot-deletable; clicked => { root.delete-snapshot-confirm = true; } } }
                                                 }
@@ -1313,6 +1403,55 @@ export component AppWindow inherits Window {
         accept-text: "删除图片";
         dismissed => { root.delete-snapshot-confirm = false; Theme.modal-open = false; snapshots-nav.focus(); }
         accepted => { root.delete-snapshot-confirm = false; Theme.modal-open = false; root.snapshot-delete-selected(); snapshots-nav.focus(); }
+    }
+    if root.delete-checked-confirm : ConfirmationDialog {
+        z: 100;
+        title: "删除所选的 " + root.snapshot-checked-count + " 张快照图片？";
+        explanation: "删除后图片无法恢复，时间线中保留对应的删除记录。";
+        accept-text: "删除图片";
+        dismissed => { root.delete-checked-confirm = false; Theme.modal-open = false; snapshots-nav.focus(); }
+        accepted => { root.delete-checked-confirm = false; Theme.modal-open = false; root.snapshot-delete-checked(); snapshots-nav.focus(); }
+    }
+    if root.snapshot-viewer-open && root.snapshot-preview.width > 0 : Rectangle {
+        z: 90;
+        background: #0b0e16f2;
+        TouchArea { clicked => { root.snapshot-viewer-open = false; } }
+        FocusScope {
+            init => { self.focus(); }
+            key-pressed(event) => {
+                if event.text == Key.Escape { root.snapshot-viewer-open = false; return accept; }
+                return reject;
+            }
+            HorizontalLayout {
+                y: 0px; height: 56px;
+                padding-left: 24px; padding-right: 12px; spacing: 8px;
+                Text { text: root.snapshot-detail; color: #ffffffd9; font-size: 13px; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; }
+                VerticalLayout { alignment: center; Action { text: root.snapshot-viewer-actual ? "适应窗口" : "原始大小"; clicked => { root.snapshot-viewer-actual = !root.snapshot-viewer-actual; } } }
+                VerticalLayout { alignment: center; Action { icon: @image-url("icons/x.svg"); accessible-label: "关闭大图"; clicked => { root.snapshot-viewer-open = false; } } }
+            }
+            if !root.snapshot-viewer-actual : Image {
+                x: 24px; y: 56px; width: parent.width - 48px; height: parent.height - 80px;
+                source: root.snapshot-preview; image-fit: contain;
+                accessible-role: image;
+                accessible-label: "快照大图，点击查看原始大小";
+                TouchArea { mouse-cursor: pointer; clicked => { root.snapshot-viewer-actual = true; } }
+            }
+            if root.snapshot-viewer-actual : actual := ScrollView {
+                x: 0px; y: 56px; width: parent.width; height: parent.height - 56px;
+                viewport-width: max(self.visible-width, root.snapshot-preview.width * 1phx);
+                viewport-height: max(self.visible-height, root.snapshot-preview.height * 1phx);
+                Image {
+                    x: (actual.viewport-width - self.width) / 2;
+                    y: (actual.viewport-height - self.height) / 2;
+                    width: root.snapshot-preview.width * 1phx;
+                    height: root.snapshot-preview.height * 1phx;
+                    source: root.snapshot-preview;
+                    accessible-role: image;
+                    accessible-label: "快照原始大小，点击适应窗口";
+                    TouchArea { mouse-cursor: pointer; clicked => { root.snapshot-viewer-actual = false; } }
+                }
+            }
+        }
     }
     if root.retention-confirm-open : ConfirmationDialog {
         z: 100;

@@ -1,4 +1,4 @@
-use crate::{AppWindow, CollectionState, KeyCell, UiState};
+use crate::{AppWindow, ButtonHeat, CollectionState, KeyCell, UiState};
 use anyhow::{Context, Result, anyhow};
 use slint::{ComponentHandle, ModelRc, Timer, TimerMode, VecModel};
 use std::{
@@ -294,98 +294,46 @@ fn statistics(w: &AppWindow, s: &Storage, range: &UiState) -> Result<()> {
     chrono::NaiveDate::parse_from_str(&date, "%Y-%m-%d")?;
     let frequencies: std::collections::BTreeMap<_, _> =
         s.physical_key_frequencies(&date)?.into_iter().collect();
-    let max = frequencies.values().copied().max().unwrap_or(1).max(1) as f32;
-    let rows: [&[(u32, &str)]; 5] = [
-        &[
-            (1, "Esc"),
-            (2, "1"),
-            (3, "2"),
-            (4, "3"),
-            (5, "4"),
-            (6, "5"),
-            (7, "6"),
-            (8, "7"),
-            (9, "8"),
-            (10, "9"),
-            (11, "0"),
-            (12, "−"),
-            (13, "="),
-            (14, "Back"),
-        ],
-        &[
-            (15, "Tab"),
-            (16, "Q"),
-            (17, "W"),
-            (18, "E"),
-            (19, "R"),
-            (20, "T"),
-            (21, "Y"),
-            (22, "U"),
-            (23, "I"),
-            (24, "O"),
-            (25, "P"),
-            (26, "["),
-            (27, "]"),
-            (43, "\\"),
-        ],
-        &[
-            (58, "Caps"),
-            (30, "A"),
-            (31, "S"),
-            (32, "D"),
-            (33, "F"),
-            (34, "G"),
-            (35, "H"),
-            (36, "J"),
-            (37, "K"),
-            (38, "L"),
-            (39, ";"),
-            (40, "'"),
-            (28, "Enter"),
-        ],
-        &[
-            (42, "LShift"),
-            (44, "Z"),
-            (45, "X"),
-            (46, "C"),
-            (47, "V"),
-            (48, "B"),
-            (49, "N"),
-            (50, "M"),
-            (51, ","),
-            (52, "."),
-            (53, "/"),
-            (54, "RShift"),
-        ],
-        &[
-            (29, "LCtrl"),
-            (0x15b, "LWin"),
-            (56, "LAlt"),
-            (57, "Space"),
-            (0x138, "RAlt"),
-            (0x15c, "RWin"),
-            (0x11d, "RCtrl"),
-            (0x148, "↑"),
-            (0x14b, "←"),
-            (0x150, "↓"),
-            (0x14d, "→"),
-            (511, "其他"),
-        ],
-    ];
-    let mut keys = vec![];
-    for (row, items) in rows.iter().enumerate() {
-        for (col, (code, label)) in items.iter().enumerate() {
-            let count = frequencies.get(code).copied().unwrap_or(0);
-            keys.push(KeyCell {
-                label: (*label).into(),
+    let max = KEYBOARD
+        .iter()
+        .filter_map(|(code, ..)| frequencies.get(code).copied())
+        .max()
+        .unwrap_or(1)
+        .max(1) as f32;
+    let keys = KEYBOARD
+        .iter()
+        .map(|&(code, label, x, y, w, h)| {
+            let count = frequencies.get(&code).copied().unwrap_or(0);
+            KeyCell {
+                label: label.into(),
                 count: count.to_string().into(),
                 strength: (count as f32 / max).sqrt(),
-                col: col as f32 * 16.0 / items.len() as f32,
-                row: row as f32,
-                units: 16.0 / items.len() as f32,
-            });
-        }
-    }
+                x,
+                y,
+                w,
+                h,
+            }
+        })
+        .collect::<Vec<_>>();
+    let unplaced = frequencies
+        .iter()
+        .filter(|(code, _)| !KEYBOARD.iter().any(|(placed, ..)| placed == *code))
+        .map(|(_, count)| count)
+        .sum::<u64>();
+    g.set_unplaced_keys(if unplaced == 0 {
+        "".into()
+    } else {
+        format!("另有 {unplaced} 次按键不在这张键盘图上，例如输入法切换或其他特殊按键。").into()
+    });
+    let [_, left, middle, right] = s.daily_input_totals(&date)?;
+    let most = left.max(middle).max(right).max(1) as f32;
+    let heat = |count: u64| ButtonHeat {
+        count: count.to_string().into(),
+        strength: (count as f32 / most).sqrt(),
+    };
+    g.set_mouse_left(heat(left));
+    g.set_mouse_middle(heat(middle));
+    g.set_mouse_right(heat(right));
     g.set_keys(Rc::new(VecModel::from(keys)).into());
     let totals = s.permanent_input_totals()?;
     g.set_totals(
@@ -420,5 +368,144 @@ fn system_label(kind: &str) -> &str {
         "clock_discontinuity" => "时钟不连续",
         "system_end" => "系统正常结束",
         _ => kind,
+    }
+}
+
+/// A 108-key board: the standard 104-key ANSI layout plus four media keys above
+/// the numeric keypad. Each key is its scan code (0x100 marks an extended key),
+/// label, and position and size in key units.
+const KEYBOARD: &[(u32, &str, f32, f32, f32, f32)] = &[
+    (0x01, "Esc", 0.0, 0.0, 1.0, 1.0),
+    (0x3b, "F1", 2.0, 0.0, 1.0, 1.0),
+    (0x3c, "F2", 3.0, 0.0, 1.0, 1.0),
+    (0x3d, "F3", 4.0, 0.0, 1.0, 1.0),
+    (0x3e, "F4", 5.0, 0.0, 1.0, 1.0),
+    (0x3f, "F5", 6.5, 0.0, 1.0, 1.0),
+    (0x40, "F6", 7.5, 0.0, 1.0, 1.0),
+    (0x41, "F7", 8.5, 0.0, 1.0, 1.0),
+    (0x42, "F8", 9.5, 0.0, 1.0, 1.0),
+    (0x43, "F9", 11.0, 0.0, 1.0, 1.0),
+    (0x44, "F10", 12.0, 0.0, 1.0, 1.0),
+    (0x57, "F11", 13.0, 0.0, 1.0, 1.0),
+    (0x58, "F12", 14.0, 0.0, 1.0, 1.0),
+    (0x137, "PrtSc", 15.25, 0.0, 1.0, 1.0),
+    (0x46, "ScrLk", 16.25, 0.0, 1.0, 1.0),
+    (0x45, "Pause", 17.25, 0.0, 1.0, 1.0),
+    (0x120, "静音", 18.5, 0.0, 1.0, 1.0),
+    (0x12e, "音量−", 19.5, 0.0, 1.0, 1.0),
+    (0x130, "音量+", 20.5, 0.0, 1.0, 1.0),
+    (0x121, "计算器", 21.5, 0.0, 1.0, 1.0),
+    (0x29, "`", 0.0, 1.5, 1.0, 1.0),
+    (0x02, "1", 1.0, 1.5, 1.0, 1.0),
+    (0x03, "2", 2.0, 1.5, 1.0, 1.0),
+    (0x04, "3", 3.0, 1.5, 1.0, 1.0),
+    (0x05, "4", 4.0, 1.5, 1.0, 1.0),
+    (0x06, "5", 5.0, 1.5, 1.0, 1.0),
+    (0x07, "6", 6.0, 1.5, 1.0, 1.0),
+    (0x08, "7", 7.0, 1.5, 1.0, 1.0),
+    (0x09, "8", 8.0, 1.5, 1.0, 1.0),
+    (0x0a, "9", 9.0, 1.5, 1.0, 1.0),
+    (0x0b, "0", 10.0, 1.5, 1.0, 1.0),
+    (0x0c, "−", 11.0, 1.5, 1.0, 1.0),
+    (0x0d, "=", 12.0, 1.5, 1.0, 1.0),
+    (0x0e, "Backspace", 13.0, 1.5, 2.0, 1.0),
+    (0x152, "Ins", 15.25, 1.5, 1.0, 1.0),
+    (0x147, "Home", 16.25, 1.5, 1.0, 1.0),
+    (0x149, "PgUp", 17.25, 1.5, 1.0, 1.0),
+    (0x145, "Num", 18.5, 1.5, 1.0, 1.0),
+    (0x135, "/", 19.5, 1.5, 1.0, 1.0),
+    (0x37, "*", 20.5, 1.5, 1.0, 1.0),
+    (0x4a, "−", 21.5, 1.5, 1.0, 1.0),
+    (0x0f, "Tab", 0.0, 2.5, 1.5, 1.0),
+    (0x10, "Q", 1.5, 2.5, 1.0, 1.0),
+    (0x11, "W", 2.5, 2.5, 1.0, 1.0),
+    (0x12, "E", 3.5, 2.5, 1.0, 1.0),
+    (0x13, "R", 4.5, 2.5, 1.0, 1.0),
+    (0x14, "T", 5.5, 2.5, 1.0, 1.0),
+    (0x15, "Y", 6.5, 2.5, 1.0, 1.0),
+    (0x16, "U", 7.5, 2.5, 1.0, 1.0),
+    (0x17, "I", 8.5, 2.5, 1.0, 1.0),
+    (0x18, "O", 9.5, 2.5, 1.0, 1.0),
+    (0x19, "P", 10.5, 2.5, 1.0, 1.0),
+    (0x1a, "[", 11.5, 2.5, 1.0, 1.0),
+    (0x1b, "]", 12.5, 2.5, 1.0, 1.0),
+    (0x2b, "\\", 13.5, 2.5, 1.5, 1.0),
+    (0x153, "Del", 15.25, 2.5, 1.0, 1.0),
+    (0x14f, "End", 16.25, 2.5, 1.0, 1.0),
+    (0x151, "PgDn", 17.25, 2.5, 1.0, 1.0),
+    (0x47, "7", 18.5, 2.5, 1.0, 1.0),
+    (0x48, "8", 19.5, 2.5, 1.0, 1.0),
+    (0x49, "9", 20.5, 2.5, 1.0, 1.0),
+    (0x4e, "+", 21.5, 2.5, 1.0, 2.0),
+    (0x3a, "Caps", 0.0, 3.5, 1.75, 1.0),
+    (0x1e, "A", 1.75, 3.5, 1.0, 1.0),
+    (0x1f, "S", 2.75, 3.5, 1.0, 1.0),
+    (0x20, "D", 3.75, 3.5, 1.0, 1.0),
+    (0x21, "F", 4.75, 3.5, 1.0, 1.0),
+    (0x22, "G", 5.75, 3.5, 1.0, 1.0),
+    (0x23, "H", 6.75, 3.5, 1.0, 1.0),
+    (0x24, "J", 7.75, 3.5, 1.0, 1.0),
+    (0x25, "K", 8.75, 3.5, 1.0, 1.0),
+    (0x26, "L", 9.75, 3.5, 1.0, 1.0),
+    (0x27, ";", 10.75, 3.5, 1.0, 1.0),
+    (0x28, "'", 11.75, 3.5, 1.0, 1.0),
+    (0x1c, "Enter", 12.75, 3.5, 2.25, 1.0),
+    (0x4b, "4", 18.5, 3.5, 1.0, 1.0),
+    (0x4c, "5", 19.5, 3.5, 1.0, 1.0),
+    (0x4d, "6", 20.5, 3.5, 1.0, 1.0),
+    (0x2a, "Shift", 0.0, 4.5, 2.25, 1.0),
+    (0x2c, "Z", 2.25, 4.5, 1.0, 1.0),
+    (0x2d, "X", 3.25, 4.5, 1.0, 1.0),
+    (0x2e, "C", 4.25, 4.5, 1.0, 1.0),
+    (0x2f, "V", 5.25, 4.5, 1.0, 1.0),
+    (0x30, "B", 6.25, 4.5, 1.0, 1.0),
+    (0x31, "N", 7.25, 4.5, 1.0, 1.0),
+    (0x32, "M", 8.25, 4.5, 1.0, 1.0),
+    (0x33, ",", 9.25, 4.5, 1.0, 1.0),
+    (0x34, ".", 10.25, 4.5, 1.0, 1.0),
+    (0x35, "/", 11.25, 4.5, 1.0, 1.0),
+    (0x36, "Shift", 12.25, 4.5, 2.75, 1.0),
+    (0x148, "↑", 16.25, 4.5, 1.0, 1.0),
+    (0x4f, "1", 18.5, 4.5, 1.0, 1.0),
+    (0x50, "2", 19.5, 4.5, 1.0, 1.0),
+    (0x51, "3", 20.5, 4.5, 1.0, 1.0),
+    (0x11c, "Enter", 21.5, 4.5, 1.0, 2.0),
+    (0x1d, "Ctrl", 0.0, 5.5, 1.25, 1.0),
+    (0x15b, "Win", 1.25, 5.5, 1.25, 1.0),
+    (0x38, "Alt", 2.5, 5.5, 1.25, 1.0),
+    (0x39, "Space", 3.75, 5.5, 6.25, 1.0),
+    (0x138, "Alt", 10.0, 5.5, 1.25, 1.0),
+    (0x15c, "Win", 11.25, 5.5, 1.25, 1.0),
+    (0x15d, "Menu", 12.5, 5.5, 1.25, 1.0),
+    (0x11d, "Ctrl", 13.75, 5.5, 1.25, 1.0),
+    (0x14b, "←", 15.25, 5.5, 1.0, 1.0),
+    (0x150, "↓", 16.25, 5.5, 1.0, 1.0),
+    (0x14d, "→", 17.25, 5.5, 1.0, 1.0),
+    (0x52, "0", 18.5, 5.5, 2.0, 1.0),
+    (0x53, ".", 20.5, 5.5, 1.0, 1.0),
+];
+
+#[cfg(test)]
+mod tests {
+    use super::KEYBOARD;
+
+    #[test]
+    fn keyboard_has_108_distinct_keys_that_do_not_overlap() {
+        assert_eq!(KEYBOARD.len(), 108);
+        let codes = KEYBOARD
+            .iter()
+            .map(|(code, ..)| *code)
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(codes.len(), 108);
+        for (index, &(_, a, ax, ay, aw, ah)) in KEYBOARD.iter().enumerate() {
+            assert!(
+                ax + aw <= 22.5 && ay + ah <= 6.5,
+                "{a} is outside the board"
+            );
+            for &(_, b, bx, by, bw, bh) in &KEYBOARD[index + 1..] {
+                let apart = ax + aw <= bx || bx + bw <= ax || ay + ah <= by || by + bh <= ay;
+                assert!(apart, "{a} overlaps {b}");
+            }
+        }
     }
 }

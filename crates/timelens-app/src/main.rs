@@ -15,6 +15,7 @@ mod local_config;
 mod qa;
 mod recovery;
 mod snapshot;
+mod snapshot_grid;
 mod startup;
 mod timeline_ui;
 mod timeline_view;
@@ -39,7 +40,7 @@ use std::{
 };
 
 use anyhow::{Context, Result, bail};
-use slint::{Image, ModelRc, Timer, TimerMode, VecModel};
+use slint::{Image, Model, ModelRc, Timer, TimerMode, VecModel};
 use timelens_ipc::{
     BatchRejection, COLLECTOR_RESET_PAUSED_FILE, COLLECTOR_RESET_REQUEST_FILE, PROTOCOL_VERSION,
     SingleInstanceGuard, current_pipe_name, run_server_collector_message, run_server_probe,
@@ -55,7 +56,7 @@ const COLLECTOR_NAMES: &[&str] = &["timelens-collector.exe", "Timelens.Collector
 slint::slint! {
     export { AppWindow, AppRow, WindowRow, SegmentRow, SnapshotRow, ReportAppRow,
              HistoryItem, DayAnchor, Participant, ShareSlice, StackApp, AiState, DataState,
-             CollectionState, KeyCell, AppIcons }
+             CollectionState, KeyCell, ButtonHeat, AppIcons }
         from "ui/main-window.slint";
 }
 fn main() -> Result<()> {
@@ -240,6 +241,11 @@ struct ActionStatus {
 struct SnapshotUiState {
     slots: Vec<SnapshotSlot>,
     selected_slot_id: Option<i64>,
+    /// Images ticked to delete, and the one ticked last, where a Shift span starts.
+    checked: std::collections::BTreeSet<i64>,
+    anchor: Option<i64>,
+    /// The first and last snapshot the grid shows.
+    visible: Option<(usize, usize)>,
 }
 
 struct UiState {
@@ -1323,6 +1329,103 @@ fn install_snapshot_callbacks(
         });
     }
     {
+        let weak = window.as_weak();
+        let storage = Arc::clone(&storage);
+        let snapshot_state = Rc::clone(&snapshot_state);
+        window.on_snapshot_visible(move |first, last| {
+            let mut state = snapshot_state.borrow_mut();
+            state.visible = Some((first.max(0) as usize, last.max(0) as usize));
+            if let Some(window) = weak.upgrade() {
+                snapshot_grid::load_thumbnails(&window, &storage, &state);
+            }
+        });
+    }
+    {
+        let weak = window.as_weak();
+        let snapshot_state = Rc::clone(&snapshot_state);
+        window.on_snapshot_check(move |index, span| {
+            let mut state = snapshot_state.borrow_mut();
+            if index >= 0 {
+                snapshot_grid::tick(&mut state, index as usize, span);
+            }
+            if let Some(window) = weak.upgrade() {
+                snapshot_grid::show_ticks(&window, &state);
+            }
+        });
+    }
+    {
+        let weak = window.as_weak();
+        let snapshot_state = Rc::clone(&snapshot_state);
+        window.on_snapshot_check_all(move |all| {
+            let mut state = snapshot_state.borrow_mut();
+            snapshot_grid::tick_all(&mut state, all);
+            if let Some(window) = weak.upgrade() {
+                snapshot_grid::show_ticks(&window, &state);
+            }
+        });
+    }
+    {
+        let weak = window.as_weak();
+        let storage = Arc::clone(&storage);
+        let snapshot_state = Rc::clone(&snapshot_state);
+        let busy = Arc::clone(&busy);
+        let sender = sender.clone();
+        window.on_snapshot_delete_checked(move || {
+            let Some(window) = weak.upgrade() else {
+                return;
+            };
+            let mut state = snapshot_state.borrow_mut();
+            let ids = state.checked.iter().copied().collect::<Vec<_>>();
+            if ids.is_empty() || busy.swap(true, Ordering::AcqRel) {
+                return;
+            }
+            if state
+                .selected_slot_id
+                .is_some_and(|id| state.checked.contains(&id))
+            {
+                state.selected_slot_id = None;
+                window.set_snapshot_selected_index(-1);
+                window.set_snapshot_deletable(false);
+                window.set_snapshot_preview(Image::default());
+                window.set_snapshot_detail("请选择一条成功快照进行解密预览".into());
+            }
+            snapshot_grid::tick_all(&mut state, false);
+            snapshot_grid::show_ticks(&window, &state);
+            window.set_snapshot_selecting(false);
+            let storage = Arc::clone(&storage);
+            let busy = Arc::clone(&busy);
+            let sender = sender.clone();
+            thread::spawn(move || {
+                let result = snapshot::run_heavy_task(|| {
+                    Ok(storage
+                        .lock()
+                        .map_err(|_| anyhow::anyhow!("storage lock poisoned"))?
+                        .delete_snapshots(&ids)?)
+                });
+                busy.store(false, Ordering::Release);
+                let message = match result {
+                    Ok(deletion) => {
+                        let mut message = format!(
+                            "已删除 {} 张快照，释放 {}",
+                            deletion.deleted,
+                            format_bytes(deletion.released_bytes)
+                        );
+                        if let Some(error) = deletion.cleanup_pending {
+                            message.push_str(&format!("；旧加密数据稍后清理：{error}"));
+                        }
+                        message
+                    }
+                    Err(error) => format!("批量删除失败：{error}"),
+                };
+                let _ = sender.send(ActionStatus {
+                    message,
+                    refresh: true,
+                    report: None,
+                });
+            });
+        });
+    }
+    {
         let storage = Arc::clone(&storage);
         let data_directory = data_directory.clone();
         let busy = Arc::clone(&busy);
@@ -1523,12 +1626,29 @@ fn refresh_snapshot_panel(
             storage.list_snapshot_slots(range_started, range_ended, 500)?,
         )
     };
+    snapshot_state
+        .borrow_mut()
+        .checked
+        .retain(|id| slots.iter().any(|slot| slot.id == *id && slot.success));
+    // Thumbnails already decoded stay; the grid asks for the rest it shows.
+    let thumbs = window
+        .get_snapshots()
+        .iter()
+        .filter(|row| row.thumb.size().width > 0)
+        .map(|row| (row.identity, row.thumb))
+        .collect::<std::collections::HashMap<_, _>>();
     // Missing slots stay listed with their reason, so an empty-looking range
     // still explains why nothing was saved.
     let rows = slots
         .iter()
         .map(|slot| SnapshotRow {
             identity: slot.id.to_string().into(),
+            success: slot.success,
+            thumb: thumbs
+                .get(slot.id.to_string().as_str())
+                .cloned()
+                .unwrap_or_default(),
+            checked: snapshot_state.borrow().checked.contains(&slot.id),
             time: snapshot_time_label(slot.slot_started_utc_ms).into(),
             display: slot
                 .display
@@ -1564,6 +1684,11 @@ fn refresh_snapshot_panel(
     window.set_snapshots(ui_model::sync(window.get_snapshots(), rows, |a, b| {
         a.identity == b.identity
     }));
+    if snapshot_state.borrow().slots.is_empty() {
+        window.set_snapshot_selecting(false);
+    }
+    window.set_snapshot_checked_count(snapshot_state.borrow().checked.len() as i32);
+    snapshot_grid::load_thumbnails(window, storage, &snapshot_state.borrow());
     window.set_snapshot_selected_index(selected_index);
     if selected_index < 0 {
         window.set_snapshot_preview(Image::default());

@@ -14,8 +14,8 @@ use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, 
 use zeroize::Zeroizing;
 
 use super::milestone3::{
-    SnapshotRetentionOutcome, decrypt_snapshot, encrypt_snapshot, random_snapshot_file_name,
-    row_u64, sha256, snapshot_pixel_hash,
+    SnapshotDeletion, SnapshotRetentionOutcome, decrypt_snapshot, encrypt_snapshot,
+    random_snapshot_file_name, row_u64, sha256, snapshot_pixel_hash,
 };
 use super::{
     Result, SnapshotMissingReason, SnapshotStoreRequest, Storage, StorageError, load_key,
@@ -688,34 +688,120 @@ impl Storage {
         slot_id: i64,
         reason: SnapshotMissingReason,
     ) -> Result<Option<u64>> {
+        let Some(day) = self.stored_snapshot_day(slot_id)? else {
+            return Ok(None);
+        };
+        let Some(deletion) = self.delete_day_snapshots(&day, &[slot_id], reason)? else {
+            return Ok(None);
+        };
+        match deletion.cleanup_pending {
+            Some(error) => Err(StorageError::SnapshotCleanupPending(error)),
+            None => Ok(Some(deletion.released_bytes)),
+        }
+    }
+
+    /// Deletes many images while rewriting each affected day's container once.
+    pub(crate) fn delete_snapshots_from_containers(
+        &self,
+        slot_ids: &[i64],
+        reason: SnapshotMissingReason,
+    ) -> Result<SnapshotDeletion> {
+        let mut days = BTreeMap::<String, Vec<i64>>::new();
+        for &slot_id in slot_ids {
+            if let Some(day) = self.stored_snapshot_day(slot_id)? {
+                days.entry(day).or_default().push(slot_id);
+            }
+        }
+        let mut total = SnapshotDeletion::default();
+        for (day, ids) in days {
+            if let Some(deletion) = self.delete_day_snapshots(&day, &ids, reason)? {
+                total.deleted += deletion.deleted;
+                total.released_bytes += deletion.released_bytes;
+                total.cleanup_pending = total.cleanup_pending.or(deletion.cleanup_pending);
+            }
+        }
+        Ok(total)
+    }
+
+    fn stored_snapshot_day(&self, slot_id: i64) -> Result<Option<String>> {
+        Ok(self.connection.query_row("SELECT d.local_day FROM snapshot_slots s JOIN snapshot_slot_days d USING(slot_id) WHERE s.slot_id=? AND s.result='success'",
+            [slot_id], |r| r.get(0)).optional()?)
+    }
+
+    /// After the commit, a failed cleanup is reported in `cleanup_pending`: the
+    /// slots stay deleted and the next cleanup pass finishes scrubbing.
+    fn delete_day_snapshots(
+        &self,
+        day: &str,
+        slot_ids: &[i64],
+        reason: SnapshotMissingReason,
+    ) -> Result<Option<SnapshotDeletion>> {
         self.ensure_writable()?;
         let _durable = SnapshotWrite::new(&self.connection)?;
         let tx = Transaction::new_unchecked(&self.connection, TransactionBehavior::Immediate)?;
-        let target = tx.query_row("SELECT s.blob_id,d.local_day,c.file_name,c.committed_bytes FROM snapshot_slots s JOIN snapshot_slot_days d USING(slot_id)
-            JOIN snapshot_containers c USING(local_day) WHERE s.slot_id=? AND s.result='success'",[slot_id],
-            |r|Ok((r.get::<_,i64>(0)?,r.get::<_,String>(1)?,r.get::<_,String>(2)?,row_u64(r,3)?))).optional()?;
-        let Some((blob, day, old_name, old_bytes)) = target else {
+        let container = tx
+            .query_row(
+                "SELECT file_name,committed_bytes FROM snapshot_containers WHERE local_day=?",
+                [day],
+                |r| Ok((r.get::<_, String>(0)?, row_u64(r, 1)?)),
+            )
+            .optional()?;
+        let Some((old_name, old_bytes)) = container else {
             return Ok(None);
         };
-        tx.execute("UPDATE snapshot_slots SET captured_at_utc_ms=NULL,pixel_width=0,pixel_height=0,blob_id=NULL,capture_method='none',result='cleaned',missing_reason=? WHERE slot_id=?",params![reason.as_str(),slot_id])?;
-        tx.execute("DELETE FROM snapshot_slot_days WHERE slot_id=?", [slot_id])?;
-        let remaining: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM snapshot_slots s JOIN snapshot_slot_days d USING(slot_id) WHERE s.blob_id=? AND d.local_day=?)",params![blob,day],|r|r.get(0))?;
-        if remaining {
+        let mut targets = BTreeSet::new();
+        let mut deleted = 0;
+        for &slot_id in slot_ids {
+            let blob = tx.query_row("SELECT s.blob_id FROM snapshot_slots s JOIN snapshot_slot_days d USING(slot_id) WHERE s.slot_id=? AND d.local_day=? AND s.result='success'",
+                params![slot_id, day], |r| r.get::<_, i64>(0)).optional()?;
+            let Some(blob) = blob else {
+                continue;
+            };
+            tx.execute("UPDATE snapshot_slots SET captured_at_utc_ms=NULL,pixel_width=0,pixel_height=0,blob_id=NULL,capture_method='none',result='cleaned',missing_reason=? WHERE slot_id=?",params![reason.as_str(),slot_id])?;
+            tx.execute("DELETE FROM snapshot_slot_days WHERE slot_id=?", [slot_id])?;
+            targets.insert(blob);
+            deleted += 1;
+        }
+        if deleted == 0 {
+            return Ok(None);
+        }
+        // Pixels that another slot of the day still shows stay in the container.
+        let mut removed = BTreeSet::new();
+        for blob in targets {
+            let remaining: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM snapshot_slots s JOIN snapshot_slot_days d USING(slot_id) WHERE s.blob_id=? AND d.local_day=?)",params![blob,day],|r|r.get(0))?;
+            if !remaining {
+                removed.insert(blob);
+            }
+        }
+        let mut deletion = SnapshotDeletion {
+            deleted,
+            ..Default::default()
+        };
+        if removed.is_empty() {
             tx.commit()?;
             self.snapshot_files_settled.set(false);
-            self.finish_snapshot_key_cleanup()
-                .map_err(cleanup_pending)?;
-            return Ok(Some(0));
+            deletion.cleanup_pending = self
+                .finish_snapshot_key_cleanup()
+                .err()
+                .map(|error| error.to_string());
+            return Ok(Some(deletion));
         }
-        let blobs = tx.prepare("SELECT blob_id FROM snapshot_container_records WHERE local_day=? AND blob_id<>? ORDER BY record_offset")?
-            .query_map(params![day,blob],|r|r.get::<_,i64>(0))?.collect::<rusqlite::Result<Vec<_>>>()?;
-        tx.execute(
-            "DELETE FROM snapshot_container_records WHERE local_day=? AND blob_id=?",
-            params![day, blob],
-        )?;
+        let blobs = tx
+            .prepare("SELECT blob_id FROM snapshot_container_records WHERE local_day=? ORDER BY record_offset")?
+            .query_map([day], |r| r.get::<_, i64>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?
+            .into_iter()
+            .filter(|blob| !removed.contains(blob))
+            .collect::<Vec<_>>();
+        for blob in &removed {
+            tx.execute(
+                "DELETE FROM snapshot_container_records WHERE local_day=? AND blob_id=?",
+                params![day, blob],
+            )?;
+        }
         let mut replacement = None;
         if blobs.is_empty() {
-            tx.execute("DELETE FROM snapshot_containers WHERE local_day=?", [&day])?;
+            tx.execute("DELETE FROM snapshot_containers WHERE local_day=?", [day])?;
         } else {
             let name = container_name()?;
             let path = image_path(&self.snapshot_directory(), &name)?;
@@ -732,8 +818,8 @@ impl Storage {
                 committed: false,
             };
             staged.file.write_all(MAGIC)?;
-            for id in blobs {
-                let r = record(&tx, id, Some(&day))?
+            for &id in &blobs {
+                let r = record(&tx, id, Some(day))?
                     .ok_or_else(|| invalid("snapshot record disappeared"))?;
                 let hash = tx.query_row(
                     "SELECT content_sha256 FROM snapshot_blobs WHERE blob_id=?",
@@ -766,10 +852,8 @@ impl Storage {
                 ],
             )?;
             // Authenticate every retained record at its new on-disk position.
-            let ids = tx.prepare("SELECT blob_id FROM snapshot_container_records WHERE local_day=? AND blob_id<>?")?
-                .query_map(params![day,blob],|r|r.get::<_,i64>(0))?.collect::<rusqlite::Result<Vec<_>>>()?;
-            for id in ids {
-                let r = record(&tx, id, Some(&day))?
+            for id in blobs {
+                let r = record(&tx, id, Some(day))?
                     .ok_or_else(|| invalid("snapshot record disappeared"))?;
                 let hash = tx.query_row(
                     "SELECT content_sha256 FROM snapshot_blobs WHERE blob_id=?",
@@ -783,7 +867,9 @@ impl Storage {
             }
             replacement = Some(staged);
         }
-        tx.execute("DELETE FROM snapshot_blobs WHERE blob_id=? AND NOT EXISTS(SELECT 1 FROM snapshot_slots WHERE blob_id=?)",params![blob,blob])?;
+        for blob in removed {
+            tx.execute("DELETE FROM snapshot_blobs WHERE blob_id=? AND NOT EXISTS(SELECT 1 FROM snapshot_slots WHERE blob_id=?)",params![blob,blob])?;
+        }
         if let Some(file) = &mut replacement {
             file.committed = true;
         }
@@ -794,7 +880,9 @@ impl Storage {
         } else {
             0
         };
-        self.finish_snapshot_key_cleanup()
+        deletion.released_bytes = old_bytes.saturating_sub(new_bytes);
+        deletion.cleanup_pending = self
+            .finish_snapshot_key_cleanup()
             .and_then(|()| fault("after_delete_commit"))
             .and_then(|()| {
                 Ok(fs::remove_file(image_path(
@@ -802,8 +890,9 @@ impl Storage {
                     &old_name,
                 )?)?)
             })
-            .map_err(cleanup_pending)?;
-        Ok(Some(old_bytes.saturating_sub(new_bytes)))
+            .err()
+            .map(|error| error.to_string());
+        Ok(Some(deletion))
     }
 
     fn finish_snapshot_key_cleanup(&self) -> Result<()> {
@@ -819,11 +908,6 @@ impl Storage {
         }
         Ok(())
     }
-}
-
-/// After a deletion commits, a failure only delays scrubbing; the slot stays deleted.
-fn cleanup_pending(error: StorageError) -> StorageError {
-    StorageError::SnapshotCleanupPending(error.to_string())
 }
 
 pub(crate) fn read_payload(
@@ -1305,6 +1389,50 @@ mod tests {
         drop(storage);
         let reopened = Storage::open(directory.path()).unwrap();
         assert_eq!(reopened.load_snapshot_image(last).unwrap().webp, c.webp);
+    }
+
+    #[test]
+    fn batch_delete_rewrites_each_day_once_and_keeps_shared_pixels() {
+        let directory = tempfile::tempdir().unwrap();
+        let storage = Storage::open(directory.path()).unwrap();
+        let a = request(1_700_000_000_000, 10);
+        let b = request(a.slot_started_utc_ms + 1000, 20);
+        let c = request(a.slot_started_utc_ms + 2000, 30);
+        let mut duplicate = a.clone();
+        duplicate.slot_started_utc_ms += 3000;
+        duplicate.captured_at_utc_ms += 3000;
+        let first = store_on_day(&storage, &a, "2023-11-14");
+        let second = store_on_day(&storage, &b, "2023-11-14");
+        let kept = store_on_day(&storage, &c, "2023-11-14");
+        let shared = store_on_day(&storage, &duplicate, "2023-11-14");
+        let next = [
+            store_on_day(
+                &storage,
+                &request(a.slot_started_utc_ms + 4000, 40),
+                "2023-11-15",
+            ),
+            store_on_day(
+                &storage,
+                &request(a.slot_started_utc_ms + 5000, 50),
+                "2023-11-15",
+            ),
+        ];
+        assert_eq!(files(&storage).len(), 2);
+
+        let deletion = storage
+            .delete_snapshots(&[first, second, next[0], next[1], 9_999])
+            .unwrap();
+        assert_eq!(deletion.deleted, 4);
+        assert!(deletion.released_bytes > 0);
+        assert_eq!(deletion.cleanup_pending, None);
+        for id in [first, second, next[0], next[1]] {
+            assert!(storage.load_snapshot_image(id).is_err());
+        }
+        assert_eq!(storage.load_snapshot_image(kept).unwrap().webp, c.webp);
+        assert_eq!(storage.load_snapshot_image(shared).unwrap().webp, a.webp);
+        assert_eq!(files(&storage).len(), 1);
+        assert_eq!(storage.delete_snapshots(&[first]).unwrap().deleted, 0);
+        storage.verify_snapshot_containers().unwrap();
     }
 
     #[test]
