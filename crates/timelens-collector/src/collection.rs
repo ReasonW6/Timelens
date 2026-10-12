@@ -1,5 +1,6 @@
 use std::{
     path::Path,
+    sync::{Arc, Weak},
     time::{Duration, Instant, SystemTime},
 };
 use timelens_ipc::{
@@ -30,6 +31,10 @@ pub struct Filter {
     last_awake: u64,
     last_interrupt: u64,
     last_offset: i32,
+    raw_windows: Weak<Vec<WindowObservation>>,
+    raw_tray: Weak<Vec<TrayPresence>>,
+    policy_changed: bool,
+    activity_kind: &'static str,
 }
 impl Filter {
     pub fn new(directory: &Path, now: i64, mono: u64) -> Self {
@@ -52,6 +57,10 @@ impl Filter {
             last_awake: awake_ms(),
             last_interrupt: interrupt_ms(),
             last_offset: 0,
+            raw_windows: Weak::new(),
+            raw_tray: Weak::new(),
+            policy_changed: true,
+            activity_kind: "desktop_idle",
         }
     }
     /// The system state still in progress, ended at `now`, for a run that stops here.
@@ -83,13 +92,14 @@ impl Filter {
             ..Default::default()
         });
         let changed = policy != self.policy;
+        self.policy_changed |= changed;
         self.policy = policy;
         changed
     }
     pub fn reconcile(
         &mut self,
-        raw: &[WindowObservation],
-        tray: &[TrayPresence],
+        raw: &Arc<Vec<WindowObservation>>,
+        tray: &Arc<Vec<TrayPresence>>,
         now: i64,
         mono: u64,
         offset: i32,
@@ -97,9 +107,29 @@ impl Filter {
         Vec<WindowTransition>,
         Vec<TrayTransition>,
         Vec<CollectorEvent>,
+        bool,
     ) {
         let awake = awake_ms();
         let interrupt = interrupt_ms();
+        self.reconcile_at(raw, tray, now, mono, offset, awake, interrupt)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn reconcile_at(
+        &mut self,
+        raw: &Arc<Vec<WindowObservation>>,
+        tray: &Arc<Vec<TrayPresence>>,
+        now: i64,
+        mono: u64,
+        offset: i32,
+        awake: u64,
+        interrupt: u64,
+    ) -> (
+        Vec<WindowTransition>,
+        Vec<TrayTransition>,
+        Vec<CollectorEvent>,
+        bool,
+    ) {
         let (sleeping, clock_changed) = clock_gap(
             now.saturating_sub(self.last_utc),
             interrupt.saturating_sub(self.last_interrupt),
@@ -107,20 +137,30 @@ impl Filter {
         );
         let discontinuity = clock_changed || self.last_offset != offset && self.last_offset != 0;
         let session = self.session;
+        let previously_blocked = self.blocked;
         self.blocked = self.policy.paused || session.is_some();
-        let excluded = raw
-            .iter()
-            .any(|w| w.displayed && self.policy.activity.contains(&w.application_identity));
+        let raw_windows = Arc::downgrade(raw);
+        let raw_tray = Arc::downgrade(tray);
+        let windows_changed = self.policy_changed || !self.raw_windows.ptr_eq(&raw_windows);
+        let tray_changed = self.policy_changed || !self.raw_tray.ptr_eq(&raw_tray);
+        if windows_changed {
+            self.activity_kind = if raw
+                .iter()
+                .any(|w| w.displayed && self.policy.activity.contains(&w.application_identity))
+            {
+                "privacy_exclusion"
+            } else if raw.iter().any(|w| w.displayed) {
+                "active"
+            } else {
+                "desktop_idle"
+            };
+        }
         let kind = if self.policy.paused {
             "global_pause"
         } else if let Some(kind) = session {
             kind
-        } else if excluded {
-            "privacy_exclusion"
-        } else if !raw.iter().any(|w| w.displayed) {
-            "desktop_idle"
         } else {
-            "active"
+            self.activity_kind
         };
         let mut systems = vec![];
         if sleeping || discontinuity {
@@ -156,84 +196,94 @@ impl Filter {
             self.system_start = now;
             self.system_mono = mono;
         }
-        let windows = if self.blocked {
-            vec![]
-        } else {
-            raw.iter()
-                .filter(|w| !self.policy.activity.contains(&w.application_identity))
-                .cloned()
-                .collect::<Vec<_>>()
-        };
-        let tray = if self.blocked {
-            vec![]
-        } else {
-            tray.iter()
-                .filter(|w| !self.policy.activity.contains(&w.application_identity))
-                .cloned()
-                .collect::<Vec<_>>()
-        };
+        let refilter = previously_blocked != self.blocked || sleeping || discontinuity;
         let mut transitions = vec![];
         let mut tray_transitions = vec![];
-        for old in &self.windows {
-            if sleeping || discontinuity || !windows.iter().any(|w| same_window(w, old)) {
-                transitions.push(WindowTransition {
-                    kind: WindowTransitionKind::Closed,
-                    window: old.clone(),
-                    observed_at_utc_ms: if sleeping { self.last_utc } else { now },
-                    monotonic_ms: mono,
-                });
-            }
-        }
-        for w in &windows {
-            let old = if sleeping || discontinuity {
-                None
+        if windows_changed || refilter {
+            let windows = if self.blocked {
+                vec![]
             } else {
-                self.windows.iter().find(|old| same_window(w, old))
+                raw.iter()
+                    .filter(|w| !self.policy.activity.contains(&w.application_identity))
+                    .cloned()
+                    .collect::<Vec<_>>()
             };
-            if old != Some(w) {
-                transitions.push(WindowTransition {
-                    kind: if old.is_some() {
-                        WindowTransitionKind::Updated
-                    } else {
-                        WindowTransitionKind::Opened
-                    },
-                    window: w.clone(),
-                    observed_at_utc_ms: now,
-                    monotonic_ms: mono,
-                });
+            for old in &self.windows {
+                if sleeping || discontinuity || !windows.iter().any(|w| same_window(w, old)) {
+                    transitions.push(WindowTransition {
+                        kind: WindowTransitionKind::Closed,
+                        window: old.clone(),
+                        observed_at_utc_ms: if sleeping { self.last_utc } else { now },
+                        monotonic_ms: mono,
+                    });
+                }
             }
-        }
-        for old in &self.tray {
-            if !tray.contains(old) || sleeping || discontinuity {
-                tray_transitions.push(TrayTransition {
-                    kind: TrayTransitionKind::Ended,
-                    observed_at_utc_ms: if sleeping { self.last_utc } else { now },
-                    monotonic_ms: mono,
-                    application_identity: old.application_identity.clone(),
-                    process_id: old.process_id,
-                    process_started_at_100ns: old.process_started_at_100ns,
-                });
+            for w in &windows {
+                let old = if sleeping || discontinuity {
+                    None
+                } else {
+                    self.windows.iter().find(|old| same_window(w, old))
+                };
+                if old != Some(w) {
+                    transitions.push(WindowTransition {
+                        kind: if old.is_some() {
+                            WindowTransitionKind::Updated
+                        } else {
+                            WindowTransitionKind::Opened
+                        },
+                        window: w.clone(),
+                        observed_at_utc_ms: now,
+                        monotonic_ms: mono,
+                    });
+                }
             }
+            self.windows = windows;
         }
-        for w in &tray {
-            if !self.tray.contains(w) || sleeping || discontinuity {
-                tray_transitions.push(TrayTransition {
-                    kind: TrayTransitionKind::Started,
-                    observed_at_utc_ms: now,
-                    monotonic_ms: mono,
-                    application_identity: w.application_identity.clone(),
-                    process_id: w.process_id,
-                    process_started_at_100ns: w.process_started_at_100ns,
-                });
+        let mut tray_state_changed = false;
+        if tray_changed || refilter {
+            let tray = if self.blocked {
+                vec![]
+            } else {
+                tray.iter()
+                    .filter(|w| !self.policy.activity.contains(&w.application_identity))
+                    .cloned()
+                    .collect::<Vec<_>>()
+            };
+            for old in &self.tray {
+                if !tray.contains(old) || sleeping || discontinuity {
+                    tray_transitions.push(TrayTransition {
+                        kind: TrayTransitionKind::Ended,
+                        observed_at_utc_ms: if sleeping { self.last_utc } else { now },
+                        monotonic_ms: mono,
+                        application_identity: old.application_identity.clone(),
+                        process_id: old.process_id,
+                        process_started_at_100ns: old.process_started_at_100ns,
+                    });
+                }
             }
+            for w in &tray {
+                if !self.tray.contains(w) || sleeping || discontinuity {
+                    tray_transitions.push(TrayTransition {
+                        kind: TrayTransitionKind::Started,
+                        observed_at_utc_ms: now,
+                        monotonic_ms: mono,
+                        application_identity: w.application_identity.clone(),
+                        process_id: w.process_id,
+                        process_started_at_100ns: w.process_started_at_100ns,
+                    });
+                }
+            }
+            tray_state_changed = self.tray != tray;
+            self.tray = tray;
         }
-        self.windows = windows;
-        self.tray = tray;
+        self.raw_windows = raw_windows;
+        self.raw_tray = raw_tray;
+        self.policy_changed = false;
         self.last_utc = now;
         self.last_awake = awake;
         self.last_interrupt = interrupt;
         self.last_offset = offset;
-        (transitions, tray_transitions, systems)
+        (transitions, tray_transitions, systems, tray_state_changed)
     }
 }
 fn same_window(a: &WindowObservation, b: &WindowObservation) -> bool {
@@ -319,6 +369,183 @@ fn session_kind() -> Option<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn window() -> WindowObservation {
+        WindowObservation {
+            window_id: 10,
+            process_id: 20,
+            process_started_at_100ns: 30,
+            application_identity: "fixture-app".into(),
+            identity_source: timelens_observer::IdentitySource::ExecutablePath,
+            executable_path: Some("C:\\Fixture\\app.exe".into()),
+            app_user_model_id: None,
+            package_identity: None,
+            displayed: true,
+            focused: true,
+            on_current_virtual_desktop: Some(true),
+            virtual_desktop_id: None,
+        }
+    }
+
+    fn filter(directory: &Path) -> Filter {
+        let mut filter = Filter::new(directory, 0, 0);
+        filter.session = None;
+        filter.last_awake = 0;
+        filter.last_interrupt = 0;
+        filter
+    }
+
+    #[test]
+    fn unchanged_sources_reuse_filtered_storage_and_keep_system_heartbeats() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut filter = filter(directory.path());
+        let raw = Arc::new(vec![window()]);
+        let tray = Arc::new(vec![TrayPresence {
+            application_identity: "fixture-tray".into(),
+            process_id: 21,
+            process_started_at_100ns: 31,
+        }]);
+        let first = filter.reconcile_at(&raw, &tray, 0, 0, 60, 0, 0);
+        assert_eq!((first.0.len(), first.1.len(), first.3), (1, 1, true));
+        let window_buffer = filter.windows.as_ptr();
+        let identity_buffer = filter.windows[0].application_identity.as_ptr();
+        let tray_buffer = filter.tray.as_ptr();
+        for now in [1_000, 29_999, 30_000, 31_000] {
+            let (windows, tray_events, systems, changed) =
+                filter.reconcile_at(&raw, &tray, now, now as u64, 60, now as u64, now as u64);
+            assert!(windows.is_empty() && tray_events.is_empty() && !changed);
+            assert_eq!(systems.len(), usize::from(now == 30_000));
+            assert_eq!(filter.windows.as_ptr(), window_buffer);
+            assert_eq!(
+                filter.windows[0].application_identity.as_ptr(),
+                identity_buffer
+            );
+            assert_eq!(filter.tray.as_ptr(), tray_buffer);
+        }
+        assert_eq!(Arc::strong_count(&raw), 1);
+        assert_eq!(Arc::strong_count(&tray), 1);
+    }
+
+    #[test]
+    fn encrypted_policy_refresh_and_unreadable_policy_invalidate_cached_results() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut filter = filter(directory.path());
+        let raw = Arc::new(vec![window()]);
+        let tray = Arc::new(vec![]);
+        filter.reconcile_at(&raw, &tray, 0, 0, 60, 0, 0);
+        let mut policy = Policy::default();
+        policy.activity.insert("fixture-app".into());
+        policy.save(directory.path()).unwrap();
+        filter.checked.reset();
+        assert!(filter.refresh(directory.path()));
+        filter.session = None;
+        assert_eq!(
+            filter
+                .reconcile_at(&raw, &tray, 1_000, 1_000, 60, 1_000, 1_000)
+                .0[0]
+                .kind,
+            WindowTransitionKind::Closed
+        );
+        std::fs::write(directory.path().join(POLICY_FILE), b"unreadable").unwrap();
+        filter.checked.reset();
+        assert!(filter.refresh(directory.path()));
+        filter.reconcile_at(&raw, &tray, 2_000, 2_000, 60, 2_000, 2_000);
+        assert!(filter.policy.paused && filter.blocked);
+        assert!(filter.windows.is_empty());
+        assert_eq!(filter.system_kind, "global_pause");
+    }
+
+    #[test]
+    fn policy_and_session_changes_invalidate_unchanged_sources() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut filter = filter(directory.path());
+        let raw = Arc::new(vec![window()]);
+        let tray = Arc::new(vec![]);
+        filter.reconcile_at(&raw, &tray, 0, 0, 60, 0, 0);
+        filter.policy.activity.insert("fixture-app".into());
+        filter.policy_changed = true;
+        let result = filter.reconcile_at(&raw, &tray, 1_000, 1_000, 60, 1_000, 1_000);
+        assert_eq!(result.0[0].kind, WindowTransitionKind::Closed);
+        assert_eq!(filter.system_kind, "privacy_exclusion");
+        assert!(filter.windows.is_empty());
+        filter.policy.activity.clear();
+        filter.policy_changed = true;
+        assert_eq!(
+            filter
+                .reconcile_at(&raw, &tray, 2_000, 2_000, 60, 2_000, 2_000)
+                .0[0]
+                .kind,
+            WindowTransitionKind::Opened
+        );
+        filter.session = Some("locked");
+        assert_eq!(
+            filter
+                .reconcile_at(&raw, &tray, 3_000, 3_000, 60, 3_000, 3_000)
+                .0[0]
+                .kind,
+            WindowTransitionKind::Closed
+        );
+        assert!(filter.blocked);
+        filter.session = None;
+        assert_eq!(
+            filter
+                .reconcile_at(&raw, &tray, 4_000, 4_000, 60, 4_000, 4_000)
+                .0[0]
+                .kind,
+            WindowTransitionKind::Opened
+        );
+        assert!(!filter.blocked);
+    }
+
+    #[test]
+    fn changed_sources_and_clock_gaps_still_publish_transitions() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut filter = filter(directory.path());
+        let raw = Arc::new(vec![window()]);
+        let tray = Arc::new(vec![]);
+        filter.reconcile_at(&raw, &tray, 0, 0, 60, 0, 0);
+        let updated = Arc::new(vec![WindowObservation {
+            focused: false,
+            ..window()
+        }]);
+        assert_eq!(
+            filter
+                .reconcile_at(&updated, &tray, 1_000, 1_000, 60, 1_000, 1_000)
+                .0[0]
+                .kind,
+            WindowTransitionKind::Updated
+        );
+        let result = filter.reconcile_at(&updated, &tray, 21_000, 21_000, 60, 2_000, 21_000);
+        assert_eq!(result.0.len(), 2);
+        assert_eq!(result.0[0].kind, WindowTransitionKind::Closed);
+        assert_eq!(result.0[0].observed_at_utc_ms, 1_000);
+        assert_eq!(result.0[1].kind, WindowTransitionKind::Opened);
+        assert!(matches!(&result.2[0].body,
+            Some(collector_event::Body::SystemInterval(interval)) if interval.kind == "sleep"));
+        let result = filter.reconcile_at(&updated, &tray, 22_000, 22_000, 120, 3_000, 22_000);
+        assert_eq!(result.0.len(), 2);
+        assert!(matches!(&result.2[0].body,
+            Some(collector_event::Body::SystemInterval(interval)) if interval.kind == "clock_discontinuity"));
+    }
+
+    #[test]
+    fn cached_sources_do_not_keep_retired_window_payloads_alive() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut filter = filter(directory.path());
+        let raw = Arc::new(vec![window()]);
+        let tray = Arc::new(vec![]);
+        filter.reconcile_at(&raw, &tray, 0, 0, 60, 0, 0);
+        let retired = Arc::downgrade(&raw);
+        drop(raw);
+        assert!(retired.upgrade().is_none());
+        let reused = Arc::new(vec![WindowObservation {
+            process_started_at_100ns: 40,
+            ..window()
+        }]);
+        let result = filter.reconcile_at(&reused, &tray, 1_000, 1_000, 60, 1_000, 1_000);
+        assert_eq!(result.0.len(), 2);
+        assert_eq!(filter.windows[0].process_started_at_100ns, 40);
+    }
     #[test]
     fn the_system_state_in_progress_can_end_a_run() {
         let directory = tempfile::tempdir().unwrap();

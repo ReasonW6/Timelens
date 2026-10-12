@@ -10,7 +10,7 @@ use std::{
     collections::{HashMap, HashSet},
     marker::PhantomData,
     rc::Rc,
-    sync::Mutex,
+    sync::{Arc, Mutex},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
@@ -133,7 +133,7 @@ pub struct WindowTransition {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ReconcileResult {
-    pub current: Vec<WindowObservation>,
+    pub current: Arc<Vec<WindowObservation>>,
     pub transitions: Vec<WindowTransition>,
     pub tray_transitions: Vec<TrayTransition>,
 }
@@ -174,6 +174,8 @@ pub struct WindowObserver {
     tracked: HashMap<usize, TrackedWindow>,
     tray_candidates: HashMap<TrayKey, TrayCandidate>,
     process_cache: HashMap<u32, ProcessInfo>,
+    current: Arc<Vec<WindowObservation>>,
+    tray_presence: Arc<Vec<TrayPresence>>,
     started: Instant,
     // COM interfaces above must be released before this apartment guard.
     _com: ComApartment,
@@ -189,13 +191,15 @@ impl WindowObserver {
             tracked: HashMap::new(),
             tray_candidates: HashMap::new(),
             process_cache: HashMap::new(),
+            current: Arc::new(Vec::new()),
+            tray_presence: Arc::new(Vec::new()),
             started: Instant::now(),
             _com: ComApartment(PhantomData),
         })
     }
 
     pub fn reconcile(&mut self) -> Result<Vec<WindowObservation>> {
-        Ok(self.reconcile_transitions()?.current)
+        Ok(self.reconcile_transitions()?.current.as_ref().clone())
     }
 
     pub fn timestamp(&self) -> (i64, u64) {
@@ -206,32 +210,29 @@ impl WindowObserver {
     }
 
     pub fn seed_tray_presence(&mut self, seeds: impl IntoIterator<Item = TrayPresence>) {
+        let mut changed = false;
         for seed in seeds {
             if process_matches(seed.process_id, seed.process_started_at_100ns) {
-                self.tray_candidates.insert(
-                    TrayKey {
-                        process_id: seed.process_id,
-                        process_started_at_100ns: seed.process_started_at_100ns,
-                        application_identity: seed.application_identity,
-                    },
-                    TrayCandidate,
-                );
+                changed |= self
+                    .tray_candidates
+                    .insert(
+                        TrayKey {
+                            process_id: seed.process_id,
+                            process_started_at_100ns: seed.process_started_at_100ns,
+                            application_identity: seed.application_identity,
+                        },
+                        TrayCandidate,
+                    )
+                    .is_none();
             }
         }
+        replace_snapshot(&mut self.tray_presence, changed, || {
+            tray_presence(&self.tray_candidates)
+        });
     }
 
-    pub fn current_tray_presence(&self) -> Vec<TrayPresence> {
-        let mut presence = self
-            .tray_candidates
-            .keys()
-            .map(|key| TrayPresence {
-                application_identity: key.application_identity.clone(),
-                process_id: key.process_id,
-                process_started_at_100ns: key.process_started_at_100ns,
-            })
-            .collect::<Vec<_>>();
-        presence.sort();
-        presence
+    pub fn current_tray_presence(&self) -> Arc<Vec<TrayPresence>> {
+        Arc::clone(&self.tray_presence)
     }
 
     pub fn reconcile_transitions(&mut self) -> Result<ReconcileResult> {
@@ -369,7 +370,7 @@ impl WindowObserver {
                         window: observation.clone(),
                     });
                 }
-                tracked.last_observation = Some(observation.clone());
+                tracked.last_observation = Some(observation);
             }
         }
 
@@ -388,19 +389,27 @@ impl WindowObserver {
                 &mut transitions,
             );
         }
-        let mut observations = self
-            .tracked
-            .values()
-            .filter_map(|tracked| tracked.last_observation.clone())
-            .collect::<Vec<_>>();
-        observations.sort_unstable_by_key(|observation| observation.window_id);
+        replace_snapshot(&mut self.current, !transitions.is_empty(), || {
+            let mut observations = self
+                .tracked
+                .values()
+                .filter_map(|tracked| tracked.last_observation.clone())
+                .collect::<Vec<_>>();
+            observations.sort_unstable_by_key(|observation| observation.window_id);
+            observations
+        });
         let tray_transitions = update_tray_candidates(
             &mut self.tray_candidates,
-            &observations,
+            &self.current,
             &transitions,
             observed_at_utc_ms,
             monotonic_ms,
             process_matches,
+        );
+        replace_snapshot(
+            &mut self.tray_presence,
+            !tray_transitions.is_empty(),
+            || tray_presence(&self.tray_candidates),
         );
         if full {
             self.process_cache.retain(|pid, _| {
@@ -412,11 +421,30 @@ impl WindowObserver {
             });
         }
         Ok(ReconcileResult {
-            current: observations,
+            current: Arc::clone(&self.current),
             transitions,
             tray_transitions,
         })
     }
+}
+
+fn replace_snapshot<T>(current: &mut Arc<Vec<T>>, changed: bool, build: impl FnOnce() -> Vec<T>) {
+    if changed {
+        *current = Arc::new(build());
+    }
+}
+
+fn tray_presence(candidates: &HashMap<TrayKey, TrayCandidate>) -> Vec<TrayPresence> {
+    let mut presence = candidates
+        .keys()
+        .map(|key| TrayPresence {
+            application_identity: key.application_identity.clone(),
+            process_id: key.process_id,
+            process_started_at_100ns: key.process_started_at_100ns,
+        })
+        .collect::<Vec<_>>();
+    presence.sort();
+    presence
 }
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -437,6 +465,33 @@ fn update_tray_candidates(
     monotonic_ms: u64,
     process_is_alive: impl Fn(u32, u64) -> bool,
 ) -> Vec<TrayTransition> {
+    if candidates.is_empty()
+        && !window_transitions
+            .iter()
+            .any(|t| t.kind == WindowTransitionKind::Closed)
+    {
+        return Vec::new();
+    }
+    if window_transitions.is_empty() {
+        let mut transitions = Vec::new();
+        candidates.retain(|key, _| {
+            let alive = !current.iter().any(|w| {
+                w.process_id == key.process_id
+                    && w.process_started_at_100ns == key.process_started_at_100ns
+                    && w.application_identity == key.application_identity
+            }) && process_is_alive(key.process_id, key.process_started_at_100ns);
+            if !alive {
+                transitions.push(tray_transition(
+                    TrayTransitionKind::Ended,
+                    key.clone(),
+                    observed_at_utc_ms,
+                    monotonic_ms,
+                ));
+            }
+            alive
+        });
+        return transitions;
+    }
     let current_keys = current.iter().map(tray_key).collect::<HashSet<_>>();
     let mut transitions = Vec::new();
 
@@ -550,13 +605,19 @@ impl WinEventMonitor {
     }
 
     pub fn wait_for_events(&self, timeout: Duration) -> WindowEvents {
-        let timeout_ms = timeout.as_millis().min(u32::MAX as u128) as u32;
+        let timeout_ms = message_wait_ms(timeout);
         unsafe {
             MsgWaitForMultipleObjectsEx(None, timeout_ms, QS_ALLINPUT, MWMO_INPUTAVAILABLE);
         }
         pump_messages();
         std::mem::take(&mut *WINDOW_EVENTS.lock().unwrap_or_else(|e| e.into_inner()))
     }
+}
+
+fn message_wait_ms(timeout: Duration) -> u32 {
+    // Rounding down a remaining fraction of a millisecond would busy-poll until
+    // the absolute deadline; Windows can only wait in whole milliseconds.
+    timeout.as_nanos().div_ceil(1_000_000).min(u32::MAX as u128) as u32
 }
 
 impl Drop for WinEventMonitor {
@@ -1053,6 +1114,32 @@ impl Drop for ProcessHandle {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn message_wait_rounds_remaining_fractions_up_without_delaying_due_checks() {
+        for (nanos, milliseconds) in [(0, 0), (1, 1), (999_999, 1), (1_000_000, 1), (1_000_001, 2)]
+        {
+            assert_eq!(message_wait_ms(Duration::from_nanos(nanos)), milliseconds);
+        }
+        assert_eq!(message_wait_ms(Duration::from_secs(u64::MAX)), u32::MAX);
+    }
+
+    #[test]
+    fn unchanged_observations_reuse_the_snapshot_and_changed_ones_replace_it() {
+        let mut current = Arc::new(vec![observation(true, true)]);
+        let previous = Arc::clone(&current);
+        replace_snapshot(&mut current, false, || {
+            panic!("unchanged state must not be copied")
+        });
+        assert!(Arc::ptr_eq(&previous, &current));
+        replace_snapshot(&mut current, true, || vec![observation(false, false)]);
+        assert!(!Arc::ptr_eq(&previous, &current));
+        assert!(previous[0].focused);
+        assert!(!current[0].focused);
+        let retired = Arc::downgrade(&previous);
+        drop(previous);
+        assert!(retired.upgrade().is_none());
+    }
 
     #[test]
     fn event_overflow_requires_full_reconciliation_instead_of_losing_windows() {

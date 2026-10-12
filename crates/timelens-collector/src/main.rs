@@ -3,6 +3,7 @@
 
 mod collection;
 mod data_directory;
+mod event_wait;
 mod input_identity;
 mod spool;
 
@@ -294,11 +295,12 @@ fn collect_window_events(pipe_name: &str, data_directory: PathBuf) -> Result<()>
         let now = unix_time_ms();
         let until_minute =
             Duration::from_millis((MINUTE_MS - now.rem_euclid(MINUTE_MS)).max(1) as u64);
-        let changes = monitor.wait_for_events(
-            until_minute
-                .min(last_reconcile.remaining(Instant::now()))
-                .min(Duration::from_secs(1)),
-        );
+        let waiting_at = Instant::now();
+        let deadline = waiting_at
+            + until_minute
+                .min(last_reconcile.remaining(waiting_at))
+                .min(Duration::from_secs(1));
+        let changes = event_wait::until(deadline, |remaining| monitor.wait_for_events(remaining));
         filter.refresh(&data_directory);
         if changes.reconcile || last_reconcile.is_due(Instant::now()) {
             raw = observer.reconcile_transitions()?.current;
@@ -450,20 +452,19 @@ fn publish_collection(
     run: &mut Vec<u8>,
     sequence: &mut u64,
     filter: &mut collection::Filter,
-    raw: &[timelens_observer::WindowObservation],
-    tray: &[TrayPresence],
+    raw: &Arc<Vec<timelens_observer::WindowObservation>>,
+    tray: &Arc<Vec<TrayPresence>>,
     now: i64,
     mono: u64,
 ) -> Result<()> {
-    let previous_tray = filter.tray.clone();
-    let (windows, tray_events, mut events) = filter.reconcile(
+    let (windows, tray_events, mut events, tray_changed) = filter.reconcile(
         raw,
         tray,
         now,
         mono,
         local_time_facts(now)?.timezone_offset_minutes,
     );
-    if previous_tray != filter.tray {
+    if tray_changed {
         save_tray_state(spool, &filter.tray)?;
     }
     events.extend(windows.iter().map(protocol_event));
