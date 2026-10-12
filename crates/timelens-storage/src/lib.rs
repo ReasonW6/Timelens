@@ -290,7 +290,11 @@ impl Storage {
             database_path,
             cipher_version,
         };
-        storage.reconcile_snapshot_files()?;
+        // A damaged image container must not take the whole dataset offline. Its
+        // originals stay untouched; reads of that day fail and the next open retries.
+        if let Err(error) = storage.reconcile_snapshot_files() {
+            eprintln!("snapshot storage reconciliation failed; originals retained: {error}");
+        }
         storage.sync_collection_policy()?;
         storage.initialize_ai()?;
         Ok(storage)

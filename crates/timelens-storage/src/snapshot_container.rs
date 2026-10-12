@@ -556,10 +556,10 @@ impl Storage {
     fn purge_unreferenced_snapshot_files(&self) -> Result<()> {
         let directory = self.snapshot_directory();
         let pending: bool = self.connection.query_row("SELECT EXISTS(SELECT 1 FROM snapshot_slots s LEFT JOIN snapshot_slot_days d USING(slot_id) LEFT JOIN snapshot_container_records r ON r.blob_id=s.blob_id AND r.local_day=d.local_day WHERE s.result='success' AND r.blob_id IS NULL)",[],|r|r.get(0))?;
+        // An incomplete old-format migration keeps every file until a later
+        // open finishes it; the remaining retention work must still proceed.
         if pending {
-            return Err(invalid(
-                "old snapshot migration is not complete; originals retained",
-            ));
+            return Ok(());
         }
         let referenced = self
             .snapshot_container_files()?
@@ -596,14 +596,16 @@ impl Storage {
         self.finish_snapshot_key_cleanup()?;
         self.purge_unreferenced_snapshot_files()?;
         let policy = self.snapshot_policy()?;
+        let today = local_day(now_utc_ms)?;
         let cutoff = policy
             .retention_days
             .map(|days| {
-                local_day(now_utc_ms)?
+                today
                     .checked_sub_days(Days::new(u64::from(days - 1)))
                     .ok_or_else(|| invalid("snapshot retention date is out of range"))
             })
             .transpose()?;
+        let today = today.to_string();
         let days = self
             .connection
             .prepare("SELECT local_day FROM snapshot_containers ORDER BY local_day")?
@@ -612,7 +614,9 @@ impl Storage {
         let mut outcome = SnapshotRetentionOutcome::default();
         for day in days {
             let expired = cutoff.is_some_and(|cutoff| day < cutoff.to_string());
-            if expired || self.snapshot_live_bytes()? > policy.max_bytes {
+            // Capacity never removes the current day, or each new capture would
+            // wipe the day it was just stored in; it becomes eligible tomorrow.
+            if expired || (day < today && self.snapshot_live_bytes()? > policy.max_bytes) {
                 let removed =
                     self.clean_snapshot_day(&day, SnapshotMissingReason::RetentionCleaned)?;
                 outcome.snapshot_items += removed.snapshot_items;
@@ -1044,15 +1048,107 @@ mod tests {
         storage
             .set_snapshot_policy(policy, a.captured_at_utc_ms)
             .unwrap();
-        let outcome = storage
-            .apply_snapshot_day_retention(a.captured_at_utc_ms + 3000)
-            .unwrap();
+        // Both days must be in the past in every time zone; today is never cleaned by capacity.
+        let now = Local
+            .with_ymd_and_hms(2023, 11, 16, 12, 0, 0)
+            .single()
+            .unwrap()
+            .timestamp_millis();
+        let outcome = storage.apply_snapshot_day_retention(now).unwrap();
         assert_eq!(outcome.snapshot_items, 2);
         assert!(storage.load_snapshot_image(old).is_err());
         assert!(storage.load_snapshot_image(old_last).is_err());
         assert_eq!(storage.load_snapshot_image(new).unwrap().webp, a.webp);
         assert_eq!(files(&storage).len(), 1);
         assert!(storage.snapshot_live_bytes().unwrap() <= policy.max_bytes);
+    }
+
+    fn large_request(utc: i64, seed: usize) -> SnapshotStoreRequest {
+        let pixels = (0..512 * 512 * 3)
+            .map(|n| ((n * 997 + n / 379 + seed) ^ ((n * 37) >> 11)) as u8)
+            .collect::<Vec<_>>();
+        let mut webp = Vec::new();
+        image::codecs::webp::WebPEncoder::new_lossless(&mut webp)
+            .write_image(&pixels, 512, 512, image::ExtendedColorType::Rgb8)
+            .unwrap();
+        SnapshotStoreRequest {
+            pixel_width: 512,
+            pixel_height: 512,
+            webp,
+            ..request(utc, 0)
+        }
+    }
+
+    #[test]
+    fn capacity_cleanup_keeps_the_current_day_even_when_it_alone_exceeds_the_limit() {
+        let directory = tempfile::tempdir().unwrap();
+        let storage = Storage::open(directory.path()).unwrap();
+        let now = Local
+            .with_ymd_and_hms(2026, 10, 11, 12, 0, 0)
+            .single()
+            .unwrap()
+            .timestamp_millis();
+        let older = store_on_day(&storage, &request(now - 86_400_000, 10), "2026-10-10");
+        let morning = large_request(now - 2000, 1);
+        let noon = large_request(now - 1000, 2);
+        let today = [
+            store_on_day(&storage, &morning, "2026-10-11"),
+            store_on_day(&storage, &noon, "2026-10-11"),
+        ];
+        let mut policy = storage.snapshot_policy().unwrap();
+        policy.retention_days = None;
+        policy.max_bytes = 1024 * 1024;
+        storage.set_snapshot_policy(policy, now).unwrap();
+        let outcome = storage.apply_snapshot_day_retention(now).unwrap();
+        assert_eq!(outcome.snapshot_items, 1);
+        assert!(storage.load_snapshot_image(older).is_err());
+        for (id, image) in today.into_iter().zip([morning, noon]) {
+            assert_eq!(storage.load_snapshot_image(id).unwrap().webp, image.webp);
+        }
+        assert!(storage.snapshot_live_bytes().unwrap() > policy.max_bytes);
+    }
+
+    #[test]
+    fn a_damaged_day_container_is_preserved_without_blocking_open_or_other_days() {
+        let directory = tempfile::tempdir().unwrap();
+        let storage = Storage::open(directory.path()).unwrap();
+        let a = request(1_700_000_000_000, 10);
+        let b = request(a.slot_started_utc_ms + 1000, 20);
+        let damaged = store_on_day(&storage, &a, "2023-11-13");
+        let intact = store_on_day(&storage, &b, "2023-11-14");
+        let mut policy = storage.snapshot_policy().unwrap();
+        policy.retention_days = None;
+        storage
+            .set_snapshot_policy(policy, a.captured_at_utc_ms)
+            .unwrap();
+        let blob = storage
+            .connection
+            .query_row(
+                "SELECT blob_id FROM snapshot_slots WHERE slot_id=?",
+                [damaged],
+                |r| r.get::<_, i64>(0),
+            )
+            .unwrap();
+        let r = record(&storage.connection, blob, None).unwrap().unwrap();
+        let path = storage.snapshot_directory().join(&r.name);
+        drop(storage);
+        let truncated = fs::read(&path).unwrap()[..r.committed_bytes as usize - 1].to_vec();
+        fs::write(&path, &truncated).unwrap();
+
+        let reopened = Storage::open(directory.path()).unwrap();
+        assert!(reopened.load_snapshot_image(damaged).is_err());
+        assert_eq!(reopened.load_snapshot_image(intact).unwrap().webp, b.webp);
+        let c = request(a.slot_started_utc_ms + 2000, 30);
+        let hash = snapshot_pixel_hash(&c.webp, c.pixel_width, c.pixel_height).unwrap();
+        assert!(
+            reopened
+                .append_snapshot_on_day(&c, &hash, "2023-11-13")
+                .is_err()
+        );
+        reopened
+            .apply_snapshot_day_retention(a.captured_at_utc_ms + 3000)
+            .unwrap();
+        assert_eq!(fs::read(&path).unwrap(), truncated);
     }
 
     #[test]
@@ -1228,7 +1324,7 @@ mod tests {
         let originals = make_legacy(&storage);
         drop(storage);
         FAILURE.with(|f| f.set(Some("after_migration_day")));
-        assert!(Storage::open(directory.path()).is_err());
+        drop(Storage::open(directory.path()).unwrap());
         for (path, bytes) in &originals {
             assert_eq!(fs::read(path).unwrap(), *bytes);
         }
@@ -1240,7 +1336,7 @@ mod tests {
     }
 
     #[test]
-    fn corrupt_legacy_ciphertext_blocks_migration_and_preserves_originals() {
+    fn corrupt_legacy_ciphertext_stops_migration_without_blocking_open() {
         let directory = tempfile::tempdir().unwrap();
         let storage = Storage::open(directory.path()).unwrap();
         let a = request(1_700_000_000_000, 10);
@@ -1250,8 +1346,13 @@ mod tests {
         let mut corrupt = originals[0].1.clone();
         corrupt[25] ^= 1;
         fs::write(&originals[0].0, &corrupt).unwrap();
-        assert!(Storage::open(directory.path()).is_err());
+        let opened = Storage::open(directory.path()).unwrap();
+        assert!(opened.load_snapshot_image(id).is_err());
+        opened
+            .apply_snapshot_day_retention(a.captured_at_utc_ms)
+            .unwrap();
         assert_eq!(fs::read(&originals[0].0).unwrap(), corrupt);
+        drop(opened);
         fs::write(&originals[0].0, &originals[0].1).unwrap();
         let repaired = Storage::open(directory.path()).unwrap();
         assert_eq!(repaired.load_snapshot_image(id).unwrap().webp, a.webp);
@@ -1380,7 +1481,7 @@ mod tests {
         let originals = make_legacy(&storage);
         drop(storage);
         FAILURE.with(|f| f.set(Some("after_migration_dates")));
-        assert!(Storage::open(directory.path()).is_err());
+        drop(Storage::open(directory.path()).unwrap());
         for (path, bytes) in &originals {
             assert_eq!(fs::read(path).unwrap(), *bytes);
         }

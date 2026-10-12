@@ -1359,8 +1359,9 @@ mod tests {
             .unwrap();
         assert!(storage.snapshot_live_bytes().unwrap() > policy.max_bytes);
 
+        // Capacity cleanup never removes the current local day.
         let outcome = storage
-            .apply_milestone3_retention(1_700_000_000_020, None)
+            .apply_milestone3_retention(1_700_000_000_020 + 2 * 86_400_000, None)
             .unwrap();
         assert_eq!(outcome.snapshot_items, 1);
         assert!(storage.snapshot_live_bytes().unwrap() <= policy.max_bytes);
