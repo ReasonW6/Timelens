@@ -1285,10 +1285,18 @@ fn install_snapshot_callbacks(
             let Some(slot_id) = snapshot_state.borrow().selected_slot_id else {
                 return;
             };
+            let mut postponed = None;
             let result = storage
                 .lock()
                 .map_err(|_| anyhow::anyhow!("storage lock poisoned"))
-                .and_then(|storage| storage.delete_snapshot(slot_id).map_err(Into::into));
+                .and_then(|storage| match storage.delete_snapshot(slot_id) {
+                    // The slot is deleted; only scrubbing its old data waits for retention.
+                    Err(timelens_storage::StorageError::SnapshotCleanupPending(error)) => {
+                        postponed = Some(error);
+                        Ok(true)
+                    }
+                    result => result.map_err(Into::into),
+                });
             if let Some(window) = weak.upgrade() {
                 match result {
                     Ok(true) => {
@@ -1296,7 +1304,12 @@ fn install_snapshot_callbacks(
                         window.set_snapshot_preview(Image::default());
                         window
                             .set_snapshot_detail("图片已删除；该槽保留为明确的用户删除记录".into());
-                        window.set_action_status("已删除所选快照".into());
+                        window.set_action_status(match postponed {
+                            Some(error) => {
+                                format!("已删除所选快照；旧加密数据稍后清理：{error}").into()
+                            }
+                            None => "已删除所选快照".into(),
+                        });
                         if let Err(error) =
                             refresh_snapshot_panel(&window, &storage, &ui_state, &snapshot_state)
                         {

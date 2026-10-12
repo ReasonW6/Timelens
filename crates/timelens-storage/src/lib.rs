@@ -89,6 +89,9 @@ pub enum StorageError {
     MigrationRolledBack(String),
     #[error("collector event batch is invalid: {0}")]
     InvalidBatch(String),
+    /// The deletion is committed; a later cleanup pass removes its old encrypted data.
+    #[error("snapshot deleted, but removing its old encrypted data is postponed: {0}")]
+    SnapshotCleanupPending(String),
 }
 
 pub type Result<T> = std::result::Result<T, StorageError>;

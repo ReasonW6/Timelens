@@ -659,14 +659,22 @@ impl Storage {
         tx.execute("DELETE FROM snapshot_blobs WHERE NOT EXISTS(SELECT 1 FROM snapshot_slots s WHERE s.blob_id=snapshot_blobs.blob_id)",[])?;
         tx.commit()?;
         self.snapshot_files_settled.set(false);
-        self.finish_snapshot_key_cleanup()?;
         let mut released = 0;
-        if let Some((name, _)) = container {
-            let path = image_path(&self.snapshot_directory(), &name)?;
-            if path.exists() {
-                released = fs::metadata(&path)?.len();
-                fs::remove_file(path)?;
+        let cleanup = self.finish_snapshot_key_cleanup().and_then(|()| {
+            if let Some((name, _)) = container {
+                let path = image_path(&self.snapshot_directory(), &name)?;
+                if path.exists() {
+                    let bytes = fs::metadata(&path)?.len();
+                    fs::remove_file(path)?;
+                    released = bytes;
+                }
             }
+            Ok(())
+        });
+        // The day is already gone from the index; the next cleanup pass removes
+        // the rest, so its result stands.
+        if let Err(error) = cleanup {
+            eprintln!("snapshot day cleanup postponed: {error}");
         }
         Ok(SnapshotRetentionOutcome {
             snapshot_items: count as u64,
@@ -695,7 +703,8 @@ impl Storage {
         if remaining {
             tx.commit()?;
             self.snapshot_files_settled.set(false);
-            self.finish_snapshot_key_cleanup()?;
+            self.finish_snapshot_key_cleanup()
+                .map_err(cleanup_pending)?;
             return Ok(Some(0));
         }
         let blobs = tx.prepare("SELECT blob_id FROM snapshot_container_records WHERE local_day=? AND blob_id<>? ORDER BY record_offset")?
@@ -785,9 +794,15 @@ impl Storage {
         } else {
             0
         };
-        self.finish_snapshot_key_cleanup()?;
-        fault("after_delete_commit")?;
-        fs::remove_file(image_path(&self.snapshot_directory(), &old_name)?)?;
+        self.finish_snapshot_key_cleanup()
+            .and_then(|()| fault("after_delete_commit"))
+            .and_then(|()| {
+                Ok(fs::remove_file(image_path(
+                    &self.snapshot_directory(),
+                    &old_name,
+                )?)?)
+            })
+            .map_err(cleanup_pending)?;
         Ok(Some(old_bytes.saturating_sub(new_bytes)))
     }
 
@@ -804,6 +819,11 @@ impl Storage {
         }
         Ok(())
     }
+}
+
+/// After a deletion commits, a failure only delays scrubbing; the slot stays deleted.
+fn cleanup_pending(error: StorageError) -> StorageError {
+    StorageError::SnapshotCleanupPending(error.to_string())
 }
 
 pub(crate) fn read_payload(
@@ -1102,7 +1122,10 @@ mod tests {
             .execute_batch("BEGIN; SELECT COUNT(*) FROM snapshot_slots;")
             .unwrap();
         // The deletion commits; its key cleanup and old-file removal wait for the reader.
-        let _ = storage.delete_snapshot(first);
+        assert!(matches!(
+            storage.delete_snapshot(first),
+            Err(StorageError::SnapshotCleanupPending(_))
+        ));
         assert_eq!(files(&storage).len(), 3);
         storage.apply_retention(now).unwrap();
         assert_eq!(files(&storage).len(), 3);
@@ -1113,6 +1136,40 @@ mod tests {
         assert_eq!(files(&storage).len(), 1);
         assert!(storage.load_snapshot_image(first).is_err());
         assert_eq!(storage.load_snapshot_image(second).unwrap().webp, b.webp);
+    }
+
+    #[test]
+    fn a_delayed_day_cleanup_still_reports_retention_and_finishes_later() {
+        let directory = tempfile::tempdir().unwrap();
+        let storage = Storage::open(directory.path()).unwrap();
+        let now = Local
+            .with_ymd_and_hms(2026, 10, 11, 12, 0, 0)
+            .single()
+            .unwrap()
+            .timestamp_millis();
+        let old = store_on_day(&storage, &request(now - 2000, 10), "2026-10-09");
+        let today = store_on_day(&storage, &request(now - 1000, 11), "2026-10-11");
+        let mut policy = storage.snapshot_policy().unwrap();
+        policy.retention_days = Some(1);
+        storage.set_snapshot_policy(policy, now).unwrap();
+        storage
+            .connection
+            .execute_batch("PRAGMA busy_timeout=0")
+            .unwrap();
+        let key = load_key(&storage.key_path).unwrap();
+        let reader = super::super::open_encrypted(&storage.database_path, &key, true).unwrap();
+        reader
+            .execute_batch("BEGIN; SELECT COUNT(*) FROM snapshot_slots;")
+            .unwrap();
+        let report = storage.apply_retention(now).unwrap();
+        assert_eq!(report.snapshot_items, 1);
+        assert!(storage.load_snapshot_image(old).is_err());
+        assert_eq!(files(&storage).len(), 2);
+
+        drop(reader);
+        storage.apply_retention(now).unwrap();
+        assert_eq!(files(&storage).len(), 1);
+        assert!(storage.load_snapshot_image(today).is_ok());
     }
 
     fn large_request(utc: i64, seed: usize) -> SnapshotStoreRequest {
@@ -1316,7 +1373,10 @@ mod tests {
         assert_eq!(fs::read(&old).unwrap(), before);
         assert_eq!(storage.load_snapshot_image(first).unwrap().webp, a.webp);
         FAILURE.with(|f| f.set(Some("after_delete_commit")));
-        assert!(storage.delete_snapshot(first).is_err());
+        assert!(matches!(
+            storage.delete_snapshot(first),
+            Err(StorageError::SnapshotCleanupPending(_))
+        ));
         assert!(storage.load_snapshot_image(first).is_err());
         assert!(old.exists());
         drop(storage);
