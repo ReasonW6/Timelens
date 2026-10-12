@@ -403,8 +403,15 @@ impl Storage {
             let mut append = ContainerAppend::open(self, &tx, &day)?;
             for (slot, blob) in slots {
                 if record(&tx, blob, Some(&day))?.is_none() {
-                    let plain =
-                        read_payload(&tx, &self.snapshot_directory(), &self.key_path, blob, None)?;
+                    // A day copied before an interruption may since be damaged; the
+                    // retained old file is still an authenticated source.
+                    let directory = self.snapshot_directory();
+                    let plain = read_payload(&tx, &directory, &self.key_path, blob, None).or_else(
+                        |error| {
+                            read_legacy_payload(&tx, &directory, &self.key_path, blob)
+                                .map_err(|_| error)
+                        },
+                    )?;
                     let hash = tx.query_row(
                         "SELECT content_sha256 FROM snapshot_blobs WHERE blob_id=?",
                         [blob],
@@ -1804,6 +1811,32 @@ pub(crate) mod tests {
         assert_eq!(outcome.snapshot_items, 2);
         assert!(originals.iter().all(|(path, _)| !path.exists()));
         assert_eq!(opened.snapshot_live_bytes().unwrap(), 0);
+    }
+
+    #[test]
+    fn resumed_migration_reads_the_old_file_when_an_already_copied_day_is_damaged() {
+        let directory = tempfile::tempdir().unwrap();
+        let storage = Storage::open(directory.path()).unwrap();
+        let a = request(1_700_000_000_000, 10);
+        store_on_day(&storage, &a, "2023-11-14");
+        let mut later = a.clone();
+        later.slot_started_utc_ms += 86_400_000;
+        later.captured_at_utc_ms += 86_400_000;
+        let second = store_on_day(&storage, &later, "2023-11-15");
+        make_legacy(&storage);
+        drop(storage);
+        FAILURE.with(|f| f.set(Some("after_migration_day")));
+        let opened = Storage::open(directory.path()).unwrap();
+        let containers = opened.snapshot_container_files().unwrap();
+        assert_eq!(containers.len(), 1);
+        let damaged = opened.snapshot_directory().join(&containers[0]);
+        drop(opened);
+        let mut bytes = fs::read(&damaged).unwrap();
+        *bytes.last_mut().unwrap() ^= 1;
+        fs::write(&damaged, bytes).unwrap();
+        let resumed = Storage::open(directory.path()).unwrap();
+        assert_eq!(resumed.snapshot_container_files().unwrap().len(), 2);
+        assert_eq!(resumed.load_snapshot_image(second).unwrap().webp, a.webp);
     }
 
     #[test]
