@@ -266,6 +266,18 @@ pub enum WindowBatchOutcome {
     Duplicate,
 }
 
+// The timeline reads this on every refresh, so each AUMID application costs one
+// index lookup instead of a pass over all metadata history. The range is the
+// `aumid:` prefix; LIKE would ignore case and could not use the primary key.
+const ICON_SOURCES_QUERY: &str =
+    "SELECT r.application_identity, r.executable_path, r.app_user_model_id
+     FROM applications a
+     JOIN application_metadata_revisions r ON r.revision_id = (
+         SELECT revision_id FROM application_metadata_revisions
+         WHERE application_identity = a.identity
+         ORDER BY revision_id DESC LIMIT 1)
+     WHERE a.identity >= 'aumid:' AND a.identity < 'aumid;'";
+
 impl Storage {
     pub fn open(data_directory: impl AsRef<Path>) -> Result<Self> {
         let data_directory = data_directory.as_ref();
@@ -827,13 +839,7 @@ impl Storage {
 
     /// Latest recorded sources for AUMIDs that may not be registered in AppsFolder.
     pub fn application_icon_sources(&self) -> Result<Vec<ApplicationIconSource>> {
-        let mut statement = self.connection.prepare(
-            "SELECT application_identity, executable_path, app_user_model_id
-             FROM application_metadata_revisions
-             WHERE application_identity LIKE 'aumid:%'
-               AND revision_id IN (SELECT MAX(revision_id)
-                   FROM application_metadata_revisions GROUP BY application_identity)",
-        )?;
+        let mut statement = self.connection.prepare(ICON_SOURCES_QUERY)?;
         statement
             .query_map([], |row| {
                 Ok(ApplicationIconSource {
@@ -3007,6 +3013,24 @@ mod tests {
                 executable_path: Some(r"C:\Apps\v2\app.exe".into()),
                 app_user_model_id: Some(app_id.into()),
             }]
+        );
+    }
+
+    #[test]
+    fn icon_sources_are_read_through_indexes_without_scanning_history() {
+        let directory = tempfile::tempdir().unwrap();
+        let storage = Storage::open(directory.path()).unwrap();
+        let plan = storage
+            .connection
+            .prepare(&format!("EXPLAIN QUERY PLAN {ICON_SOURCES_QUERY}"))
+            .unwrap()
+            .query_map([], |row| row.get::<_, String>(3))
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .unwrap();
+        assert!(
+            plan.iter().all(|step| !step.starts_with("SCAN")),
+            "{plan:?}"
         );
     }
 
