@@ -38,6 +38,9 @@ pub(super) struct Paging {
     jump: Option<i32>,
 }
 
+/// Days back from today that a search covers.
+const SEARCH_DAYS: i32 = 30;
+
 fn active(window: &AppWindow) -> bool {
     window.window().is_visible() && !window.window().is_minimized()
 }
@@ -361,6 +364,8 @@ pub(super) fn refresh(
         if loaded.epoch == state.paging.epoch {
             state.horizon = loaded.horizon;
             state.loaded = state.loaded.min(state.horizon).max(0);
+            // A search typed before the first load returned started with too short a reach.
+            extend_search(&mut state);
             for (offset, day) in loaded.days {
                 state.paging.queued.remove(&offset);
                 if let Some(day) = day {
@@ -440,24 +445,36 @@ pub(super) fn search(
     query: &str,
 ) {
     let mut state = state.borrow_mut();
+    restart_search(&mut state, query);
+    publish(window, &mut state);
+    request(window, storage, &mut state);
+}
+
+/// The request in flight is kept: its worker cannot be stopped, so replacing it
+/// on every keystroke would only queue more database work. The new epoch
+/// discards its result, and the next request starts once it ends.
+fn restart_search(state: &mut HistoryState, query: &str) {
     state.query = query.to_owned();
     state.paging.epoch = state.paging.epoch.wrapping_add(1);
-    state.paging.pending = None;
     state.paging.inflight.clear();
     state.paging.queue.clear();
     state.paging.queued.clear();
     state.paging.outlines.clear();
-    let until = if query.trim().is_empty() {
-        state.loaded
-    } else {
-        state.loaded.max(30).min(state.horizon)
-    };
-    state.loaded = until;
-    for offset in 0..=until {
-        queue(&mut state, offset);
+    for offset in 0..=state.loaded {
+        queue(state, offset);
     }
-    publish(window, &mut state);
-    request(window, storage, &mut state);
+    extend_search(state);
+}
+
+/// A search covers the recent month, once the oldest recorded day is known.
+fn extend_search(state: &mut HistoryState) {
+    let until = SEARCH_DAYS.min(state.horizon);
+    if !state.query.trim().is_empty() && state.loaded < until {
+        for offset in state.loaded + 1..=until {
+            queue(state, offset);
+        }
+        state.loaded = until;
+    }
 }
 
 pub(super) fn jump(
@@ -626,6 +643,43 @@ mod tests {
                 }))
                 .is_err()
         );
+    }
+
+    #[test]
+    fn a_new_search_waits_for_the_running_request_instead_of_adding_workers() {
+        let mut state = HistoryState::new();
+        state.horizon = 60;
+        state.loaded = 3;
+        state.paging.epoch = 4;
+        let (_sender, receiver) = mpsc::channel();
+        state.paging.pending = Some(receiver);
+        state.paging.inflight = vec![0, 1, 2];
+        restart_search(&mut state, "a");
+        restart_search(&mut state, "ab");
+        assert!(state.paging.pending.is_some());
+        assert!(state.paging.inflight.is_empty());
+        assert_eq!(state.paging.epoch, 6);
+        assert_eq!(state.loaded, SEARCH_DAYS);
+        assert_eq!(state.paging.queue.len(), SEARCH_DAYS as usize + 1);
+    }
+
+    #[test]
+    fn a_search_typed_before_the_horizon_was_known_reaches_the_recent_month() {
+        let mut state = HistoryState::new();
+        state.horizon = 1;
+        state.loaded = 1;
+        restart_search(&mut state, "editor");
+        assert_eq!(state.loaded, 1);
+        state.horizon = 60;
+        extend_search(&mut state);
+        assert_eq!(state.loaded, SEARCH_DAYS);
+        assert!(state.paging.queued.contains(&SEARCH_DAYS));
+        // Without a query the reach is left to scrolling.
+        let mut idle = HistoryState::new();
+        idle.horizon = 60;
+        idle.loaded = 1;
+        extend_search(&mut idle);
+        assert_eq!(idle.loaded, 1);
     }
 
     #[test]

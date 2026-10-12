@@ -22,7 +22,7 @@ use super::{
     random_key, to_sql_u64,
 };
 
-const MAGIC: &[u8; 8] = b"TLSDAY\0\x01";
+pub(crate) const MAGIC: &[u8; 8] = b"TLSDAY\0\x01";
 const RECORD_OVERHEAD: u64 = 36;
 
 fn invalid(message: &str) -> StorageError {
@@ -295,9 +295,9 @@ impl Storage {
         self.ensure_writable()?;
         let _durable = SnapshotWrite::new(&self.connection)?;
         let tx = Transaction::new_unchecked(&self.connection, TransactionBehavior::Immediate)?;
-        let existing = tx.query_row("SELECT blob_id,pixel_width,pixel_height FROM snapshot_blobs WHERE content_sha256=?",
-            [hash.as_slice()], |r| Ok((r.get::<_,i64>(0)?,r.get::<_,u32>(1)?,r.get::<_,u32>(2)?))).optional()?;
-        let blob_id = if let Some((id, width, height)) = existing {
+        let existing = tx.query_row("SELECT blob_id,pixel_width,pixel_height,plaintext_bytes FROM snapshot_blobs WHERE content_sha256=?",
+            [hash.as_slice()], |r| Ok((r.get::<_,i64>(0)?,r.get::<_,u32>(1)?,r.get::<_,u32>(2)?,row_u64(r,3)?))).optional()?;
+        let blob_id = if let Some((id, width, height, _)) = existing {
             if (width, height) != (request.pixel_width, request.pixel_height) {
                 return Err(invalid("snapshot dimensions are inconsistent"));
             }
@@ -311,10 +311,13 @@ impl Storage {
         if record(&tx, blob_id, Some(day))?.is_none() {
             // Global pixel deduplication remains unchanged. A copy per day lets
             // an old day expire without breaking a later day's identical image.
-            let canonical = if existing.is_some() {
-                Some(Zeroizing::new(self.read_snapshot_payload(blob_id, None)?))
-            } else {
-                None
+            // Every copy keeps the blob's recorded size; this capture has the same
+            // pixels, so when its size matches a damaged older day is never read.
+            let canonical = match existing {
+                Some((.., size)) if size != request.webp.len() as u64 => {
+                    Some(Zeroizing::new(self.read_snapshot_payload(blob_id, None)?))
+                }
+                _ => None,
             };
             append.append(
                 &tx,
@@ -549,9 +552,18 @@ impl Storage {
             }
         }
         self.migrate_snapshot_containers()?;
-        self.finish_snapshot_key_cleanup()?;
-        self.purge_unreferenced_snapshot_files()?;
-        self.snapshot_files_settled.set(true);
+        // Reconciliation always sweeps, including after a backup replaced every row.
+        self.snapshot_files_settled.set(false);
+        self.settle_snapshot_files()
+    }
+
+    /// Finish the key scrubbing and file removal that deletions left behind.
+    pub(crate) fn settle_snapshot_files(&self) -> Result<()> {
+        if !self.snapshot_files_settled.get() {
+            self.finish_snapshot_key_cleanup()?;
+            self.purge_unreferenced_snapshot_files()?;
+            self.snapshot_files_settled.set(true);
+        }
         Ok(())
     }
 
@@ -597,14 +609,8 @@ impl Storage {
     ) -> Result<SnapshotRetentionOutcome> {
         // Finish what an earlier deletion or open left behind. A reader holding
         // the log only postpones it; the rest of retention still runs.
-        if !self.snapshot_files_settled.get() {
-            match self
-                .finish_snapshot_key_cleanup()
-                .and_then(|()| self.purge_unreferenced_snapshot_files())
-            {
-                Ok(()) => self.snapshot_files_settled.set(true),
-                Err(error) => eprintln!("snapshot cleanup postponed: {error}"),
-            }
+        if let Err(error) = self.settle_snapshot_files() {
+            eprintln!("snapshot cleanup postponed: {error}");
         }
         let policy = self.snapshot_policy()?;
         let today = local_day(now_utc_ms)?;
@@ -964,13 +970,13 @@ fn fault(point: &'static str) -> Result<()> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::{BackupOptions, SnapshotDisplay, SnapshotTrigger};
     use chrono::{FixedOffset, Utc};
     use image::ImageEncoder;
 
-    fn request(utc: i64, color: u8) -> SnapshotStoreRequest {
+    pub(crate) fn request(utc: i64, color: u8) -> SnapshotStoreRequest {
         let mut webp = Vec::new();
         image::codecs::webp::WebPEncoder::new_lossless(&mut webp)
             .write_image(
@@ -1179,6 +1185,23 @@ mod tests {
         assert_eq!(storage.load_snapshot_image(new).unwrap().webp, a.webp);
         assert_eq!(files(&storage).len(), 1);
         assert!(storage.snapshot_live_bytes().unwrap() <= policy.max_bytes);
+    }
+
+    #[test]
+    fn a_damaged_older_copy_does_not_block_the_same_image_on_a_later_day() {
+        let directory = tempfile::tempdir().unwrap();
+        let storage = Storage::open(directory.path()).unwrap();
+        let a = request(1_700_000_000_000, 10);
+        store_on_day(&storage, &a, "2023-11-14");
+        let old = files(&storage)[0].clone();
+        let mut bytes = fs::read(&old).unwrap();
+        *bytes.last_mut().unwrap() ^= 1;
+        fs::write(&old, bytes).unwrap();
+        let mut later = a.clone();
+        later.slot_started_utc_ms += 86_400_000;
+        later.captured_at_utc_ms += 86_400_000;
+        let id = store_on_day(&storage, &later, "2023-11-15");
+        assert_eq!(storage.load_snapshot_image(id).unwrap().webp, a.webp);
     }
 
     #[test]

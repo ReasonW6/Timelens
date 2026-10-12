@@ -209,6 +209,9 @@ impl Storage {
         progress: &mut dyn FnMut(RelocationStep, u64, u64),
     ) -> Result<u64> {
         self.checkpoint()?;
+        // Only referenced containers are copied and later removed here, so an old
+        // file a postponed deletion cleanup still holds would stay behind for good.
+        self.settle_snapshot_files()?;
         self.verify_integrity()?;
         let stage = tempfile::Builder::new()
             .prefix("timelens-move-")
@@ -314,14 +317,20 @@ impl Storage {
             for entry in fs::read_dir(&snapshots)? {
                 let entry = entry?;
                 let name = entry.file_name().to_string_lossy().into_owned();
-                if entry.file_type()?.is_file()
-                    && (owned_snapshot_name(&name)
-                        || snapshot_container::owned_container_name(&name))
+                let expected = if owned_snapshot_name(&name) {
+                    Some(b"TLSNAP\0\x01")
+                } else if snapshot_container::owned_container_name(&name) {
+                    Some(snapshot_container::MAGIC)
+                } else {
+                    None
+                };
+                if let Some(expected) = expected
+                    && entry.file_type()?.is_file()
                 {
                     let mut file = File::open(entry.path())?;
                     let mut header = [0; 8];
                     use std::io::Read;
-                    if file.read_exact(&mut header).is_ok() && &header == b"TLSNAP\0\x01" {
+                    if file.read_exact(&mut header).is_ok() && &header == expected {
                         drop(file);
                         fs::remove_file(entry.path())?;
                     }
@@ -466,5 +475,42 @@ mod tests {
             b"external export"
         );
         assert!(validate_fixed_directory(&target.join("..\\other")).is_err());
+    }
+    #[test]
+    fn uninstall_removes_daily_snapshot_containers() {
+        let (source, storage) = ai::tests::fixture();
+        storage
+            .store_snapshot(&snapshot_container::tests::request(1_700_000_000_000, 10))
+            .unwrap();
+        drop(storage);
+        Storage::delete_owned_dataset(source.path()).unwrap();
+        assert!(!source.path().join("snapshots").exists());
+    }
+    #[test]
+    fn relocation_first_finishes_cleanup_a_deletion_postponed() {
+        let (source, mut storage) = ai::tests::fixture();
+        let a = snapshot_container::tests::request(1_700_000_000_000, 10);
+        let b = snapshot_container::tests::request(a.slot_started_utc_ms + 1000, 20);
+        let first = storage.store_snapshot(&a).unwrap();
+        storage.store_snapshot(&b).unwrap();
+        storage
+            .connection
+            .execute_batch("PRAGMA busy_timeout=0")
+            .unwrap();
+        let key = load_key(&storage.key_path).unwrap();
+        let reader = open_encrypted(&storage.database_path, &key, true).unwrap();
+        reader
+            .execute_batch("BEGIN; SELECT COUNT(*) FROM snapshot_slots;")
+            .unwrap();
+        assert!(matches!(
+            storage.delete_snapshot(first),
+            Err(StorageError::SnapshotCleanupPending(_))
+        ));
+        drop(reader);
+        let parent = tempfile::tempdir().unwrap();
+        let target = parent.path().join("moved");
+        storage.relocate(&target, |_| Ok(()), |_, _, _| {}).unwrap();
+        assert!(!source.path().join("snapshots").exists());
+        assert_eq!(fs::read_dir(target.join("snapshots")).unwrap().count(), 1);
     }
 }
