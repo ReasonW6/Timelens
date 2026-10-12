@@ -39,9 +39,9 @@ use windows::{
             Shell::{IVirtualDesktopManager, VirtualDesktopManager},
             WindowsAndMessaging::{
                 CHILDID_SELF, DispatchMessageW, EVENT_OBJECT_CLOAKED, EVENT_OBJECT_CREATE,
-                EVENT_OBJECT_DESTROY, EVENT_OBJECT_HIDE, EVENT_OBJECT_LOCATIONCHANGE,
-                EVENT_OBJECT_UNCLOAKED, EVENT_SYSTEM_DESKTOPSWITCH, EVENT_SYSTEM_FOREGROUND,
-                EVENT_SYSTEM_MINIMIZEEND, EVENT_SYSTEM_MINIMIZESTART, EnumWindows, GA_ROOT,
+                EVENT_OBJECT_DESTROY, EVENT_OBJECT_HIDE, EVENT_OBJECT_UNCLOAKED,
+                EVENT_SYSTEM_DESKTOPSWITCH, EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_MINIMIZEEND,
+                EVENT_SYSTEM_MINIMIZESTART, EVENT_SYSTEM_MOVESIZEEND, EnumWindows, GA_ROOT,
                 GW_OWNER, GWL_EXSTYLE, GetAncestor, GetForegroundWindow, GetWindow,
                 GetWindowLongPtrW, GetWindowRect, GetWindowThreadProcessId, IsIconic, IsWindow,
                 IsWindowVisible, MSG, MWMO_INPUTAVAILABLE, MsgWaitForMultipleObjectsEx,
@@ -564,19 +564,22 @@ pub struct WinEventMonitor {
     _not_send: PhantomData<Rc<()>>,
 }
 
+// Moves and resizes are seen when they finish. Programmatic moves off every
+// display or to zero area wait for the periodic full reconciliation.
+const WIN_EVENT_RANGES: [(u32, u32); 6] = [
+    (EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_FOREGROUND),
+    (EVENT_SYSTEM_MOVESIZEEND, EVENT_SYSTEM_MOVESIZEEND),
+    (EVENT_SYSTEM_DESKTOPSWITCH, EVENT_SYSTEM_DESKTOPSWITCH),
+    (EVENT_SYSTEM_MINIMIZESTART, EVENT_SYSTEM_MINIMIZEEND),
+    (EVENT_OBJECT_CREATE, EVENT_OBJECT_HIDE),
+    (EVENT_OBJECT_CLOAKED, EVENT_OBJECT_UNCLOAKED),
+];
+
 impl WinEventMonitor {
     pub fn new() -> Result<Self> {
         *WINDOW_EVENTS.lock().unwrap_or_else(|e| e.into_inner()) = WindowEvents::default();
-        let ranges = [
-            (EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_FOREGROUND),
-            (EVENT_SYSTEM_DESKTOPSWITCH, EVENT_SYSTEM_DESKTOPSWITCH),
-            (EVENT_SYSTEM_MINIMIZESTART, EVENT_SYSTEM_MINIMIZEEND),
-            (EVENT_OBJECT_CREATE, EVENT_OBJECT_HIDE),
-            (EVENT_OBJECT_LOCATIONCHANGE, EVENT_OBJECT_LOCATIONCHANGE),
-            (EVENT_OBJECT_CLOAKED, EVENT_OBJECT_UNCLOAKED),
-        ];
-        let mut hooks = Vec::with_capacity(ranges.len());
-        for (start, end) in ranges {
+        let mut hooks = Vec::with_capacity(WIN_EVENT_RANGES.len());
+        for (start, end) in WIN_EVENT_RANGES {
             let hook = unsafe {
                 SetWinEventHook(
                     start,
@@ -638,8 +641,7 @@ unsafe extern "system" fn win_event_callback(
     _event_time_ms: u32,
 ) {
     let object_event = (EVENT_OBJECT_CREATE..=EVENT_OBJECT_HIDE).contains(&event)
-        || (EVENT_OBJECT_CLOAKED..=EVENT_OBJECT_UNCLOAKED).contains(&event)
-        || event == EVENT_OBJECT_LOCATIONCHANGE;
+        || (EVENT_OBJECT_CLOAKED..=EVENT_OBJECT_UNCLOAKED).contains(&event);
     if object_event && (object_id != OBJID_WINDOW.0 || child_id != CHILDID_SELF as i32) {
         return;
     }
@@ -1122,6 +1124,21 @@ mod tests {
             assert_eq!(message_wait_ms(Duration::from_nanos(nanos)), milliseconds);
         }
         assert_eq!(message_wait_ms(Duration::from_secs(u64::MAX)), u32::MAX);
+    }
+
+    #[test]
+    fn win_event_hooks_skip_cursor_rate_location_events_but_see_completed_moves() {
+        let hooked = |event| {
+            WIN_EVENT_RANGES
+                .iter()
+                .any(|&(start, end)| (start..=end).contains(&event))
+        };
+        // Out-of-context hooks cannot filter by object, so every cursor or caret
+        // move would wake the collector even though the callback discards it.
+        assert!(!hooked(
+            windows::Win32::UI::WindowsAndMessaging::EVENT_OBJECT_LOCATIONCHANGE
+        ));
+        assert!(hooked(EVENT_SYSTEM_MOVESIZEEND));
     }
 
     #[test]
