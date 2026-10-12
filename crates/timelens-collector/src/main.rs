@@ -293,17 +293,21 @@ fn collect_window_events(pipe_name: &str, data_directory: PathBuf) -> Result<()>
         let now = unix_time_ms();
         let until_minute =
             Duration::from_millis((MINUTE_MS - now.rem_euclid(MINUTE_MS)).max(1) as u64);
-        let changed = monitor.wait_for_change(
+        let changes = monitor.wait_for_events(
             until_minute
                 .min(last_reconcile.remaining(Instant::now()))
                 .min(Duration::from_secs(1)),
         );
         filter.refresh(&data_directory);
-        if changed || last_reconcile.is_due(Instant::now()) {
+        if changes.reconcile || last_reconcile.is_due(Instant::now()) {
             raw = observer.reconcile_transitions()?.current;
             raw_tray = observer.current_tray_presence();
             identities.extend(window_identities(&raw));
             last_reconcile.mark(Instant::now());
+        } else if !changes.events.is_empty() {
+            raw = observer.apply_window_events(changes)?.current;
+            raw_tray = observer.current_tray_presence();
+            identities.extend(window_identities(&raw));
         }
         let (observed_now, mono) = observer.timestamp();
         let now = match continue_run_clock(last_now, observed_now) {

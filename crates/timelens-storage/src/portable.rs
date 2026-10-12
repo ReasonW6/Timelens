@@ -408,6 +408,7 @@ impl Storage {
         plain.execute_batch("DETACH DATABASE staged")?;
         export?;
         let storage = Storage {
+            timeline_cache: Default::default(),
             connection: open_encrypted(&database, &key, false)?.into(),
             data_directory: directory.path().into(),
             control_directory: directory.path().into(),
@@ -467,6 +468,9 @@ impl Storage {
         prepared: PreparedRestore,
         confirm_replace: bool,
     ) -> Result<()> {
+        self.timeline_cache
+            .borrow_mut()
+            .clear(self.connection.total_changes());
         self.ensure_writable()?;
         let populated:bool=self.connection.query_row("SELECT EXISTS(SELECT 1 FROM collector_runs UNION ALL SELECT 1 FROM ai_versions UNION ALL SELECT 1 FROM snapshot_slots)",[],|r|r.get(0))?;
         if populated && !confirm_replace {

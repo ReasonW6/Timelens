@@ -24,6 +24,7 @@ pub fn data_generation() -> u64 {
 }
 pub fn dataset_changed() {
     DATA_GENERATION.fetch_add(1, std::sync::atomic::Ordering::Release);
+    crate::snapshot::wake_scheduler();
 }
 
 struct UiData {

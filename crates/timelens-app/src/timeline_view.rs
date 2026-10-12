@@ -12,7 +12,7 @@ type Interval = (i64, i64);
 
 /// Focus runs at most this far apart belong to one stretch of use, and a row
 /// whose own application held focus for less than this joins a neighbouring row.
-const BRIEF_ABSENCE_MS: i64 = 3 * 60_000;
+pub(crate) const BRIEF_ABSENCE_MS: i64 = 3 * 60_000;
 /// Unrecorded gaps this close together read as one interruption.
 const UNRECORDED_JOIN_MS: i64 = 5 * 60_000;
 /// Interruptions missing less than this in total are restart seams, not news.

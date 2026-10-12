@@ -7,6 +7,7 @@ mod portable;
 mod recovery;
 mod relocation;
 mod snapshot_container;
+mod timeline_cache;
 pub use portable::{BackupInfo, BackupOptions, ExportFormat, PreparedRestore};
 pub use recovery::RecoveryReport;
 pub use relocation::RelocationStep;
@@ -150,6 +151,7 @@ impl std::ops::DerefMut for GuardedConnection {
 }
 
 pub struct Storage {
+    timeline_cache: std::cell::RefCell<timeline_cache::TimelineCache>,
     connection: GuardedConnection,
     data_directory: PathBuf,
     control_directory: PathBuf,
@@ -278,6 +280,7 @@ impl Storage {
         let cipher_version = cipher_version(&connection)?;
 
         let storage = Self {
+            timeline_cache: Default::default(),
             connection: connection.into(),
             data_directory: data_directory.to_owned(),
             control_directory: data_directory.to_owned(),
@@ -314,6 +317,7 @@ impl Storage {
                 "runtime health component is outside the fixed allowlist".to_owned(),
             ));
         }
+        let before = self.connection.total_changes();
         self.connection.execute(
             "INSERT INTO runtime_health (
                 component, last_healthy_utc_ms, protocol_version, peer_process_id
@@ -329,10 +333,14 @@ impl Storage {
                 peer_process_id.map(i64::from)
             ],
         )?;
+        self.timeline_cache
+            .borrow_mut()
+            .unchanged_write(before, self.connection.total_changes());
         Ok(())
     }
 
     pub fn ingest_event_batch(&self, batch: &EventBatch) -> Result<WindowBatchOutcome> {
+        let before_changes = self.connection.total_changes();
         let last_sequence = batch
             .last_sequence()
             .map_err(|error| StorageError::InvalidBatch(error.to_string()))?;
@@ -466,6 +474,12 @@ impl Storage {
             ],
         )?;
         transaction.commit()?;
+        self.timeline_cache.borrow_mut().ingested(
+            before_changes,
+            self.connection.total_changes(),
+            batch,
+            prior_run.is_none(),
+        );
         Ok(WindowBatchOutcome::Stored)
     }
 
@@ -483,6 +497,15 @@ impl Storage {
         range_started_utc_ms: i64,
         range_ended_utc_ms: i64,
     ) -> Result<TimelineSnapshot> {
+        self.timeline_snapshot_selected(range_started_utc_ms, range_ended_utc_ms, None)
+    }
+
+    fn timeline_snapshot_selected(
+        &self,
+        range_started_utc_ms: i64,
+        range_ended_utc_ms: i64,
+        source_filter: Option<&str>,
+    ) -> Result<TimelineSnapshot> {
         if range_started_utc_ms <= 0 || range_ended_utc_ms <= range_started_utc_ms {
             return Err(StorageError::Integrity(
                 "timeline range is invalid".to_owned(),
@@ -496,17 +519,20 @@ impl Storage {
                  FROM window_instances
                  WHERE opened_utc_ms < ?2
                    AND COALESCE(closed_utc_ms, ?2) > ?1
+                   AND (?3 IS NULL OR application_identity IN (SELECT value FROM json_each(?3)))
                  ORDER BY opened_utc_ms, instance_id",
             )?;
-            let rows =
-                statement.query_map(params![range_started_utc_ms, range_ended_utc_ms], |row| {
+            let rows = statement.query_map(
+                params![range_started_utc_ms, range_ended_utc_ms, source_filter],
+                |row| {
                     Ok((
                         row.get::<_, i64>(0)?,
                         row.get::<_, String>(1)?,
                         row.get::<_, i64>(2)?,
                         row.get::<_, i64>(3)?,
                     ))
-                })?;
+                },
+            )?;
             for row in rows {
                 let (instance_id, identity, opened, ended) = row?;
                 let interval =
@@ -532,10 +558,12 @@ impl Storage {
                  JOIN window_instances AS instances
                    ON instances.instance_id = states.window_instance_id
                  WHERE states.started_utc_ms < ?2
-                   AND COALESCE(states.ended_utc_ms, ?2) > ?1",
+                   AND COALESCE(states.ended_utc_ms, ?2) > ?1
+                   AND (?3 IS NULL OR instances.application_identity IN (SELECT value FROM json_each(?3)))",
             )?;
-            let rows =
-                statement.query_map(params![range_started_utc_ms, range_ended_utc_ms], |row| {
+            let rows = statement.query_map(
+                params![range_started_utc_ms, range_ended_utc_ms, source_filter],
+                |row| {
                     Ok((
                         row.get::<_, i64>(0)?,
                         row.get::<_, String>(1)?,
@@ -544,7 +572,8 @@ impl Storage {
                         row.get::<_, bool>(4)?,
                         row.get::<_, bool>(5)?,
                     ))
-                })?;
+                },
+            )?;
             for row in rows {
                 let (instance_id, identity, started, ended, displayed, focused) = row?;
                 let interval =
@@ -579,16 +608,19 @@ impl Storage {
                         COALESCE(ended_utc_ms, ?2)
                  FROM tray_background_intervals
                  WHERE started_utc_ms < ?2
-                   AND COALESCE(ended_utc_ms, ?2) > ?1",
+                   AND COALESCE(ended_utc_ms, ?2) > ?1
+                   AND (?3 IS NULL OR application_identity IN (SELECT value FROM json_each(?3)))",
             )?;
-            let rows =
-                statement.query_map(params![range_started_utc_ms, range_ended_utc_ms], |row| {
+            let rows = statement.query_map(
+                params![range_started_utc_ms, range_ended_utc_ms, source_filter],
+                |row| {
                     Ok((
                         row.get::<_, String>(0)?,
                         row.get::<_, i64>(1)?,
                         row.get::<_, i64>(2)?,
                     ))
-                })?;
+                },
+            )?;
             for row in rows {
                 let (identity, started, ended) = row?;
                 let interval =
@@ -612,10 +644,12 @@ impl Storage {
                  FROM input_minute_buckets
                  WHERE minute_started_utc_ms < ?2
                    AND minute_started_utc_ms + 60000 > ?1
+                   AND (?3 IS NULL OR focused_application_identity IN (SELECT value FROM json_each(?3)))
                  GROUP BY focused_application_identity",
             )?;
-            let rows =
-                statement.query_map(params![range_started_utc_ms, range_ended_utc_ms], |row| {
+            let rows = statement.query_map(
+                params![range_started_utc_ms, range_ended_utc_ms, source_filter],
+                |row| {
                     Ok((
                         row.get::<_, Option<String>>(0)?,
                         row.get::<_, i64>(1)?,
@@ -623,7 +657,8 @@ impl Storage {
                         row.get::<_, i64>(3)?,
                         row.get::<_, i64>(4)?,
                     ))
-                })?;
+                },
+            )?;
             for row in rows {
                 let (Some(identity), keyboard, left, middle, right) = row? else {
                     continue;
@@ -835,6 +870,9 @@ impl Storage {
     }
 
     pub fn apply_retention(&self, now_utc_ms: i64) -> Result<RetentionReport> {
+        self.timeline_cache
+            .borrow_mut()
+            .clear(self.connection.total_changes());
         let policy = self.retention_policy()?;
         // Fold the WAL back first so the released-bytes figure does not count log
         // pages that any checkpoint would reclaim anyway. This only sharpens that
@@ -1059,6 +1097,9 @@ impl Storage {
     }
 
     pub fn clear_all(&self) -> Result<ClearReport> {
+        self.timeline_cache
+            .borrow_mut()
+            .clear(self.connection.total_changes());
         self.ensure_writable()?;
         let old_key = load_key(&self.key_path)?;
         let new_key = random_key()?;

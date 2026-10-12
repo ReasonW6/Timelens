@@ -19,6 +19,7 @@ mod timeline_ui;
 mod timeline_view;
 mod tray;
 mod ui_model;
+mod ui_refresh;
 mod window_chrome;
 mod window_placement;
 
@@ -485,8 +486,8 @@ fn run_window(
     let timer_snapshot_state = Rc::clone(&snapshot_ui_state);
     let timer_busy = Arc::clone(&action_busy);
     let timer_history = Rc::clone(&history_state);
-    let last_refresh = Rc::new(RefCell::new(Instant::now()));
-    let timer_last_refresh = Rc::clone(&last_refresh);
+    let mut ui_refresh = ui_refresh::UiRefresh::new(Instant::now());
+    let mut pending_report = None;
     let timer = Timer::default();
     let mut recovery_shown = false;
     let mut data_generation = ai_ui::data_generation();
@@ -512,13 +513,17 @@ fn run_window(
             last_data_status = data_status;
         }
         window.set_action_busy(timer_busy.load(Ordering::Acquire));
-        request_apps(&window, &timer_storage, &timer_state);
-        if let Err(error) = poll_apps(&window, &timer_state) {
-            window.set_action_status(format!("读取应用统计失败：{error}").into());
+        let ui_active = window.window().is_visible() && !window.window().is_minimized();
+        if ui_active {
+            request_apps(&window, &timer_storage, &timer_state);
+            if let Err(error) = poll_apps(&window, &timer_state) {
+                window.set_action_status(format!("读取应用统计失败：{error}").into());
+            }
         }
         window.global::<AiState>().set_open(
-            window.get_page() == 4
-                || (window.get_settings_open() && window.get_settings_tab() == 4),
+            ui_active
+                && (window.get_page() == 4
+                    || (window.get_settings_open() && window.get_settings_tab() == 4)),
         );
         if !recovery_shown && timer_storage.try_lock().is_ok_and(|s| s.is_quarantined()) {
             recovery_shown = true;
@@ -563,6 +568,7 @@ fn run_window(
             window.global::<DataState>().set_clear_credentials(false);
             history::reset(&timer_history);
             timer_state.borrow_mut().apps = AppsState::default();
+            pending_report = None;
             refresh_requested = true;
         }
         while let Ok(status) = action_receiver.try_recv() {
@@ -576,9 +582,7 @@ fn run_window(
             if let Some(report) = status.report {
                 match report {
                     Ok(report_id) => {
-                        if let Err(error) = refresh_report(&window, &timer_storage, report_id) {
-                            window.set_report_summary(format!("报告读取失败：{error}").into());
-                        }
+                        pending_report = Some(report_id);
                     }
                     Err(error) => {
                         window.set_report_summary(format!("报告生成失败：{error}").into())
@@ -586,10 +590,12 @@ fn run_window(
                 }
             }
         }
-        if !timer_busy.load(Ordering::Acquire)
-            && (refresh_requested
-                || timer_last_refresh.borrow().elapsed() >= Duration::from_secs(2))
-        {
+        ui_refresh.request(refresh_requested || pending_report.is_some());
+        if ui_refresh.due(
+            ui_active,
+            timer_busy.load(Ordering::Acquire),
+            Instant::now(),
+        ) {
             match refresh_timeline(&window, &timer_storage, &timer_state).and_then(|refreshed| {
                 if refreshed && window.get_snapshot_open() {
                     refresh_snapshot_panel(
@@ -604,7 +610,14 @@ fn run_window(
                 }
                 Ok(refreshed)
             }) {
-                Ok(true) => *timer_last_refresh.borrow_mut() = Instant::now(),
+                Ok(true) => {
+                    if let Some(report_id) = pending_report.take()
+                        && let Err(error) = refresh_report(&window, &timer_storage, report_id)
+                    {
+                        window.set_report_summary(format!("报告读取失败：{error}").into());
+                    }
+                    ui_refresh.refreshed(Instant::now());
+                }
                 // Storage is busy with a long task; try again on a later tick.
                 Ok(false) => {}
                 Err(error) => window.set_action_status(format!("刷新失败：{error}").into()),
@@ -738,8 +751,10 @@ fn request_apps(
     ui_state: &Rc<RefCell<UiState>>,
 ) {
     let today = window.get_apps_today();
-    let visible =
-        window.window().is_visible() && window.get_page() == 3 && window.get_stats_tab() == 0;
+    let visible = window.window().is_visible()
+        && !window.window().is_minimized()
+        && window.get_page() == 3
+        && window.get_stats_tab() == 0;
     let mut state = ui_state.borrow_mut();
     let apps = &mut state.apps;
     if apps.generation != history::generation() {
@@ -774,7 +789,13 @@ fn request_apps(
         let result = storage
             .lock()
             .map_err(|_| anyhow::anyhow!("storage lock poisoned"))
-            .and_then(|storage| Ok(storage.timeline_snapshot(started, now)?));
+            .and_then(|storage| {
+                Ok(if today {
+                    storage.timeline_snapshot_cached(started, now)?
+                } else {
+                    storage.timeline_snapshot(started, now)?
+                })
+            });
         let _ = sender.send(result);
     });
 }
@@ -1449,6 +1470,7 @@ fn update_and_refresh_snapshot_policy(
         let mut policy = storage.snapshot_policy()?;
         update(&mut policy);
         storage.set_snapshot_policy(policy, unix_time_ms())?;
+        snapshot::wake_scheduler();
         storage.apply_retention(unix_time_ms())?;
         Ok(())
     });

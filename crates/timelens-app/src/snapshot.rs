@@ -3,7 +3,7 @@ use std::{
     os::windows::ffi::OsStrExt,
     path::{Path, PathBuf},
     ptr::null_mut,
-    sync::{Arc, Mutex, TryLockError},
+    sync::{Arc, Condvar, Mutex, TryLockError},
     thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
@@ -66,8 +66,43 @@ use windows::{
 
 const LOW_DISK_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 const MAX_SNAPSHOT_DIMENSION: u32 = 1280;
-const SCHEDULER_POLL: Duration = Duration::from_millis(500);
 static HEAVY_TASK_GATE: Mutex<()> = Mutex::new(());
+static SCHEDULER_WAKE: SchedulerWake = SchedulerWake {
+    revision: Mutex::new(0),
+    changed: Condvar::new(),
+};
+
+struct SchedulerWake {
+    revision: Mutex<u64>,
+    changed: Condvar,
+}
+
+impl SchedulerWake {
+    fn revision(&self) -> u64 {
+        *self.revision.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    fn wake(&self) {
+        let mut revision = self.revision.lock().unwrap_or_else(|e| e.into_inner());
+        *revision = revision.wrapping_add(1);
+        self.changed.notify_all();
+    }
+
+    fn wait(&self, seen: u64, timeout: Option<Duration>) {
+        let revision = self.revision.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(timeout) = timeout {
+            let _ = self
+                .changed
+                .wait_timeout_while(revision, timeout, |r| *r == seen);
+        } else {
+            drop(self.changed.wait_while(revision, |r| *r == seen));
+        }
+    }
+}
+
+pub(crate) fn wake_scheduler() {
+    SCHEDULER_WAKE.wake();
+}
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct CaptureSummary {
@@ -113,10 +148,17 @@ pub fn spawn_scheduler(storage: Arc<Mutex<Storage>>, data_directory: PathBuf) {
     thread::spawn(move || {
         let mut scheduler = Scheduler::new(storage, data_directory);
         loop {
-            if let Err(error) = scheduler.tick() {
-                eprintln!("snapshot scheduler failed: {error:#}");
-            }
-            thread::sleep(SCHEDULER_POLL);
+            // Read the revision before loading settings so a change racing with
+            // tick or the wait cannot leave the scheduler asleep on old settings.
+            let seen = SCHEDULER_WAKE.revision();
+            let timeout = match scheduler.tick() {
+                Ok(()) => scheduler.wait_duration(unix_time_ms()),
+                Err(error) => {
+                    eprintln!("snapshot scheduler failed: {error:#}");
+                    Some(Duration::from_secs(1))
+                }
+            };
+            SCHEDULER_WAKE.wait(seen, timeout);
         }
     });
 }
@@ -162,6 +204,9 @@ struct Scheduler {
 }
 
 impl Scheduler {
+    fn wait_duration(&self, now: i64) -> Option<Duration> {
+        deadline_delay(self.schedule_key.map(|_| self.next_slot_utc_ms), now)
+    }
     fn new(storage: Arc<Mutex<Storage>>, data_directory: PathBuf) -> Self {
         Self {
             storage,
@@ -288,6 +333,10 @@ impl Scheduler {
         )?;
         Ok(())
     }
+}
+
+fn deadline_delay(next_slot: Option<i64>, now: i64) -> Option<Duration> {
+    next_slot.map(|deadline| Duration::from_millis(deadline.saturating_sub(now).max(0) as u64))
 }
 
 fn capture_slot(
@@ -1127,6 +1176,42 @@ fn unix_time_ms() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn scheduler_sleeps_until_the_slot_and_disabled_capture_waits_for_a_change() {
+        assert_eq!(
+            deadline_delay(Some(901_000), 1_000),
+            Some(Duration::from_secs(900))
+        );
+        assert_eq!(deadline_delay(Some(901_000), 901_001), Some(Duration::ZERO));
+        assert_eq!(deadline_delay(None, 1_000), None);
+    }
+
+    #[test]
+    fn a_change_between_reading_settings_and_waiting_is_not_lost() {
+        let wake = SchedulerWake {
+            revision: Mutex::new(0),
+            changed: Condvar::new(),
+        };
+        let seen = wake.revision();
+        wake.wake();
+        let started = Instant::now();
+        wake.wait(seen, Some(Duration::from_secs(60)));
+        assert!(started.elapsed() < Duration::from_secs(1));
+    }
+
+    #[test]
+    fn a_disabled_scheduler_wakes_when_settings_or_the_system_change() {
+        let wake = Arc::new(SchedulerWake {
+            revision: Mutex::new(0),
+            changed: Condvar::new(),
+        });
+        let worker = Arc::clone(&wake);
+        let seen = wake.revision();
+        let waiting = thread::spawn(move || worker.wait(seen, None));
+        wake.wake();
+        waiting.join().unwrap();
+    }
 
     #[test]
     fn fixed_slots_start_at_the_next_boundary() {

@@ -231,6 +231,9 @@ impl Storage {
         Ok((windows, reports.len() as u64, versions.len() as u64))
     }
     pub fn delete_application_history(&self, identity: &str) -> Result<u64> {
+        self.timeline_cache
+            .borrow_mut()
+            .clear(self.connection.total_changes());
         let members = self.merged_members(identity)?;
         let tx = Transaction::new_unchecked(&self.connection, TransactionBehavior::Immediate)?;
         let mut rows = 0;

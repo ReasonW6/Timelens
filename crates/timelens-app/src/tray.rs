@@ -155,6 +155,15 @@ fn notification_data(hwnd: HWND) -> NOTIFYICONDATAW {
 }
 unsafe extern "system" fn procedure(hwnd: HWND, message: u32, w: WPARAM, l: LPARAM) -> LRESULT {
     match message {
+        WM_POWERBROADCAST => {
+            crate::snapshot::wake_scheduler();
+            1
+        }
+        WM_TIMECHANGE | WM_SETTINGCHANGE => {
+            crate::snapshot::wake_scheduler();
+            crate::history::invalidate();
+            unsafe { DefWindowProcW(hwnd, message, w, l) }
+        }
         WM_QUERYENDSESSION => 1,
         WM_ENDSESSION if w != 0 => {
             // This native message thread can wait while Slint, IPC and the

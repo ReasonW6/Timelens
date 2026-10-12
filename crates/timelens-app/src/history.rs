@@ -51,6 +51,7 @@ static GENERATION: AtomicU64 = AtomicU64::new(0);
 /// Other applications a row's card stack shows before "+N".
 const STACK_SHOWN: usize = 2;
 
+#[derive(Clone)]
 struct DayEntry {
     key: String,
     entry: ActivityEntry,
@@ -65,6 +66,7 @@ struct Day {
     unrecorded: Vec<Unrecorded>,
     totals: Vec<(String, u64)>,
     focus_ms: u64,
+    source: Option<TimelineSnapshot>,
 }
 
 pub struct HistoryState {
@@ -96,33 +98,112 @@ fn day_bounds(offset: i32) -> Option<(i64, i64)> {
     timeline_view::selected_day_bounds(unix_time_ms(), -offset)
 }
 
-fn load_day(storage: &Storage, offset: i32) -> anyhow::Result<Option<Day>> {
+fn load_day(storage: &Storage, offset: i32, previous: Option<&Day>) -> anyhow::Result<Option<Day>> {
     let Some((start, end)) = day_bounds(offset) else {
         return Ok(None);
     };
     let end = end.min(unix_time_ms()).max(start + 1);
-    let snapshot = storage.timeline_snapshot(start, end)?;
+    let snapshot = if offset == 0 {
+        storage.timeline_snapshot_cached(start, end)?
+    } else {
+        storage.timeline_snapshot(start, end)?
+    };
     let date = Local
         .timestamp_millis_opt(start)
         .single()
         .map(|d| d.date_naive())
         .unwrap_or_default();
-    Ok(Some(build_day(offset, date, &snapshot)))
+    Ok(Some(build_day(offset, date, &snapshot, previous)))
 }
 
-fn build_day(offset: i32, date: NaiveDate, snapshot: &TimelineSnapshot) -> Day {
-    let entries = timeline_view::build_activity_rows(snapshot)
-        .into_iter()
-        .map(|entry| DayEntry {
-            key: format!(
-                "{date}:{}:{}",
-                entry.started_utc_ms,
-                entry.identity.as_deref().unwrap_or_default()
-            ),
-            participants: timeline_view::participants(snapshot, &entry),
-            entry,
+fn earliest_change(old: &TimelineSnapshot, new: &TimelineSnapshot) -> i64 {
+    if old.range_started_utc_ms != new.range_started_utc_ms
+        || new.range_ended_utc_ms < old.range_ended_utc_ms
+        || old.monitoring_gaps != new.monitoring_gaps
+    {
+        return new.range_started_utc_ms;
+    }
+    let mut earliest = old.range_ended_utc_ms;
+    for app in &old.applications {
+        let Some(next) = new.applications.iter().find(|a| a.identity == app.identity) else {
+            return new.range_started_utc_ms;
+        };
+        if app.display_name != next.display_name {
+            return new.range_started_utc_ms;
+        }
+        for index in 0..app.segments.len().max(next.segments.len()) {
+            match (app.segments.get(index), next.segments.get(index)) {
+                (Some(a), Some(b)) if a == b => {}
+                (Some(a), Some(b))
+                    if a.started_utc_ms == b.started_utc_ms
+                        && a.displayed == b.displayed
+                        && a.focused == b.focused
+                        && a.inferred_tray == b.inferred_tray =>
+                {
+                    earliest = earliest.min(a.ended_utc_ms.min(b.ended_utc_ms));
+                }
+                (Some(a), Some(b)) => {
+                    earliest = earliest.min(a.started_utc_ms.min(b.started_utc_ms))
+                }
+                (Some(a), None) | (None, Some(a)) => earliest = earliest.min(a.started_utc_ms),
+                _ => {}
+            }
+        }
+    }
+    for app in &new.applications {
+        if !old.applications.iter().any(|a| a.identity == app.identity) {
+            for segment in &app.segments {
+                earliest = earliest.min(segment.started_utc_ms);
+            }
+        }
+    }
+    earliest
+}
+
+fn build_day(
+    offset: i32,
+    date: NaiveDate,
+    snapshot: &TimelineSnapshot,
+    previous: Option<&Day>,
+) -> Day {
+    let boundary = previous
+        .and_then(|day| {
+            let old = day.source.as_ref()?;
+            let changed = earliest_change(old, snapshot);
+            // Grouping can merge neighbours repeatedly. Only a gap larger than the
+            // existing grouping threshold makes a completed prefix independent.
+            day.entries
+                .windows(2)
+                .filter_map(|pair| {
+                    (pair[1].entry.started_utc_ms - pair[0].entry.ended_utc_ms
+                        > timeline_view::BRIEF_ABSENCE_MS
+                        && pair[1].entry.started_utc_ms <= changed)
+                        .then_some(pair[1].entry.started_utc_ms)
+                })
+                .max()
         })
-        .collect();
+        .unwrap_or(snapshot.range_started_utc_ms);
+    let mut tail = snapshot.clone();
+    tail.range_started_utc_ms = boundary;
+    let mut entries = previous
+        .into_iter()
+        .flat_map(|day| &day.entries)
+        .filter(|e| boundary > snapshot.range_started_utc_ms && e.entry.ended_utc_ms <= boundary)
+        .cloned()
+        .collect::<Vec<_>>();
+    entries.extend(
+        timeline_view::build_activity_rows(&tail)
+            .into_iter()
+            .map(|entry| DayEntry {
+                key: format!(
+                    "{date}:{}:{}",
+                    entry.started_utc_ms,
+                    entry.identity.as_deref().unwrap_or_default()
+                ),
+                participants: timeline_view::participants(snapshot, &entry),
+                entry,
+            }),
+    );
     let mut totals = BTreeMap::<String, u64>::new();
     for application in &snapshot.applications {
         *totals.entry(application.identity.clone()).or_default() += application.focused_ms;
@@ -139,6 +220,7 @@ fn build_day(offset: i32, date: NaiveDate, snapshot: &TimelineSnapshot) -> Day {
         unrecorded: timeline_view::unrecorded_spans(snapshot),
         totals,
         focus_ms: timeline_view::total_focus_ms(snapshot),
+        source: (offset == 0).then(|| snapshot.clone()),
     }
 }
 
@@ -563,7 +645,7 @@ fn load_until(
     let until = until.min(state.horizon);
     while state.loaded < until {
         let offset = state.loaded + 1;
-        if let Some(day) = load_day(&storage, offset)? {
+        if let Some(day) = load_day(&storage, offset, state.days.get(&offset))? {
             state.days.insert(offset, day);
         }
         state.loaded = offset;
@@ -622,7 +704,7 @@ pub fn refresh(
         };
         state.generation = generation;
         for offset in offsets {
-            match load_day(&guard, offset)? {
+            match load_day(&guard, offset, state.days.get(&offset))? {
                 Some(day) => {
                     state.days.insert(offset, day);
                 }
@@ -975,6 +1057,93 @@ pub fn install(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use timelens_storage::{TimelineApplication, TimelineSegment};
+
+    fn history_fixture(end: i64) -> TimelineSnapshot {
+        let start = 1_700_000_000_000;
+        let spans = [(start, start + 300_000), (start + 900_000, end)];
+        TimelineSnapshot {
+            range_started_utc_ms: start,
+            range_ended_utc_ms: end,
+            applications: vec![TimelineApplication {
+                identity: "fixture".into(),
+                display_name: "Fixture".into(),
+                opened_ms: 0,
+                displayed_ms: 0,
+                focused_ms: 0,
+                background_ms: 0,
+                window_count: 0,
+                keyboard_count: 0,
+                left_click_count: 0,
+                middle_click_count: 0,
+                right_click_count: 0,
+                windows: vec![],
+                segments: spans
+                    .into_iter()
+                    .map(|(began, ended)| TimelineSegment {
+                        started_utc_ms: began,
+                        ended_utc_ms: ended,
+                        displayed: true,
+                        focused: true,
+                        inferred_tray: false,
+                    })
+                    .collect(),
+            }],
+            keyboard_count: 0,
+            left_click_count: 0,
+            middle_click_count: 0,
+            right_click_count: 0,
+            monitoring_gaps: vec![],
+        }
+    }
+
+    #[test]
+    fn completed_history_prefix_and_live_tail_match_a_full_rebuild() {
+        let first = history_fixture(1_700_001_500_000);
+        let date = Local
+            .timestamp_millis_opt(first.range_started_utc_ms)
+            .single()
+            .unwrap()
+            .date_naive();
+        let day = build_day(0, date, &first, None);
+        let next = history_fixture(first.range_ended_utc_ms + 60_000);
+        assert_eq!(earliest_change(&first, &next), first.range_ended_utc_ms);
+        let cached = build_day(0, date, &next, Some(&day));
+        let full = build_day(0, date, &next, None);
+        assert_eq!(
+            cached
+                .entries
+                .iter()
+                .map(|e| (&e.key, &e.entry, &e.participants))
+                .collect::<Vec<_>>(),
+            full.entries
+                .iter()
+                .map(|e| (&e.key, &e.entry, &e.participants))
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(cached.focus_ms, full.focus_ms);
+    }
+
+    #[test]
+    fn late_changes_and_renames_rebuild_the_affected_history_prefix() {
+        let first = history_fixture(1_700_001_500_000);
+        let date = Local
+            .timestamp_millis_opt(first.range_started_utc_ms)
+            .single()
+            .unwrap()
+            .date_naive();
+        let day = build_day(0, date, &first, None);
+        let mut next = history_fixture(first.range_ended_utc_ms + 60_000);
+        next.applications[0].segments[0].focused = false;
+        next.applications[0].display_name = "Updated".into();
+        assert_eq!(earliest_change(&first, &next), first.range_started_utc_ms);
+        let cached = build_day(0, date, &next, Some(&day));
+        let full = build_day(0, date, &next, None);
+        assert_eq!(
+            cached.entries.iter().map(|e| &e.entry).collect::<Vec<_>>(),
+            full.entries.iter().map(|e| &e.entry).collect::<Vec<_>>()
+        );
+    }
 
     fn row(key: &str, title: &str) -> HistoryItem {
         HistoryItem {

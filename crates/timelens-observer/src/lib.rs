@@ -10,7 +10,7 @@ use std::{
     collections::{HashMap, HashSet},
     marker::PhantomData,
     rc::Rc,
-    sync::atomic::{AtomicBool, Ordering},
+    sync::Mutex,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
@@ -39,7 +39,8 @@ use windows::{
             Shell::{IVirtualDesktopManager, VirtualDesktopManager},
             WindowsAndMessaging::{
                 CHILDID_SELF, DispatchMessageW, EVENT_OBJECT_CLOAKED, EVENT_OBJECT_CREATE,
-                EVENT_OBJECT_HIDE, EVENT_OBJECT_UNCLOAKED, EVENT_SYSTEM_FOREGROUND,
+                EVENT_OBJECT_DESTROY, EVENT_OBJECT_HIDE, EVENT_OBJECT_LOCATIONCHANGE,
+                EVENT_OBJECT_UNCLOAKED, EVENT_SYSTEM_DESKTOPSWITCH, EVENT_SYSTEM_FOREGROUND,
                 EVENT_SYSTEM_MINIMIZEEND, EVENT_SYSTEM_MINIMIZESTART, EnumWindows, GA_ROOT,
                 GW_OWNER, GWL_EXSTYLE, GetAncestor, GetForegroundWindow, GetWindow,
                 GetWindowLongPtrW, GetWindowRect, GetWindowThreadProcessId, IsIconic, IsWindow,
@@ -56,7 +57,40 @@ const APP_USER_MODEL_ID: PROPERTYKEY = PROPERTYKEY {
     fmtid: GUID::from_u128(0x9f4c2855_9f79_4b39_a8d0_e1d42de1d5f3),
     pid: 5,
 };
-static WINDOW_EVENT_PENDING: AtomicBool = AtomicBool::new(false);
+static WINDOW_EVENTS: Mutex<WindowEvents> = Mutex::new(WindowEvents {
+    events: Vec::new(),
+    reconcile: false,
+});
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum WindowEventKind {
+    Changed,
+    Destroyed,
+    Foreground,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct WindowEvent {
+    pub window_id: u64,
+    pub kind: WindowEventKind,
+}
+
+#[derive(Default)]
+pub struct WindowEvents {
+    pub events: Vec<WindowEvent>,
+    pub reconcile: bool,
+}
+
+impl WindowEvents {
+    fn push(&mut self, event: WindowEvent) {
+        if self.events.len() >= 2048 {
+            self.events.clear();
+            self.reconcile = true;
+        } else if !self.reconcile {
+            self.events.push(event);
+        }
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
 pub enum IdentitySource {
@@ -139,6 +173,7 @@ pub struct WindowObserver {
     virtual_desktop: Option<IVirtualDesktopManager>,
     tracked: HashMap<usize, TrackedWindow>,
     tray_candidates: HashMap<TrayKey, TrayCandidate>,
+    process_cache: HashMap<u32, ProcessInfo>,
     started: Instant,
     // COM interfaces above must be released before this apartment guard.
     _com: ComApartment,
@@ -153,6 +188,7 @@ impl WindowObserver {
             virtual_desktop,
             tracked: HashMap::new(),
             tray_candidates: HashMap::new(),
+            process_cache: HashMap::new(),
             started: Instant::now(),
             _com: ComApartment(PhantomData),
         })
@@ -200,18 +236,70 @@ impl WindowObserver {
 
     pub fn reconcile_transitions(&mut self) -> Result<ReconcileResult> {
         let windows = enumerate_windows()?;
+        // Periodic full reconciliation refreshes metadata as well as window facts.
+        self.process_cache.clear();
+        self.observe_handles(windows, true, Vec::new())
+    }
+
+    pub fn apply_window_events(&mut self, events: WindowEvents) -> Result<ReconcileResult> {
+        if events.reconcile {
+            return self.reconcile_transitions();
+        }
+        let (utc, mono) = self.timestamp();
+        let mut transitions = Vec::new();
+        let mut handles = HashSet::new();
+        for event in events.events {
+            let handle = event.window_id as usize;
+            if event.kind == WindowEventKind::Destroyed {
+                close_tracked(&mut self.tracked, handle, utc, mono, &mut transitions);
+            }
+            let hwnd = HWND(handle as *mut _);
+            if self.tracked.contains_key(&handle) || unsafe { GetAncestor(hwnd, GA_ROOT) } == hwnd {
+                handles.insert(handle);
+            }
+        }
+        // A foreground event changes both ends of the focus transfer.
+        handles.extend(self.tracked.iter().filter_map(|(handle, tracked)| {
+            tracked
+                .last_observation
+                .as_ref()
+                .filter(|o| o.focused)
+                .map(|_| *handle)
+        }));
+        let foreground = unsafe { GetForegroundWindow() };
+        if !foreground.is_invalid() {
+            handles.insert(window_id(foreground) as usize);
+        }
+        self.observe_handles(
+            handles.into_iter().map(|h| HWND(h as *mut _)).collect(),
+            false,
+            transitions,
+        )
+    }
+
+    fn observe_handles(
+        &mut self,
+        windows: Vec<HWND>,
+        full: bool,
+        mut transitions: Vec<WindowTransition>,
+    ) -> Result<ReconcileResult> {
         let foreground = unsafe { GetForegroundWindow() };
         let observed_at_utc_ms = unix_time_ms();
         let monotonic_ms = self.started.elapsed().as_millis().min(u64::MAX as u128) as u64;
         let mut observed_handles = HashSet::new();
         let mut process_cache = HashMap::<u32, Option<ProcessInfo>>::new();
-        let mut observations = Vec::new();
-        let mut transitions = Vec::new();
 
         for hwnd in windows {
             let handle = window_id(hwnd) as usize;
             let Some(facts) = inspect_window(hwnd, foreground, self.virtual_desktop.as_ref())
             else {
+                close_tracked(
+                    &mut self.tracked,
+                    handle,
+                    observed_at_utc_ms,
+                    monotonic_ms,
+                    &mut transitions,
+                );
                 continue;
             };
             observed_handles.insert(handle);
@@ -236,7 +324,14 @@ impl WindowObserver {
 
             let process = process_cache
                 .entry(facts.process_id)
-                .or_insert_with(|| process_info(facts.process_id))
+                .or_insert_with(|| {
+                    cached_process_info(
+                        &mut self.process_cache,
+                        facts.process_id,
+                        process_creation_time,
+                        process_info,
+                    )
+                })
                 .as_ref();
 
             if let Some(process) = process {
@@ -275,14 +370,13 @@ impl WindowObserver {
                     });
                 }
                 tracked.last_observation = Some(observation.clone());
-                observations.push(observation);
             }
         }
 
         let closed = self
             .tracked
             .keys()
-            .filter(|handle| !observed_handles.contains(handle))
+            .filter(|handle| full && !observed_handles.contains(handle))
             .copied()
             .collect::<Vec<_>>();
         for handle in closed {
@@ -294,6 +388,11 @@ impl WindowObserver {
                 &mut transitions,
             );
         }
+        let mut observations = self
+            .tracked
+            .values()
+            .filter_map(|tracked| tracked.last_observation.clone())
+            .collect::<Vec<_>>();
         observations.sort_unstable_by_key(|observation| observation.window_id);
         let tray_transitions = update_tray_candidates(
             &mut self.tray_candidates,
@@ -303,6 +402,15 @@ impl WindowObserver {
             monotonic_ms,
             process_matches,
         );
+        if full {
+            self.process_cache.retain(|pid, _| {
+                self.tracked.values().any(|w| w.process_id == *pid)
+                    || self
+                        .tray_candidates
+                        .keys()
+                        .any(|key| key.process_id == *pid)
+            });
+        }
         Ok(ReconcileResult {
             current: observations,
             transitions,
@@ -403,11 +511,13 @@ pub struct WinEventMonitor {
 
 impl WinEventMonitor {
     pub fn new() -> Result<Self> {
-        WINDOW_EVENT_PENDING.store(false, Ordering::Release);
+        *WINDOW_EVENTS.lock().unwrap_or_else(|e| e.into_inner()) = WindowEvents::default();
         let ranges = [
             (EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_FOREGROUND),
+            (EVENT_SYSTEM_DESKTOPSWITCH, EVENT_SYSTEM_DESKTOPSWITCH),
             (EVENT_SYSTEM_MINIMIZESTART, EVENT_SYSTEM_MINIMIZEEND),
             (EVENT_OBJECT_CREATE, EVENT_OBJECT_HIDE),
+            (EVENT_OBJECT_LOCATIONCHANGE, EVENT_OBJECT_LOCATIONCHANGE),
             (EVENT_OBJECT_CLOAKED, EVENT_OBJECT_UNCLOAKED),
         ];
         let mut hooks = Vec::with_capacity(ranges.len());
@@ -435,12 +545,17 @@ impl WinEventMonitor {
     }
 
     pub fn wait_for_change(&self, timeout: Duration) -> bool {
+        let events = self.wait_for_events(timeout);
+        events.reconcile || !events.events.is_empty()
+    }
+
+    pub fn wait_for_events(&self, timeout: Duration) -> WindowEvents {
         let timeout_ms = timeout.as_millis().min(u32::MAX as u128) as u32;
         unsafe {
             MsgWaitForMultipleObjectsEx(None, timeout_ms, QS_ALLINPUT, MWMO_INPUTAVAILABLE);
         }
         pump_messages();
-        WINDOW_EVENT_PENDING.swap(false, Ordering::AcqRel)
+        std::mem::take(&mut *WINDOW_EVENTS.lock().unwrap_or_else(|e| e.into_inner()))
     }
 }
 
@@ -455,18 +570,33 @@ impl Drop for WinEventMonitor {
 unsafe extern "system" fn win_event_callback(
     _hook: HWINEVENTHOOK,
     event: u32,
-    _hwnd: HWND,
+    hwnd: HWND,
     object_id: i32,
     child_id: i32,
     _thread_id: u32,
     _event_time_ms: u32,
 ) {
     let object_event = (EVENT_OBJECT_CREATE..=EVENT_OBJECT_HIDE).contains(&event)
-        || (EVENT_OBJECT_CLOAKED..=EVENT_OBJECT_UNCLOAKED).contains(&event);
+        || (EVENT_OBJECT_CLOAKED..=EVENT_OBJECT_UNCLOAKED).contains(&event)
+        || event == EVENT_OBJECT_LOCATIONCHANGE;
     if object_event && (object_id != OBJID_WINDOW.0 || child_id != CHILDID_SELF as i32) {
         return;
     }
-    WINDOW_EVENT_PENDING.store(true, Ordering::Release);
+    let mut pending = WINDOW_EVENTS.lock().unwrap_or_else(|e| e.into_inner());
+    if event == EVENT_SYSTEM_DESKTOPSWITCH || hwnd.is_invalid() {
+        pending.reconcile = true;
+    } else {
+        pending.push(WindowEvent {
+            window_id: window_id(hwnd),
+            kind: if event == EVENT_SYSTEM_FOREGROUND {
+                WindowEventKind::Foreground
+            } else if event == EVENT_OBJECT_DESTROY {
+                WindowEventKind::Destroyed
+            } else {
+                WindowEventKind::Changed
+            },
+        });
+    }
 }
 
 fn pump_messages() {
@@ -736,13 +866,33 @@ fn process_info(process_id: u32) -> Option<ProcessInfo> {
 }
 
 fn process_matches(process_id: u32, expected_started_at_100ns: u64) -> bool {
+    process_creation_time(process_id) == Some(expected_started_at_100ns)
+}
+
+fn cached_process_info(
+    cache: &mut HashMap<u32, ProcessInfo>,
+    pid: u32,
+    creation: impl FnOnce(u32) -> Option<u64>,
+    load: impl FnOnce(u32) -> Option<ProcessInfo>,
+) -> Option<ProcessInfo> {
+    if let Some(info) = cache.get(&pid)
+        && creation(pid) == Some(info.started_at_100ns)
+    {
+        return Some(info.clone());
+    }
+    cache.remove(&pid);
+    let info = load(pid)?;
+    cache.insert(pid, info.clone());
+    Some(info)
+}
+
+fn process_creation_time(process_id: u32) -> Option<u64> {
     unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, process_id) }
         .ok()
         .and_then(|handle| {
             let handle = ProcessHandle(handle);
             process_start_time(handle.0)
         })
-        == Some(expected_started_at_100ns)
 }
 
 fn process_start_time(handle: HANDLE) -> Option<u64> {
@@ -903,6 +1053,62 @@ impl Drop for ProcessHandle {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn event_overflow_requires_full_reconciliation_instead_of_losing_windows() {
+        let mut events = WindowEvents::default();
+        for id in 0..2050 {
+            events.push(WindowEvent {
+                window_id: id,
+                kind: WindowEventKind::Changed,
+            });
+        }
+        assert!(events.reconcile);
+        assert!(events.events.is_empty());
+    }
+
+    #[test]
+    fn process_cache_reuses_metadata_but_detects_pid_reuse_and_retries_denied_reads() {
+        let mut cache = HashMap::new();
+        let info = |started| ProcessInfo {
+            started_at_100ns: started,
+            path: Some(format!("process-{started}")),
+            app_user_model_id: None,
+            package_identity: None,
+        };
+        assert_eq!(
+            cached_process_info(&mut cache, 1, |_| None, |_| Some(info(10)))
+                .unwrap()
+                .path
+                .as_deref(),
+            Some("process-10")
+        );
+        assert_eq!(
+            cached_process_info(
+                &mut cache,
+                1,
+                |_| Some(10),
+                |_| panic!("metadata must be reused")
+            )
+            .unwrap()
+            .started_at_100ns,
+            10
+        );
+        assert_eq!(
+            cached_process_info(&mut cache, 1, |_| Some(20), |_| Some(info(20)))
+                .unwrap()
+                .started_at_100ns,
+            20
+        );
+        assert!(cached_process_info(&mut cache, 1, |_| None, |_| None).is_none());
+        assert!(!cache.contains_key(&1));
+        assert_eq!(
+            cached_process_info(&mut cache, 1, |_| None, |_| Some(info(30)))
+                .unwrap()
+                .started_at_100ns,
+            30
+        );
+    }
 
     fn observation(displayed: bool, focused: bool) -> WindowObservation {
         WindowObservation {
