@@ -235,6 +235,16 @@ impl Storage {
                         break;
                     }
                 }
+                // A stopped format upgrade may still keep the image in its old file.
+                if plain.is_err() {
+                    plain = snapshot_container::read_legacy_payload(
+                        &repaired.connection,
+                        &directory,
+                        &source.join(KEY_FILE),
+                        id,
+                    )
+                    .or(plain);
+                }
                 let plain = plain?;
                 if plain.len() as u64 != size
                     || milestone3::snapshot_pixel_hash(&plain, width, height)? != hash

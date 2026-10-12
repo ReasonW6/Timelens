@@ -279,10 +279,16 @@ impl Storage {
             // archive contains original WebP bytes and stable local-day metadata.
             self.connection.execute_batch("DELETE FROM portable.snapshot_container_records; DELETE FROM portable.snapshot_containers;")?;
             if options.include_snapshots {
-                let blobs=self.connection.prepare("SELECT blob_id,MIN(slot_id) FROM snapshot_slots WHERE blob_id IS NOT NULL GROUP BY blob_id")?.query_map([],|r|Ok((r.get::<_,i64>(0)?,r.get::<_,i64>(1)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
-                for (blob, slot) in blobs {
-                    let bytes = Zeroizing::new(self.load_snapshot_image(slot)?.webp);
-                    add(&format!("snapshots/{blob}.webp"), &bytes)?;
+                let copies=self.connection.prepare("SELECT s.blob_id,MIN(s.slot_id) FROM snapshot_slots s LEFT JOIN snapshot_slot_days d USING(slot_id) WHERE s.blob_id IS NOT NULL GROUP BY s.blob_id,d.local_day ORDER BY s.blob_id,d.local_day")?.query_map([],|r|Ok((r.get::<_,i64>(0)?,r.get::<_,i64>(1)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
+                // Each day keeps its own copy of a shared image; any authenticated
+                // copy exports it.
+                for copies in copies.chunk_by(|a, b| a.0 == b.0) {
+                    let image = copies[1..].iter().fold(
+                        self.load_snapshot_image(copies[0].1),
+                        |image, &(_, slot)| image.or_else(|_| self.load_snapshot_image(slot)),
+                    )?;
+                    let bytes = Zeroizing::new(image.webp);
+                    add(&format!("snapshots/{}.webp", copies[0].0), &bytes)?;
                 }
             }
             let data = self.connection.serialize("portable")?;

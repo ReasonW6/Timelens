@@ -216,13 +216,20 @@ impl Storage {
         let stage = tempfile::Builder::new()
             .prefix("timelens-move-")
             .tempdir_in(destination)?;
-        let names = self.snapshot_container_files()?;
+        let mut names = self.snapshot_container_files()?;
         if !names
             .iter()
             .all(|name| snapshot_container::owned_container_name(name))
         {
             return Err(invalid("数据集快照路径无效"));
         }
+        // A stopped format upgrade still reads some images from old per-image
+        // files; they move too, and the copy finishes the upgrade when it opens.
+        let legacy = self.snapshot_legacy_files()?;
+        if !legacy.iter().all(|name| owned_snapshot_name(name)) {
+            return Err(invalid("数据集快照路径无效"));
+        }
+        names.extend(legacy);
         let mut files = vec![
             (self.database_path.clone(), stage.path().join(DATABASE_FILE)),
             (self.key_path.clone(), stage.path().join(KEY_FILE)),

@@ -470,6 +470,20 @@ impl Storage {
             .collect::<rusqlite::Result<_>>()?)
     }
 
+    /// Old per-image files a stopped format upgrade still keeps on disk.
+    pub(crate) fn snapshot_legacy_files(&self) -> Result<Vec<String>> {
+        let directory = self.snapshot_directory();
+        let names = self
+            .connection
+            .prepare("SELECT file_name FROM snapshot_blobs ORDER BY blob_id")?
+            .query_map([], |r| r.get::<_, String>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(names
+            .into_iter()
+            .filter(|name| directory.join(name).is_file())
+            .collect())
+    }
+
     pub(crate) fn reconcile_snapshot_containers(&self) -> Result<()> {
         let directory = self.snapshot_directory();
         // Legacy staged deletes are still understood during the format upgrade.
@@ -595,9 +609,14 @@ impl Storage {
         Ok(())
     }
 
+    /// Images a stopped format upgrade still reads from old per-image files count
+    /// toward the capacity limit as well.
     pub(crate) fn snapshot_live_bytes(&self) -> Result<u64> {
         Ok(self.connection.query_row(
-            "SELECT COALESCE(SUM(committed_bytes),0) FROM snapshot_containers",
+            "SELECT (SELECT COALESCE(SUM(committed_bytes),0) FROM snapshot_containers)
+                + (SELECT COALESCE(SUM(b.encrypted_bytes),0) FROM snapshot_blobs b WHERE EXISTS(SELECT 1 FROM snapshot_slots s
+                    LEFT JOIN snapshot_slot_days d USING(slot_id) LEFT JOIN snapshot_container_records r ON r.blob_id=s.blob_id AND r.local_day=d.local_day
+                    WHERE s.blob_id=b.blob_id AND s.result='success' AND r.blob_id IS NULL))",
             [],
             |r| row_u64(r, 0),
         )?)
@@ -625,7 +644,7 @@ impl Storage {
         let today = today.to_string();
         let days = self
             .connection
-            .prepare("SELECT local_day FROM snapshot_containers ORDER BY local_day")?
+            .prepare("SELECT local_day FROM snapshot_containers UNION SELECT d.local_day FROM snapshot_slot_days d JOIN snapshot_slots s USING(slot_id) WHERE s.result='success' ORDER BY 1")?
             .query_map([], |r| r.get::<_, String>(0))?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         let mut outcome = SnapshotRetentionOutcome::default();
@@ -662,17 +681,21 @@ impl Storage {
             WHERE result='success' AND slot_id IN(SELECT slot_id FROM snapshot_slot_days WHERE local_day=?)",params![reason.as_str(),day])?;
         tx.execute("DELETE FROM snapshot_slot_days WHERE local_day=?", [day])?;
         tx.execute("DELETE FROM snapshot_containers WHERE local_day=?", [day])?;
+        // A stopped format upgrade can leave the removed images in old per-image
+        // files, and the general sweep waits for that upgrade, so remove them here.
+        let orphans = tx.prepare("SELECT file_name FROM snapshot_blobs WHERE NOT EXISTS(SELECT 1 FROM snapshot_slots s WHERE s.blob_id=snapshot_blobs.blob_id)")?
+            .query_map([], |r| r.get::<_, String>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
         tx.execute("DELETE FROM snapshot_blobs WHERE NOT EXISTS(SELECT 1 FROM snapshot_slots s WHERE s.blob_id=snapshot_blobs.blob_id)",[])?;
         tx.commit()?;
         self.snapshot_files_settled.set(false);
         let mut released = 0;
         let cleanup = self.finish_snapshot_key_cleanup().and_then(|()| {
-            if let Some((name, _)) = container {
+            for name in container.map(|(name, _)| name).into_iter().chain(orphans) {
                 let path = image_path(&self.snapshot_directory(), &name)?;
                 if path.exists() {
-                    let bytes = fs::metadata(&path)?.len();
+                    released += fs::metadata(&path)?.len();
                     fs::remove_file(path)?;
-                    released = bytes;
                 }
             }
             Ok(())
@@ -984,6 +1007,28 @@ pub(crate) fn read_payload(
     blob_id: i64,
     slot_id: Option<i64>,
 ) -> Result<Zeroizing<Vec<u8>>> {
+    read_blob(connection, directory, key_path, blob_id, slot_id, false)
+}
+
+/// Reads only the old per-image file a stopped format upgrade keeps, for when
+/// every daily copy of the image is damaged.
+pub(crate) fn read_legacy_payload(
+    connection: &Connection,
+    directory: &Path,
+    key_path: &Path,
+    blob_id: i64,
+) -> Result<Zeroizing<Vec<u8>>> {
+    read_blob(connection, directory, key_path, blob_id, None, true)
+}
+
+fn read_blob(
+    connection: &Connection,
+    directory: &Path,
+    key_path: &Path,
+    blob_id: i64,
+    slot_id: Option<i64>,
+    legacy_only: bool,
+) -> Result<Zeroizing<Vec<u8>>> {
     let (name,hash,size,width,height) = connection.query_row("SELECT file_name,content_sha256,plaintext_bytes,pixel_width,pixel_height FROM snapshot_blobs WHERE blob_id=?",[blob_id],
         |r|Ok((r.get::<_,String>(0)?,r.get::<_,Vec<u8>>(1)?,row_u64(r,2)?,r.get::<_,u32>(3)?,r.get::<_,u32>(4)?)))?;
     let hash: [u8; 32] = hash
@@ -1001,7 +1046,12 @@ pub(crate) fn read_payload(
         })
         .transpose()?
         .flatten();
-    let plain = if let Some(record) = record(connection, blob_id, day.as_deref())? {
+    let found = if legacy_only {
+        None
+    } else {
+        record(connection, blob_id, day.as_deref())?
+    };
+    let plain = if let Some(record) = found {
         read_record(directory, &record, &hash)?
     } else {
         let bytes = fs::read(image_path(directory, &name)?)?;
@@ -1728,6 +1778,125 @@ pub(crate) mod tests {
         assert_eq!(deletion.cleanup_pending, None);
         assert!(opened.load_snapshot_image(second).is_err());
         assert!(!originals[1].0.exists());
+    }
+
+    #[test]
+    fn retention_and_capacity_include_days_a_stopped_migration_left_in_old_files() {
+        let directory = tempfile::tempdir().unwrap();
+        let storage = Storage::open(directory.path()).unwrap();
+        let a = request(1_700_000_000_000, 10);
+        let b = request(a.slot_started_utc_ms + 86_400_000, 20);
+        storage.store_snapshot(&a).unwrap();
+        storage.store_snapshot(&b).unwrap();
+        let originals = make_legacy(&storage);
+        drop(storage);
+        let mut corrupt = originals[0].1.clone();
+        corrupt[25] ^= 1;
+        fs::write(&originals[0].0, &corrupt).unwrap();
+        let opened = Storage::open(directory.path()).unwrap();
+        assert!(opened.snapshot_container_files().unwrap().is_empty());
+        assert!(opened.snapshot_live_bytes().unwrap() > 0);
+        let now = b.captured_at_utc_ms + 3 * 86_400_000;
+        let mut policy = opened.snapshot_policy().unwrap();
+        policy.retention_days = Some(1);
+        opened.set_snapshot_policy(policy, now).unwrap();
+        let outcome = opened.apply_snapshot_day_retention(now).unwrap();
+        assert_eq!(outcome.snapshot_items, 2);
+        assert!(originals.iter().all(|(path, _)| !path.exists()));
+        assert_eq!(opened.snapshot_live_bytes().unwrap(), 0);
+    }
+
+    #[test]
+    fn relocation_moves_images_a_stopped_migration_left_in_old_files() {
+        let directory = tempfile::tempdir().unwrap();
+        let storage = Storage::open(directory.path()).unwrap();
+        let a = request(1_700_000_000_000, 10);
+        let b = request(a.slot_started_utc_ms + 86_400_000, 20);
+        let first = storage.store_snapshot(&a).unwrap();
+        let second = storage.store_snapshot(&b).unwrap();
+        let originals = make_legacy(&storage);
+        drop(storage);
+        FAILURE.with(|f| f.set(Some("after_migration_day")));
+        let mut opened = Storage::open(directory.path()).unwrap();
+        assert_eq!(opened.snapshot_container_files().unwrap().len(), 1);
+        let moved = tempfile::tempdir().unwrap();
+        opened
+            .relocate(moved.path(), |_| Ok(()), |_, _, _| {})
+            .unwrap();
+        assert_eq!(opened.load_snapshot_image(first).unwrap().webp, a.webp);
+        assert_eq!(opened.load_snapshot_image(second).unwrap().webp, b.webp);
+        assert_eq!(opened.snapshot_container_files().unwrap().len(), 2);
+        assert!(originals.iter().all(|(path, _)| !path.exists()));
+    }
+
+    #[test]
+    fn recovery_reads_the_old_file_when_a_stopped_migration_damaged_copy_fails() {
+        let directory = tempfile::tempdir().unwrap();
+        let storage = Storage::open(directory.path()).unwrap();
+        let a = request(1_700_000_000_000, 10);
+        let b = request(a.slot_started_utc_ms + 86_400_000, 20);
+        let first = storage.store_snapshot(&a).unwrap();
+        let second = storage.store_snapshot(&b).unwrap();
+        make_legacy(&storage);
+        drop(storage);
+        FAILURE.with(|f| f.set(Some("after_migration_day")));
+        let opened = Storage::open(directory.path()).unwrap();
+        let containers = opened.snapshot_container_files().unwrap();
+        assert_eq!(containers.len(), 1);
+        let damaged = opened.snapshot_directory().join(&containers[0]);
+        opened.checkpoint().unwrap();
+        drop(opened);
+        let mut bytes = fs::read(&damaged).unwrap();
+        *bytes.last_mut().unwrap() ^= 1;
+        fs::write(&damaged, bytes).unwrap();
+        let parent = tempfile::tempdir().unwrap();
+        let (recovered, report) =
+            Storage::recover_to_new_directory(directory.path(), &parent.path().join("recovered"))
+                .unwrap();
+        assert_eq!(report.unavailable_images, 0);
+        assert_eq!(recovered.load_snapshot_image(first).unwrap().webp, a.webp);
+        assert_eq!(recovered.load_snapshot_image(second).unwrap().webp, b.webp);
+    }
+
+    #[test]
+    fn portable_export_uses_a_later_day_when_the_first_copy_is_damaged() {
+        let source_dir = tempfile::tempdir().unwrap();
+        let source = Storage::open(source_dir.path()).unwrap();
+        let a = request(1_700_000_000_000, 10);
+        let first = store_on_day(&source, &a, "2023-11-14");
+        let mut later = a.clone();
+        later.slot_started_utc_ms += 86_400_000;
+        later.captured_at_utc_ms += 86_400_000;
+        let second = store_on_day(&source, &later, "2023-11-15");
+        let name: String = source
+            .connection
+            .query_row(
+                "SELECT file_name FROM snapshot_containers WHERE local_day='2023-11-14'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let damaged = source.snapshot_directory().join(name);
+        let mut bytes = fs::read(&damaged).unwrap();
+        *bytes.last_mut().unwrap() ^= 1;
+        fs::write(&damaged, bytes).unwrap();
+        let backup_dir = tempfile::tempdir().unwrap();
+        let backup = backup_dir.path().join("snapshot.zip");
+        source
+            .export_backup(
+                &backup,
+                BackupOptions {
+                    include_snapshots: true,
+                    password: None,
+                },
+            )
+            .unwrap();
+        let target_dir = tempfile::tempdir().unwrap();
+        let target = Storage::open(target_dir.path()).unwrap();
+        let prepared = Storage::prepare_restore(&backup, None, target_dir.path()).unwrap();
+        target.replace_from_backup(prepared, true).unwrap();
+        assert_eq!(target.load_snapshot_image(first).unwrap().webp, a.webp);
+        assert_eq!(target.load_snapshot_image(second).unwrap().webp, a.webp);
     }
 
     #[test]
