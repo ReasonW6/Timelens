@@ -1,4 +1,5 @@
 //! Bounded, memory-only view cache. Durable storage and its encryption are unchanged.
+use super::collection::merge_group;
 use super::*;
 use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use std::sync::Arc;
@@ -92,22 +93,6 @@ impl TimelineCache {
     }
 }
 
-fn root(identity: &str, edges: &[(String, String)]) -> String {
-    let mut members = BTreeSet::from([identity.to_owned()]);
-    loop {
-        let before = members.len();
-        for (left, right) in edges {
-            if members.contains(left) || members.contains(right) {
-                members.insert(left.clone());
-                members.insert(right.clone());
-            }
-        }
-        if before == members.len() {
-            return members.into_iter().next().unwrap();
-        }
-    }
-}
-
 fn sort_applications(applications: &mut [TimelineApplication]) {
     applications.sort_by(|a, b| {
         b.focused_ms
@@ -177,14 +162,12 @@ impl Storage {
             // With no dirty application the filtered query returns only the totals.
             if !cached.dirty.is_empty() || cached.totals_dirty {
                 let edges = self.merge_links()?;
-                let roots = cached
-                    .dirty
-                    .iter()
-                    .map(|id| root(id, &edges))
-                    .collect::<BTreeSet<_>>();
-                let mut sources = cached.dirty.clone();
-                for id in cached.dirty.iter() {
-                    sources.extend(self.merged_members(id)?);
+                let mut roots = BTreeSet::new();
+                let mut sources = BTreeSet::new();
+                for id in &cached.dirty {
+                    let group = merge_group(id, &edges);
+                    roots.extend(group.first().cloned());
+                    sources.extend(group);
                 }
                 let filter = serde_json::to_string(&sources)
                     .map_err(|e| StorageError::Integrity(e.to_string()))?;
@@ -262,7 +245,7 @@ impl Storage {
         let mut canonical = |id: String| {
             roots
                 .entry(id.clone())
-                .or_insert_with(|| root(&id, &edges))
+                .or_insert_with(|| merge_group(&id, &edges).pop_first().unwrap())
                 .clone()
         };
         let mut result = HashMap::<String, Projection>::new();

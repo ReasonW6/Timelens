@@ -7,6 +7,22 @@ struct MergeRules {
     policy: Policy,
     snapshots: BTreeSet<String>,
 }
+/// Every identity merged with `identity`, itself included; the first is the group's root.
+pub(crate) fn merge_group(identity: &str, edges: &[(String, String)]) -> BTreeSet<String> {
+    let mut members = BTreeSet::from([identity.into()]);
+    loop {
+        let before = members.len();
+        for (a, b) in edges {
+            if members.contains(a) || members.contains(b) {
+                members.insert(a.clone());
+                members.insert(b.clone());
+            }
+        }
+        if before == members.len() {
+            return members;
+        }
+    }
+}
 impl Storage {
     pub fn collection_policy(&self) -> Result<Policy> {
         let raw: String = self.connection.query_row(
@@ -47,20 +63,7 @@ impl Storage {
         Ok(self.connection.prepare("SELECT left_identity,right_identity FROM application_merges ORDER BY left_identity,right_identity")?.query_map([],|r|Ok((r.get(0)?,r.get(1)?)))?.collect::<rusqlite::Result<_>>()?)
     }
     pub fn merged_members(&self, identity: &str) -> Result<BTreeSet<String>> {
-        let edges = self.merge_links()?;
-        let mut members = BTreeSet::from([identity.into()]);
-        loop {
-            let before = members.len();
-            for (a, b) in &edges {
-                if members.contains(a) || members.contains(b) {
-                    members.insert(a.clone());
-                    members.insert(b.clone());
-                }
-            }
-            if before == members.len() {
-                return Ok(members);
-            }
-        }
+        Ok(merge_group(identity, &self.merge_links()?))
     }
     pub fn set_application_merge(&self, left: &str, right: &str, merge: bool) -> Result<()> {
         if left == right || left.is_empty() || right.is_empty() {
