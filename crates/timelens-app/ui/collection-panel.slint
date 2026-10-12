@@ -1,7 +1,7 @@
 import { ComboBox, LineEdit, ScrollView } from "std-widgets.slint";
 import { Theme, Action, Label, Note, SectionTitle, Rule, CheckBox, StatusLine, Segmented, Segment, Switch, SettingRow, SettingsHeader, SettingsGroup, SettingExpander } from "theme.slint";
 
-// A key's position and size are in key units on the 108-key board.
+// A key's position and size are in key units on the 93-key board.
 export struct KeyCell { label: string, count: string, strength: float, x: float, y: float, w: float, h: float }
 export struct ButtonHeat { count: string, strength: float }
 export global CollectionState {
@@ -114,8 +114,8 @@ component MouseLegend inherits HorizontalLayout {
 
 export component CollectionPanel inherits Rectangle {
     background: Theme.paper;
-    // One key unit; the 22.5-unit board scrolls sideways once it no longer fits.
-    private property <length> key-unit: max(38px, min(46px, (root.width - 34px) / 22.5));
+    // One key unit; the 19.75-unit board scrolls sideways once it no longer fits.
+    private property <length> key-unit: max(38px, min(50px, (root.width - 34px) / 19.75));
 
     VerticalLayout {
         spacing: 10px;
@@ -278,7 +278,7 @@ export component CollectionPanel inherits Rectangle {
                 keyboard-scroll := ScrollView {
                     height: root.key-unit * 6.5 + 14px;
                     vertical-stretch: 0;
-                    viewport-width: max(root.key-unit * 22.5, self.visible-width);
+                    viewport-width: max(root.key-unit * 19.75, self.visible-width);
                     viewport-height: root.key-unit * 6.5;
                     horizontal-scrollbar-policy: as-needed;
                     vertical-scrollbar-policy: always-off;
