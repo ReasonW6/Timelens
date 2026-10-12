@@ -14,6 +14,8 @@ struct Cached {
     projections: HashMap<String, Projection>,
     next_boundary: i64,
     dirty: BTreeSet<String>,
+    /// Input without an application identity changed only the global counts.
+    totals_dirty: bool,
 }
 
 #[derive(Default)]
@@ -38,12 +40,25 @@ impl TimelineCache {
         self.changes = after;
     }
 
+    /// Retention removed only records that end before `cutoff`. A view starting a
+    /// minute after it (an input bucket spans one minute) is unaffected.
+    pub(crate) fn pruned(&mut self, before: u64, after: u64, cutoff: Option<i64>) {
+        if self.changes != before {
+            self.entries.clear();
+        } else if let Some(cutoff) = cutoff {
+            self.entries
+                .retain(|c| c.snapshot.range_started_utc_ms >= cutoff.saturating_add(60_000));
+        }
+        self.changes = after;
+    }
+
     pub(crate) fn ingested(&mut self, before: u64, after: u64, batch: &EventBatch, new_run: bool) {
         if self.changes != before || new_run {
             self.clear(after);
             return;
         }
         let mut dirty = BTreeSet::new();
+        let mut totals_dirty = false;
         for event in &batch.events {
             match event.body.as_ref() {
                 Some(collector_event::Body::WindowTransition(t)) => {
@@ -58,9 +73,8 @@ impl TimelineCache {
                     if let Some(identity) = &m.focused_application_identity {
                         dirty.insert(identity.clone());
                     } else {
-                        // Anonymous counts still contribute to the global totals.
-                        self.clear(after);
-                        return;
+                        // Unattributed counts still contribute to the global totals.
+                        totals_dirty = true;
                     }
                 }
                 Some(collector_event::Body::MonitoringGap(_)) => {
@@ -72,6 +86,7 @@ impl TimelineCache {
         }
         for entry in &mut self.entries {
             entry.dirty.extend(dirty.iter().cloned());
+            entry.totals_dirty |= totals_dirty;
         }
         self.changes = after;
     }
@@ -159,7 +174,8 @@ impl Storage {
         };
         let mut cached = if let Some(mut cached) = cached {
             cached.advance(end);
-            if !cached.dirty.is_empty() {
+            // With no dirty application the filtered query returns only the totals.
+            if !cached.dirty.is_empty() || cached.totals_dirty {
                 let edges = self.merge_links()?;
                 let roots = cached
                     .dirty
@@ -185,6 +201,7 @@ impl Storage {
                 snapshot.monitoring_gaps = refreshed.monitoring_gaps;
                 sort_applications(&mut snapshot.applications);
                 cached.dirty.clear();
+                cached.totals_dirty = false;
                 cached.projections = self.timeline_projections(&cached.snapshot)?;
                 cached.next_boundary = self.timeline_next_boundary(end)?;
             }
@@ -196,6 +213,7 @@ impl Storage {
                 next_boundary: self.timeline_next_boundary(end)?,
                 snapshot: Arc::new(snapshot),
                 dirty: BTreeSet::new(),
+                totals_dirty: false,
             }
         };
         // Sorting can change a segment's index when two windows start together.
@@ -588,7 +606,7 @@ mod tests {
     }
 
     #[test]
-    fn merges_deletes_retention_and_clear_discard_cached_statistics() {
+    fn merges_deletes_and_clear_discard_cached_statistics() {
         let (_dir, s) = fixture();
         ingest(
             &s,
@@ -608,12 +626,89 @@ mod tests {
         s.delete_application_history(a).unwrap();
         assert!(s.timeline_cache.borrow().entries.is_empty());
         assert_eq!(check(&s, -1, 400).applications.len(), 1);
-        s.apply_retention(BASE + 500).unwrap();
-        assert!(s.timeline_cache.borrow().entries.is_empty());
-        check(&s, -1, 600);
         s.clear_all().unwrap();
         assert!(s.timeline_cache.borrow().entries.is_empty());
         assert!(check(&s, -1, 700).applications.is_empty());
+    }
+
+    #[test]
+    fn retention_keeps_views_after_its_cutoff_and_discards_overlapping_ones() {
+        let (_dir, s) = fixture();
+        s.set_retention_policy(RetentionPolicy {
+            days: Some(1),
+            ..s.retention_policy().unwrap()
+        })
+        .unwrap();
+        ingest(
+            &s,
+            1,
+            vec![window(1, "a", 0, WindowTransitionKind::Opened, true, true)],
+        );
+        let day = 86_400_000;
+        for (ago, date) in [(3 * day, "2023-11-11"), (day * 3 / 2, "2023-11-13")] {
+            let minute = BASE - ago - (BASE - ago).rem_euclid(60_000);
+            s.connection
+                .execute(
+                    "INSERT INTO input_minute_buckets (
+                        minute_started_utc_ms, timezone_offset_minutes, local_date,
+                        focused_application_identity, keyboard_count,
+                        left_click_count, middle_click_count, right_click_count
+                     ) VALUES (?1, 0, ?2, NULL, 5, 0, 0, 0)",
+                    params![minute, date],
+                )
+                .unwrap();
+        }
+        check(&s, -1, 100);
+        assert_eq!(check(&s, -2 * day, 100).keyboard_count, 5);
+        // The cleanup deletes rows every minute; only views reaching its cutoff are stale.
+        s.apply_retention(BASE + 200).unwrap();
+        let cache = s.timeline_cache.borrow();
+        assert_eq!(cache.entries.len(), 1);
+        assert_eq!(cache.entries[0].snapshot.range_started_utc_ms, BASE - 1);
+        drop(cache);
+        check(&s, -1, 300);
+        assert_eq!(check(&s, -2 * day, 300).keyboard_count, 0);
+    }
+
+    #[test]
+    fn unattributed_input_keeps_cached_applications_and_refreshes_global_counts() {
+        let (_dir, s) = fixture();
+        ingest(
+            &s,
+            1,
+            vec![window(1, "a", 0, WindowTransitionKind::Opened, true, true)],
+        );
+        check(&s, -60_000, 70_000);
+        let minute = BASE - BASE.rem_euclid(60_000);
+        ingest(
+            &s,
+            2,
+            vec![CollectorEvent {
+                observed_at_utc_ms: BASE + 60_000,
+                monotonic_ms: 60_001,
+                body: Some(collector_event::Body::InputMinute(
+                    timelens_ipc::InputMinute {
+                        minute_started_at_utc_ms: minute,
+                        timezone_offset_minutes: 0,
+                        local_date: chrono::DateTime::from_timestamp_millis(minute)
+                            .unwrap()
+                            .format("%Y-%m-%d")
+                            .to_string(),
+                        // Clicks on the taskbar or desktop have no tracked application.
+                        focused_application_identity: None,
+                        left_click_count: 4,
+                        ..Default::default()
+                    },
+                )),
+            }],
+        );
+        let cache = s.timeline_cache.borrow();
+        assert_eq!(cache.entries.len(), 1);
+        assert!(cache.entries[0].dirty.is_empty());
+        drop(cache);
+        let result = check(&s, -60_000, 80_000);
+        assert_eq!(result.left_click_count, 4);
+        assert_eq!(result.applications[0].left_click_count, 0);
     }
 
     #[test]

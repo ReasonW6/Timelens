@@ -876,9 +876,7 @@ impl Storage {
     }
 
     pub fn apply_retention(&self, now_utc_ms: i64) -> Result<RetentionReport> {
-        self.timeline_cache
-            .borrow_mut()
-            .clear(self.connection.total_changes());
+        let before_changes = self.connection.total_changes();
         let policy = self.retention_policy()?;
         // Fold the WAL back first so the released-bytes figure does not count log
         // pages that any checkpoint would reclaim anyway. This only sharpens that
@@ -889,6 +887,8 @@ impl Storage {
         let activity_cutoff = policy
             .days
             .map(|days| now_utc_ms.saturating_sub(i64::from(days) * 86_400_000));
+        // Every timeline record removed below ends before the latest cutoff used.
+        let mut pruned_before = activity_cutoff;
         let milestone3 = self.apply_milestone3_retention(now_utc_ms, activity_cutoff)?;
         outcome.report.snapshot_items = milestone3.snapshot_items;
         outcome.report.report_items = milestone3.report_items;
@@ -913,6 +913,7 @@ impl Storage {
                 break;
             };
             let cutoff = oldest.saturating_add(86_400_000).min(now_utc_ms);
+            pruned_before = pruned_before.max(Some(cutoff));
             let removed = self.cleanup_before(cutoff, "retention_space")?;
             if removed.report.activity_items == 0 && removed.report.input_items == 0 {
                 break;
@@ -937,6 +938,11 @@ impl Storage {
                 )?;
             }
         }
+        self.timeline_cache.borrow_mut().pruned(
+            before_changes,
+            self.connection.total_changes(),
+            pruned_before,
+        );
         Ok(outcome.report)
     }
 
