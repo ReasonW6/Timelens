@@ -49,6 +49,13 @@ jobs:
           TMP: ${{ runner.temp }}
         run: cargo test --workspace --release --no-fail-fast -- --test-threads=2 ${{ env.NON_ELEVATED_TESTS }}
 
+      - name: Installer startup regression tests
+        shell: powershell
+        run: |
+          Import-Module Pester -RequiredVersion 3.4.0
+          $result = Invoke-Pester -Script .\installer\tests\startup.Tests.ps1 -PassThru
+          if ($result.FailedCount -gt 0) { exit 1 }
+
       - name: cargo test (AI worker, standard user)
         shell: pwsh
         run: |

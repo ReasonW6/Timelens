@@ -3,7 +3,6 @@
 use super::*;
 use portable::{quoted, table_names};
 use rusqlite::{params_from_iter, types::Value};
-use std::io::Read;
 
 #[derive(Debug, Default)]
 pub struct RecoveryReport {
@@ -195,6 +194,8 @@ impl Storage {
         let connection =
             migrate_database(&database, &stage.path().join(BACKUP_FILE), &key, MIGRATIONS)?;
         let repaired = Self {
+            timeline_cache: Default::default(),
+            snapshot_files_settled: Default::default(),
             cipher_version: cipher_version(&connection)?,
             connection: connection.into(),
             data_directory: stage.path().into(),
@@ -216,15 +217,35 @@ impl Storage {
                 }
                 let directory = relocation::validate_fixed_directory(&source.join("snapshots"))?;
                 let hash: [u8; 32] = hash.try_into().map_err(|_| invalid("快照哈希无效"))?;
-                let mut encrypted = vec![];
-                File::open(directory.join(name))?
-                    .take(4 * 1024 * 1024 + 1024)
-                    .read_to_end(&mut encrypted)?;
-                let plain = Zeroizing::new(milestone3::decrypt_snapshot(
-                    &original_key,
-                    &encrypted,
-                    &hash,
-                )?);
+                // Each day keeps its own copy of a shared image, and any authenticated
+                // copy restores it. The blob-wide read stays as the final attempt.
+                let days = repaired.connection.prepare("SELECT MIN(s.slot_id) FROM snapshot_slots s JOIN snapshot_slot_days d USING(slot_id) WHERE s.blob_id=? GROUP BY d.local_day ORDER BY d.local_day")?
+                    .query_map([id], |r| r.get::<_, i64>(0))?
+                    .collect::<rusqlite::Result<Vec<_>>>()?;
+                let mut plain = Err(invalid("快照记录无效"));
+                for slot in days.into_iter().map(Some).chain([None]) {
+                    plain = snapshot_container::read_payload(
+                        &repaired.connection,
+                        &directory,
+                        &source.join(KEY_FILE),
+                        id,
+                        slot,
+                    );
+                    if plain.is_ok() {
+                        break;
+                    }
+                }
+                // A stopped format upgrade may still keep the image in its old file.
+                if plain.is_err() {
+                    plain = snapshot_container::read_legacy_payload(
+                        &repaired.connection,
+                        &directory,
+                        &source.join(KEY_FILE),
+                        id,
+                    )
+                    .or(plain);
+                }
+                let plain = plain?;
                 if plain.len() as u64 != size
                     || milestone3::snapshot_pixel_hash(&plain, width, height)? != hash
                 {
@@ -247,6 +268,9 @@ impl Storage {
                 report.unavailable_images += 1;
             }
         }
+        repaired.connection.execute_batch("DELETE FROM snapshot_container_records; DELETE FROM snapshot_containers; DELETE FROM snapshot_slot_days WHERE slot_id IN(SELECT slot_id FROM snapshot_slots WHERE result<>'success');")?;
+        repaired.reconcile_snapshot_files()?;
+        repaired.verify_snapshot_containers()?;
         portable::sanitize(&repaired.connection, "main", true)?;
         let now = unix_time_ms();
         let earliest: Option<i64> = repaired.connection.query_row(
@@ -332,6 +356,38 @@ mod tests {
                 .unwrap(),
             2
         );
+    }
+    #[test]
+    fn recovery_restores_an_image_from_a_later_day_when_the_first_copy_is_damaged() {
+        use snapshot_container::tests::{request, store_on_day};
+        let (source, s) = ai::tests::fixture();
+        let a = request(1_700_000_000_000, 10);
+        let first = store_on_day(&s, &a, "2023-11-14");
+        let mut later = a.clone();
+        later.slot_started_utc_ms += 86_400_000;
+        later.captured_at_utc_ms += 86_400_000;
+        let second = store_on_day(&s, &later, "2023-11-15");
+        let name: String = s
+            .connection
+            .query_row(
+                "SELECT file_name FROM snapshot_containers WHERE local_day='2023-11-14'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        s.checkpoint().unwrap();
+        drop(s);
+        let damaged = source.path().join("snapshots").join(name);
+        let mut bytes = fs::read(&damaged).unwrap();
+        *bytes.last_mut().unwrap() ^= 1;
+        fs::write(&damaged, bytes).unwrap();
+        let parent = tempfile::tempdir().unwrap();
+        let (repaired, report) =
+            Storage::recover_to_new_directory(source.path(), &parent.path().join("recovered"))
+                .unwrap();
+        assert_eq!(report.unavailable_images, 0);
+        assert_eq!(repaired.load_snapshot_image(first).unwrap().webp, a.webp);
+        assert_eq!(repaired.load_snapshot_image(second).unwrap().webp, a.webp);
     }
     #[test]
     fn unreadable_header_does_not_replace_original_or_publish_target() {

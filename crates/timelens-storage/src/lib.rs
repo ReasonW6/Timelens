@@ -6,9 +6,13 @@ mod milestone3;
 mod portable;
 mod recovery;
 mod relocation;
+mod snapshot_container;
+mod timeline_cache;
+mod timeline_series;
 pub use portable::{BackupInfo, BackupOptions, ExportFormat, PreparedRestore};
 pub use recovery::RecoveryReport;
 pub use relocation::RelocationStep;
+pub use timeline_series::TimelineSeries;
 
 pub use ai::{
     AiJob, AiJobKind, AiJobSpec, AiMessage, AiRetentionOutcome, AiSettings, AiVersion,
@@ -17,8 +21,8 @@ pub use ai::{
 
 pub use milestone3::{
     LocalReport, LocalReportApplication, LocalReportGap, LocalReportSnapshotReason,
-    SnapshotDisplay, SnapshotImage, SnapshotMissingReason, SnapshotPolicy, SnapshotSlot,
-    SnapshotStoreRequest, SnapshotTrigger,
+    SnapshotDeletion, SnapshotDisplay, SnapshotImage, SnapshotMissingReason, SnapshotPolicy,
+    SnapshotSlot, SnapshotStoreRequest, SnapshotTrigger,
 };
 
 use std::{
@@ -61,7 +65,7 @@ const BACKUP_FILE: &str = "timelens.sqlite3.migration-backup";
 const KEY_MAGIC: &[u8; 8] = b"TLKEY\0\0\x01";
 const KEY_BYTES: usize = 32;
 const DPAPI_ENTROPY: &[u8] = b"Timelens local data key v1";
-const LATEST_SCHEMA_VERSION: i64 = 12;
+const LATEST_SCHEMA_VERSION: i64 = 13;
 
 #[derive(Debug, thiserror::Error)]
 pub enum StorageError {
@@ -85,6 +89,9 @@ pub enum StorageError {
     MigrationRolledBack(String),
     #[error("collector event batch is invalid: {0}")]
     InvalidBatch(String),
+    /// The deletion is committed; a later cleanup pass removes its old encrypted data.
+    #[error("snapshot deleted, but removing its old encrypted data is postponed: {0}")]
+    SnapshotCleanupPending(String),
 }
 
 pub type Result<T> = std::result::Result<T, StorageError>;
@@ -149,6 +156,9 @@ impl std::ops::DerefMut for GuardedConnection {
 }
 
 pub struct Storage {
+    timeline_cache: std::cell::RefCell<timeline_cache::TimelineCache>,
+    /// No image key or file is left over from a deletion; retention skips cleanup.
+    snapshot_files_settled: std::cell::Cell<bool>,
     connection: GuardedConnection,
     data_directory: PathBuf,
     control_directory: PathBuf,
@@ -182,8 +192,15 @@ pub struct TimelineApplication {
     pub left_click_count: u64,
     pub middle_click_count: u64,
     pub right_click_count: u64,
-    pub windows: Vec<TimelineWindow>,
-    pub segments: Vec<TimelineSegment>,
+    pub windows: TimelineSeries<TimelineWindow>,
+    pub segments: TimelineSeries<TimelineSegment>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ApplicationIconSource {
+    pub identity: String,
+    pub executable_path: Option<String>,
+    pub app_user_model_id: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -249,6 +266,18 @@ pub enum WindowBatchOutcome {
     Duplicate,
 }
 
+// The timeline reads this on every refresh, so each AUMID application costs one
+// index lookup instead of a pass over all metadata history. The range is the
+// `aumid:` prefix; LIKE would ignore case and could not use the primary key.
+const ICON_SOURCES_QUERY: &str =
+    "SELECT r.application_identity, r.executable_path, r.app_user_model_id
+     FROM applications a
+     JOIN application_metadata_revisions r ON r.revision_id = (
+         SELECT revision_id FROM application_metadata_revisions
+         WHERE application_identity = a.identity
+         ORDER BY revision_id DESC LIMIT 1)
+     WHERE a.identity >= 'aumid:' AND a.identity < 'aumid;'";
+
 impl Storage {
     pub fn open(data_directory: impl AsRef<Path>) -> Result<Self> {
         let data_directory = data_directory.as_ref();
@@ -270,6 +299,8 @@ impl Storage {
         let cipher_version = cipher_version(&connection)?;
 
         let storage = Self {
+            timeline_cache: Default::default(),
+            snapshot_files_settled: Default::default(),
             connection: connection.into(),
             data_directory: data_directory.to_owned(),
             control_directory: data_directory.to_owned(),
@@ -277,7 +308,11 @@ impl Storage {
             database_path,
             cipher_version,
         };
-        storage.reconcile_snapshot_files()?;
+        // A damaged image container must not take the whole dataset offline. Its
+        // originals stay untouched; reads of that day fail and the next open retries.
+        if let Err(error) = storage.reconcile_snapshot_files() {
+            eprintln!("snapshot storage reconciliation failed; originals retained: {error}");
+        }
         storage.sync_collection_policy()?;
         storage.initialize_ai()?;
         Ok(storage)
@@ -306,6 +341,7 @@ impl Storage {
                 "runtime health component is outside the fixed allowlist".to_owned(),
             ));
         }
+        let before = self.connection.total_changes();
         self.connection.execute(
             "INSERT INTO runtime_health (
                 component, last_healthy_utc_ms, protocol_version, peer_process_id
@@ -321,10 +357,14 @@ impl Storage {
                 peer_process_id.map(i64::from)
             ],
         )?;
+        self.timeline_cache
+            .borrow_mut()
+            .unchanged_write(before, self.connection.total_changes());
         Ok(())
     }
 
     pub fn ingest_event_batch(&self, batch: &EventBatch) -> Result<WindowBatchOutcome> {
+        let before_changes = self.connection.total_changes();
         let last_sequence = batch
             .last_sequence()
             .map_err(|error| StorageError::InvalidBatch(error.to_string()))?;
@@ -458,6 +498,12 @@ impl Storage {
             ],
         )?;
         transaction.commit()?;
+        self.timeline_cache.borrow_mut().ingested(
+            before_changes,
+            self.connection.total_changes(),
+            batch,
+            prior_run.is_none(),
+        );
         Ok(WindowBatchOutcome::Stored)
     }
 
@@ -475,6 +521,15 @@ impl Storage {
         range_started_utc_ms: i64,
         range_ended_utc_ms: i64,
     ) -> Result<TimelineSnapshot> {
+        self.timeline_snapshot_selected(range_started_utc_ms, range_ended_utc_ms, None)
+    }
+
+    fn timeline_snapshot_selected(
+        &self,
+        range_started_utc_ms: i64,
+        range_ended_utc_ms: i64,
+        source_filter: Option<&str>,
+    ) -> Result<TimelineSnapshot> {
         if range_started_utc_ms <= 0 || range_ended_utc_ms <= range_started_utc_ms {
             return Err(StorageError::Integrity(
                 "timeline range is invalid".to_owned(),
@@ -488,17 +543,20 @@ impl Storage {
                  FROM window_instances
                  WHERE opened_utc_ms < ?2
                    AND COALESCE(closed_utc_ms, ?2) > ?1
+                   AND (?3 IS NULL OR application_identity IN (SELECT value FROM json_each(?3)))
                  ORDER BY opened_utc_ms, instance_id",
             )?;
-            let rows =
-                statement.query_map(params![range_started_utc_ms, range_ended_utc_ms], |row| {
+            let rows = statement.query_map(
+                params![range_started_utc_ms, range_ended_utc_ms, source_filter],
+                |row| {
                     Ok((
                         row.get::<_, i64>(0)?,
                         row.get::<_, String>(1)?,
                         row.get::<_, i64>(2)?,
                         row.get::<_, i64>(3)?,
                     ))
-                })?;
+                },
+            )?;
             for row in rows {
                 let (instance_id, identity, opened, ended) = row?;
                 let interval =
@@ -524,10 +582,12 @@ impl Storage {
                  JOIN window_instances AS instances
                    ON instances.instance_id = states.window_instance_id
                  WHERE states.started_utc_ms < ?2
-                   AND COALESCE(states.ended_utc_ms, ?2) > ?1",
+                   AND COALESCE(states.ended_utc_ms, ?2) > ?1
+                   AND (?3 IS NULL OR instances.application_identity IN (SELECT value FROM json_each(?3)))",
             )?;
-            let rows =
-                statement.query_map(params![range_started_utc_ms, range_ended_utc_ms], |row| {
+            let rows = statement.query_map(
+                params![range_started_utc_ms, range_ended_utc_ms, source_filter],
+                |row| {
                     Ok((
                         row.get::<_, i64>(0)?,
                         row.get::<_, String>(1)?,
@@ -536,7 +596,8 @@ impl Storage {
                         row.get::<_, bool>(4)?,
                         row.get::<_, bool>(5)?,
                     ))
-                })?;
+                },
+            )?;
             for row in rows {
                 let (instance_id, identity, started, ended, displayed, focused) = row?;
                 let interval =
@@ -571,16 +632,19 @@ impl Storage {
                         COALESCE(ended_utc_ms, ?2)
                  FROM tray_background_intervals
                  WHERE started_utc_ms < ?2
-                   AND COALESCE(ended_utc_ms, ?2) > ?1",
+                   AND COALESCE(ended_utc_ms, ?2) > ?1
+                   AND (?3 IS NULL OR application_identity IN (SELECT value FROM json_each(?3)))",
             )?;
-            let rows =
-                statement.query_map(params![range_started_utc_ms, range_ended_utc_ms], |row| {
+            let rows = statement.query_map(
+                params![range_started_utc_ms, range_ended_utc_ms, source_filter],
+                |row| {
                     Ok((
                         row.get::<_, String>(0)?,
                         row.get::<_, i64>(1)?,
                         row.get::<_, i64>(2)?,
                     ))
-                })?;
+                },
+            )?;
             for row in rows {
                 let (identity, started, ended) = row?;
                 let interval =
@@ -604,10 +668,12 @@ impl Storage {
                  FROM input_minute_buckets
                  WHERE minute_started_utc_ms < ?2
                    AND minute_started_utc_ms + 60000 > ?1
+                   AND (?3 IS NULL OR focused_application_identity IN (SELECT value FROM json_each(?3)))
                  GROUP BY focused_application_identity",
             )?;
-            let rows =
-                statement.query_map(params![range_started_utc_ms, range_ended_utc_ms], |row| {
+            let rows = statement.query_map(
+                params![range_started_utc_ms, range_ended_utc_ms, source_filter],
+                |row| {
                     Ok((
                         row.get::<_, Option<String>>(0)?,
                         row.get::<_, i64>(1)?,
@@ -615,7 +681,8 @@ impl Storage {
                         row.get::<_, i64>(3)?,
                         row.get::<_, i64>(4)?,
                     ))
-                })?;
+                },
+            )?;
             for row in rows {
                 let (Some(identity), keyboard, left, middle, right) = row? else {
                     continue;
@@ -669,8 +736,8 @@ impl Storage {
                 left_click_count: working.left_click_count,
                 middle_click_count: working.middle_click_count,
                 right_click_count: working.right_click_count,
-                windows,
-                segments: working.segments,
+                windows: windows.into(),
+                segments: working.segments.into(),
             });
         }
         timeline_applications.sort_by(|left, right| {
@@ -770,6 +837,21 @@ impl Storage {
             .to_owned())
     }
 
+    /// Latest recorded sources for AUMIDs that may not be registered in AppsFolder.
+    pub fn application_icon_sources(&self) -> Result<Vec<ApplicationIconSource>> {
+        let mut statement = self.connection.prepare(ICON_SOURCES_QUERY)?;
+        statement
+            .query_map([], |row| {
+                Ok(ApplicationIconSource {
+                    identity: row.get(0)?,
+                    executable_path: row.get(1)?,
+                    app_user_model_id: row.get(2)?,
+                })
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(Into::into)
+    }
+
     pub fn retention_policy(&self) -> Result<RetentionPolicy> {
         self.connection
             .query_row(
@@ -806,6 +888,7 @@ impl Storage {
     }
 
     pub fn apply_retention(&self, now_utc_ms: i64) -> Result<RetentionReport> {
+        let before_changes = self.connection.total_changes();
         let policy = self.retention_policy()?;
         // Fold the WAL back first so the released-bytes figure does not count log
         // pages that any checkpoint would reclaim anyway. This only sharpens that
@@ -816,6 +899,8 @@ impl Storage {
         let activity_cutoff = policy
             .days
             .map(|days| now_utc_ms.saturating_sub(i64::from(days) * 86_400_000));
+        // Every timeline record removed below ends before the latest cutoff used.
+        let mut pruned_before = activity_cutoff;
         let milestone3 = self.apply_milestone3_retention(now_utc_ms, activity_cutoff)?;
         outcome.report.snapshot_items = milestone3.snapshot_items;
         outcome.report.report_items = milestone3.report_items;
@@ -840,6 +925,7 @@ impl Storage {
                 break;
             };
             let cutoff = oldest.saturating_add(86_400_000).min(now_utc_ms);
+            pruned_before = pruned_before.max(Some(cutoff));
             let removed = self.cleanup_before(cutoff, "retention_space")?;
             if removed.report.activity_items == 0 && removed.report.input_items == 0 {
                 break;
@@ -864,6 +950,11 @@ impl Storage {
                 )?;
             }
         }
+        self.timeline_cache.borrow_mut().pruned(
+            before_changes,
+            self.connection.total_changes(),
+            pruned_before,
+        );
         Ok(outcome.report)
     }
 
@@ -1030,6 +1121,9 @@ impl Storage {
     }
 
     pub fn clear_all(&self) -> Result<ClearReport> {
+        self.timeline_cache
+            .borrow_mut()
+            .clear(self.connection.total_changes());
         self.ensure_writable()?;
         let old_key = load_key(&self.key_path)?;
         let new_key = random_key()?;
@@ -1047,7 +1141,10 @@ impl Storage {
             "local_report_gaps",
             "local_report_applications",
             "local_reports",
+            "snapshot_slot_days",
             "snapshot_slots",
+            "snapshot_container_records",
+            "snapshot_containers",
             "snapshot_blobs",
             "window_state_intervals",
             "window_instances",
@@ -1739,6 +1836,10 @@ const MIGRATIONS: &[Migration] = &[
     Migration {
         version: 12,
         sql: include_str!("recovery-schema.sql"),
+    },
+    Migration {
+        version: 13,
+        sql: include_str!("snapshot-container-schema.sql"),
     },
 ];
 
@@ -2871,6 +2972,66 @@ mod tests {
             first_sequence,
             events,
         }
+    }
+
+    #[test]
+    fn icon_sources_keep_latest_executable_and_original_app_id_case() {
+        let directory = tempfile::tempdir().unwrap();
+        let storage = Storage::open(directory.path()).unwrap();
+        let identity = "aumid:example.desktop.app";
+        let app_id = "Example.Desktop.App";
+        let base = 1_700_000_000_000;
+        let app_event = |kind, offset, executable: &str| {
+            let mut event = window_event(kind, base + offset, offset as u64 + 10, true, true);
+            let Some(collector_event::Body::WindowTransition(transition)) = &mut event.body else {
+                unreachable!()
+            };
+            let window = transition.window.as_mut().unwrap();
+            window.window_id += 1;
+            window.process_id += 1;
+            window.application_identity = identity.into();
+            window.identity_source = IdentitySource::ProcessAppUserModelId as i32;
+            window.app_user_model_id = Some(app_id.into());
+            window.executable_path = Some(executable.into());
+            event
+        };
+        storage
+            .ingest_event_batch(&event_batch(
+                1,
+                1,
+                vec![
+                    window_event(WindowTransitionKind::Opened, base, 10, true, true),
+                    app_event(WindowTransitionKind::Opened, 1, r"C:\Apps\v1\app.exe"),
+                    app_event(WindowTransitionKind::Updated, 2, r"C:\Apps\v2\app.exe"),
+                ],
+            ))
+            .unwrap();
+        assert_eq!(
+            storage.application_icon_sources().unwrap(),
+            vec![ApplicationIconSource {
+                identity: identity.into(),
+                executable_path: Some(r"C:\Apps\v2\app.exe".into()),
+                app_user_model_id: Some(app_id.into()),
+            }]
+        );
+    }
+
+    #[test]
+    fn icon_sources_are_read_through_indexes_without_scanning_history() {
+        let directory = tempfile::tempdir().unwrap();
+        let storage = Storage::open(directory.path()).unwrap();
+        let plan = storage
+            .connection
+            .prepare(&format!("EXPLAIN QUERY PLAN {ICON_SOURCES_QUERY}"))
+            .unwrap()
+            .query_map([], |row| row.get::<_, String>(3))
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .unwrap();
+        assert!(
+            plan.iter().all(|step| !step.starts_with("SCAN")),
+            "{plan:?}"
+        );
     }
 
     #[test]

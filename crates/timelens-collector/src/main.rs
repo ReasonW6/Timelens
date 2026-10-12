@@ -3,6 +3,8 @@
 
 mod collection;
 mod data_directory;
+mod event_wait;
+mod input_identity;
 mod spool;
 
 use std::{
@@ -136,7 +138,7 @@ fn collect_window_events(pipe_name: &str, data_directory: PathBuf) -> Result<()>
     let mut filter = collection::Filter::new(&data_directory, now, mono);
     let mut input = InputAggregator::default();
     let mut identities = window_identities(&raw);
-    let mut last_reconcile = Instant::now() - RECONCILE_INTERVAL;
+    let mut last_reconcile = timelens_observer::PollInterval::new(RECONCILE_INTERVAL);
     publish_collection(
         &spool,
         &delivery_wake,
@@ -287,23 +289,29 @@ fn collect_window_events(pipe_name: &str, data_directory: PathBuf) -> Result<()>
                 mono,
             )?;
             fs::remove_file(&reset_paused_path)?;
-            last_reconcile = Instant::now();
+            last_reconcile.mark(Instant::now());
             continue;
         }
         let now = unix_time_ms();
         let until_minute =
             Duration::from_millis((MINUTE_MS - now.rem_euclid(MINUTE_MS)).max(1) as u64);
-        let changed = monitor.wait_for_change(
-            until_minute
-                .min(RECONCILE_INTERVAL.saturating_sub(last_reconcile.elapsed()))
-                .min(Duration::from_secs(1)),
-        );
+        let waiting_at = Instant::now();
+        let deadline = waiting_at
+            + until_minute
+                .min(last_reconcile.remaining(waiting_at))
+                .min(Duration::from_secs(1));
+        let changes = event_wait::until(deadline, |remaining| monitor.wait_for_events(remaining));
         filter.refresh(&data_directory);
-        if changed || last_reconcile.elapsed() >= RECONCILE_INTERVAL {
+        if changes.reconcile || last_reconcile.is_due(Instant::now()) {
             raw = observer.reconcile_transitions()?.current;
             raw_tray = observer.current_tray_presence();
-            identities.extend(window_identities(&raw));
-            last_reconcile = Instant::now();
+            identities.reconcile(&raw);
+            last_reconcile.mark(Instant::now());
+        } else if !changes.events.is_empty() {
+            let result = observer.apply_window_events(changes)?;
+            identities.apply_transitions(&result.transitions);
+            raw = result.current;
+            raw_tray = observer.current_tray_presence();
         }
         let (observed_now, mono) = observer.timestamp();
         let now = match continue_run_clock(last_now, observed_now) {
@@ -397,6 +405,7 @@ fn collect_window_events(pipe_name: &str, data_directory: PathBuf) -> Result<()>
             &filter.policy,
             filter.blocked,
         )?;
+        identities.settled();
         if input.take_new_overflow() {
             let gap = CollectorEvent {
                 observed_at_utc_ms: now,
@@ -443,20 +452,19 @@ fn publish_collection(
     run: &mut Vec<u8>,
     sequence: &mut u64,
     filter: &mut collection::Filter,
-    raw: &[timelens_observer::WindowObservation],
-    tray: &[TrayPresence],
+    raw: &Arc<Vec<timelens_observer::WindowObservation>>,
+    tray: &Arc<Vec<TrayPresence>>,
     now: i64,
     mono: u64,
 ) -> Result<()> {
-    let previous_tray = filter.tray.clone();
-    let (windows, tray_events, mut events) = filter.reconcile(
+    let (windows, tray_events, mut events, tray_changed) = filter.reconcile(
         raw,
         tray,
         now,
         mono,
         local_time_facts(now)?.timezone_offset_minutes,
     );
-    if previous_tray != filter.tray {
+    if tray_changed {
         save_tray_state(spool, &filter.tray)?;
     }
     events.extend(windows.iter().map(protocol_event));
@@ -916,7 +924,7 @@ impl LocalTimeFacts {
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 struct InputBucketKey {
     local_time: LocalTimeFacts,
-    focused_application_identity: Option<String>,
+    focused_application_identity: Option<Arc<str>>,
     anonymous_only: bool,
 }
 
@@ -941,7 +949,7 @@ impl InputAggregator {
     fn add(&mut self, drain: InputDrain, identities: &HashMap<u64, String>) -> Result<()> {
         self.add_private(
             drain,
-            identities,
+            &input_identity::InputIdentities::for_test(identities),
             &timelens_ipc::privacy::Policy::default(),
             false,
         )
@@ -949,7 +957,7 @@ impl InputAggregator {
     fn add_private(
         &mut self,
         drain: InputDrain,
-        identities: &HashMap<u64, String>,
+        identities: &input_identity::InputIdentities,
         policy: &timelens_ipc::privacy::Policy,
         blocked: bool,
     ) -> Result<()> {
@@ -960,6 +968,7 @@ impl InputAggregator {
             self.overflowed = true;
         }
         let mut local_times = HashMap::new();
+        let mut resolutions = HashMap::new();
         for sample in drain.samples {
             let local_time =
                 if let Some(local_time) = local_times.get(&sample.minute_started_at_utc_ms) {
@@ -969,24 +978,26 @@ impl InputAggregator {
                     local_times.insert(sample.minute_started_at_utc_ms, local_time);
                     local_time
                 };
+            let resolved = resolutions
+                .entry((sample.window_id, sample.window_process_id))
+                .or_insert_with(|| identities.resolve(&sample, policy));
             let key = InputBucketKey {
                 local_time,
-                focused_application_identity: identities
-                    .get(&sample.window_id)
-                    .filter(|id| !policy.activity.contains(*id) && !policy.input.contains(*id))
-                    .cloned(),
-                anonymous_only: identities
-                    .get(&sample.window_id)
-                    .is_some_and(|id| policy.input.contains(id)),
+                focused_application_identity: resolved.identity.cloned(),
+                anonymous_only: resolved.anonymous_only,
             };
-            if !self.buckets.contains_key(&key)
-                && self.buckets.len() >= MAX_INPUT_BUCKETS_PER_MINUTE
-            {
-                self.overflowed = true;
-                continue;
-            }
             let anonymous_only = key.anonymous_only;
-            let counts = self.buckets.entry(key).or_default();
+            let full = self.buckets.len() >= MAX_INPUT_BUCKETS_PER_MINUTE;
+            let counts = match self.buckets.entry(key) {
+                std::collections::btree_map::Entry::Occupied(entry) => entry.into_mut(),
+                std::collections::btree_map::Entry::Vacant(_) if full => {
+                    self.overflowed = true;
+                    continue;
+                }
+                std::collections::btree_map::Entry::Vacant(entry) => {
+                    entry.insert(InputBucketCounts::default())
+                }
+            };
             match sample.kind {
                 InputSampleKind::Keyboard {
                     scan_code,
@@ -1096,7 +1107,9 @@ fn input_minute(key: InputBucketKey, counts: InputBucketCounts) -> Option<InputM
         },
         timezone_offset_minutes: key.local_time.timezone_offset_minutes,
         local_date: key.local_time.local_date(),
-        focused_application_identity: key.focused_application_identity,
+        focused_application_identity: key
+            .focused_application_identity
+            .map(|identity| identity.to_string()),
         keyboard_count: u32::try_from(counts.keyboard_count).ok()?,
         left_click_count: u32::try_from(counts.left_click_count).ok()?,
         middle_click_count: u32::try_from(counts.middle_click_count).ok()?,
@@ -1115,11 +1128,10 @@ fn input_minute(key: InputBucketKey, counts: InputBucketCounts) -> Option<InputM
     })
 }
 
-fn window_identities(windows: &[timelens_observer::WindowObservation]) -> HashMap<u64, String> {
-    windows
-        .iter()
-        .map(|window| (window.window_id, window.application_identity.clone()))
-        .collect()
+fn window_identities(
+    windows: &[timelens_observer::WindowObservation],
+) -> input_identity::InputIdentities {
+    input_identity::InputIdentities::from_windows(windows)
 }
 
 fn local_time_facts(utc_ms: i64) -> Result<LocalTimeFacts> {
@@ -1409,6 +1421,7 @@ mod tests {
                         InputSample {
                             minute_started_at_utc_ms: minute.minute_started_at_utc_ms,
                             window_id: 42,
+                            window_process_id: 0,
                             kind: InputSampleKind::Keyboard {
                                 scan_code: 0x1e,
                                 keyboard_layout: 0x0804_0804,
@@ -1418,12 +1431,14 @@ mod tests {
                         InputSample {
                             minute_started_at_utc_ms: minute.minute_started_at_utc_ms,
                             window_id: 42,
+                            window_process_id: 0,
                             kind: InputSampleKind::Mouse(MouseButton::Left),
                             count: 2,
                         },
                         InputSample {
                             minute_started_at_utc_ms: minute.minute_started_at_utc_ms,
                             window_id: 42,
+                            window_process_id: 0,
                             kind: InputSampleKind::Mouse(MouseButton::Middle),
                             count: 1,
                         },
@@ -1491,6 +1506,7 @@ mod tests {
                     samples: vec![InputSample {
                         minute_started_at_utc_ms: minute.minute_started_at_utc_ms,
                         window_id: 42,
+                        window_process_id: 0,
                         kind: InputSampleKind::Mouse(MouseButton::Left),
                         count: 1,
                     }],
@@ -1559,5 +1575,158 @@ mod tests {
         assert_eq!(civil_from_days(0), (1970, 1, 1));
         assert_eq!(civil_from_days(19_782), (2024, 2, 29));
         assert_eq!(civil_from_days(-1), (1969, 12, 31));
+    }
+
+    #[test]
+    fn batched_resolution_shares_identity_and_rechecks_changed_privacy() {
+        let mut ids = HashMap::new();
+        ids.insert(10, "path:c:\\fixture\\app.exe".to_owned());
+        let identities = input_identity::InputIdentities::for_test(&ids);
+        let sample = timelens_observer::InputSample {
+            minute_started_at_utc_ms: 60_000,
+            window_id: 10,
+            window_process_id: 0,
+            kind: InputSampleKind::Keyboard {
+                scan_code: 0x1e,
+                keyboard_layout: 0x409,
+            },
+            count: 3,
+        };
+        let mut input = InputAggregator::default();
+        let mut policy = timelens_ipc::privacy::Policy::default();
+        let shared = Arc::clone(identities.resolve(&sample, &policy).identity.unwrap());
+        input
+            .add_private(
+                InputDrain {
+                    samples: vec![sample; 256],
+                    overflowed: false,
+                },
+                &identities,
+                &policy,
+                false,
+            )
+            .unwrap();
+        let key = input.buckets.keys().next().unwrap();
+        assert!(Arc::ptr_eq(
+            &shared,
+            key.focused_application_identity.as_ref().unwrap()
+        ));
+        policy.input.insert(ids[&10].clone());
+        input
+            .add_private(
+                InputDrain {
+                    samples: vec![sample],
+                    overflowed: false,
+                },
+                &identities,
+                &policy,
+                false,
+            )
+            .unwrap();
+        let events = input.take_completed(120_000, 1, local_time_facts(120_000).unwrap());
+        let minutes = events
+            .iter()
+            .filter_map(|event| match &event.body {
+                Some(collector_event::Body::InputMinute(minute)) => Some(minute),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            minutes
+                .iter()
+                .map(|minute| minute.keyboard_count)
+                .sum::<u32>(),
+            771
+        );
+        let anonymous = minutes.iter().find(|minute| minute.anonymous_only).unwrap();
+        assert_eq!(anonymous.keyboard_count, 3);
+        assert!(anonymous.key_counts.is_empty());
+        assert!(anonymous.focused_application_identity.is_none());
+        let normal = minutes
+            .iter()
+            .find(|minute| !minute.anonymous_only)
+            .unwrap();
+        assert_eq!(normal.keyboard_count, 768);
+        assert_eq!(normal.key_counts[0].count, 768);
+    }
+
+    #[test]
+    fn input_buckets_keep_closed_window_samples_after_identity_cleanup() {
+        let old = timelens_observer::WindowObservation {
+            window_id: 10,
+            process_id: 1,
+            process_started_at_100ns: 1,
+            identity_source: ObserverIdentitySource::ExecutablePath,
+            application_identity: "old".into(),
+            executable_path: None,
+            app_user_model_id: None,
+            package_identity: None,
+            displayed: true,
+            focused: true,
+            on_current_virtual_desktop: Some(true),
+            virtual_desktop_id: None,
+        };
+        let new = timelens_observer::WindowObservation {
+            process_id: 2,
+            process_started_at_100ns: 2,
+            application_identity: "new".into(),
+            ..old.clone()
+        };
+        let mut identities =
+            input_identity::InputIdentities::from_windows(std::slice::from_ref(&old));
+        identities.apply_transitions(&[
+            ObserverWindowTransition {
+                kind: WindowTransitionKind::Closed,
+                observed_at_utc_ms: 60_000,
+                monotonic_ms: 1,
+                window: old,
+            },
+            ObserverWindowTransition {
+                kind: WindowTransitionKind::Opened,
+                observed_at_utc_ms: 60_000,
+                monotonic_ms: 1,
+                window: new,
+            },
+        ]);
+        let sample = timelens_observer::InputSample {
+            minute_started_at_utc_ms: 60_000,
+            window_id: 10,
+            window_process_id: 1,
+            kind: InputSampleKind::Mouse(MouseButton::Left),
+            count: 3,
+        };
+        let mut input = InputAggregator::default();
+        input
+            .add_private(
+                InputDrain {
+                    samples: vec![
+                        sample,
+                        timelens_observer::InputSample {
+                            window_process_id: 2,
+                            count: 5,
+                            ..sample
+                        },
+                    ],
+                    overflowed: false,
+                },
+                &identities,
+                &timelens_ipc::privacy::Policy::default(),
+                false,
+            )
+            .unwrap();
+        identities.settled();
+        assert_eq!(identities.identity(&sample), None);
+        let events = input.take_completed(120_000, 1, local_time_facts(120_000).unwrap());
+        let counts = events
+            .iter()
+            .filter_map(|event| match &event.body {
+                Some(collector_event::Body::InputMinute(minute)) => Some((
+                    minute.focused_application_identity.as_deref().unwrap(),
+                    minute.left_click_count,
+                )),
+                _ => None,
+            })
+            .collect::<BTreeMap<_, _>>();
+        assert_eq!(counts, BTreeMap::from([("new", 5), ("old", 3)]));
     }
 }

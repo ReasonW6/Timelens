@@ -51,6 +51,7 @@ pub enum InputSampleKind {
 pub struct InputSample {
     pub minute_started_at_utc_ms: i64,
     pub window_id: u64,
+    pub window_process_id: u32,
     pub kind: InputSampleKind,
     pub count: u32,
 }
@@ -163,6 +164,7 @@ fn unhook(hook: HHOOK) {
 struct SampleKey {
     minute_started_at_utc_ms: i64,
     window_id: u64,
+    window_process_id: u32,
     kind: InputSampleKind,
 }
 
@@ -170,6 +172,7 @@ struct SampleKey {
 struct SampleContext {
     minute_started_at_utc_ms: i64,
     window_id: u64,
+    window_process_id: u32,
 }
 
 #[derive(Default)]
@@ -204,6 +207,7 @@ impl HookState {
                 self.increment(SampleKey {
                     minute_started_at_utc_ms: context.minute_started_at_utc_ms,
                     window_id: context.window_id,
+                    window_process_id: context.window_process_id,
                     kind: InputSampleKind::Keyboard {
                         scan_code,
                         keyboard_layout,
@@ -220,6 +224,7 @@ impl HookState {
             self.increment(SampleKey {
                 minute_started_at_utc_ms: context.minute_started_at_utc_ms,
                 window_id: context.window_id,
+                window_process_id: context.window_process_id,
                 kind: InputSampleKind::Mouse(button),
             });
         }
@@ -247,6 +252,7 @@ impl HookState {
             .map(|(key, count)| InputSample {
                 minute_started_at_utc_ms: key.minute_started_at_utc_ms,
                 window_id: key.window_id,
+                window_process_id: key.window_process_id,
                 kind: key.kind,
                 count,
             })
@@ -281,7 +287,8 @@ unsafe extern "system" fn keyboard_hook_callback(
         if key_down || key_up {
             let event = unsafe { &*(lparam.0 as *const KBDLLHOOKSTRUCT) };
             let window = unsafe { GetForegroundWindow() };
-            let thread_id = unsafe { GetWindowThreadProcessId(window, None) };
+            let mut process_id = 0;
+            let thread_id = unsafe { GetWindowThreadProcessId(window, Some(&mut process_id)) };
             let layout = unsafe { GetKeyboardLayout(thread_id) };
             match hook_state().try_lock() {
                 Ok(mut state) => state.record_keyboard(
@@ -293,6 +300,7 @@ unsafe extern "system" fn keyboard_hook_callback(
                     SampleContext {
                         minute_started_at_utc_ms: unix_minute_started_at_ms(),
                         window_id: window_id(window),
+                        window_process_id: process_id,
                     },
                 ),
                 Err(_) => hook_contention().store(true, Ordering::Release),
@@ -317,6 +325,8 @@ unsafe extern "system" fn mouse_hook_callback(
         if let Some(button) = button {
             let event = unsafe { &*(lparam.0 as *const MSLLHOOKSTRUCT) };
             let window = unsafe { GetForegroundWindow() };
+            let mut process_id = 0;
+            unsafe { GetWindowThreadProcessId(window, Some(&mut process_id)) };
             match hook_state().try_lock() {
                 Ok(mut state) => state.record_mouse(
                     button,
@@ -324,6 +334,7 @@ unsafe extern "system" fn mouse_hook_callback(
                     SampleContext {
                         minute_started_at_utc_ms: unix_minute_started_at_ms(),
                         window_id: window_id(window),
+                        window_process_id: process_id,
                     },
                 ),
                 Err(_) => hook_contention().store(true, Ordering::Release),
@@ -364,6 +375,7 @@ mod tests {
         let context = SampleContext {
             minute_started_at_utc_ms: 60_000,
             window_id: 10,
+            window_process_id: 0,
         };
         state.record_keyboard(0x1e, false, false, true, 20, context);
         state.record_keyboard(0x1e, false, false, true, 20, context);
@@ -390,6 +402,7 @@ mod tests {
         let context = SampleContext {
             minute_started_at_utc_ms: 60_000,
             window_id: 10,
+            window_process_id: 0,
         };
         state.record_mouse(MouseButton::Left, false, context);
         state.record_mouse(MouseButton::Left, false, context);
@@ -409,10 +422,12 @@ mod tests {
         let first_minute = SampleContext {
             minute_started_at_utc_ms: 60_000,
             window_id: 10,
+            window_process_id: 0,
         };
         let second_minute = SampleContext {
             minute_started_at_utc_ms: 120_000,
             window_id: 10,
+            window_process_id: 0,
         };
         state.record_keyboard(0x1e, false, false, true, 20, first_minute);
         state.record_keyboard(0x1e, false, false, false, 20, first_minute);

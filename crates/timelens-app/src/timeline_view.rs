@@ -12,7 +12,7 @@ type Interval = (i64, i64);
 
 /// Focus runs at most this far apart belong to one stretch of use, and a row
 /// whose own application held focus for less than this joins a neighbouring row.
-const BRIEF_ABSENCE_MS: i64 = 3 * 60_000;
+pub(crate) const BRIEF_ABSENCE_MS: i64 = 3 * 60_000;
 /// Unrecorded gaps this close together read as one interruption.
 const UNRECORDED_JOIN_MS: i64 = 5 * 60_000;
 /// Interruptions missing less than this in total are restart seams, not news.
@@ -637,7 +637,7 @@ mod tests {
             left_click_count: 0,
             middle_click_count: 0,
             right_click_count: 0,
-            windows: Vec::new(),
+            windows: Vec::new().into(),
             segments: intervals
                 .iter()
                 .map(|&(started_utc_ms, ended_utc_ms)| TimelineSegment {
@@ -920,12 +920,12 @@ mod tests {
         let chat = application("chat", &[(at(20), at(21))]);
         // A reference document on the second screen, clicked just before the row.
         let mut reference = application("reference", &[]);
-        reference.segments = vec![segment(-5, -2, true, true), segment(-2, 40, true, false)];
+        reference.segments = vec![segment(-5, -2, true, true), segment(-2, 40, true, false)].into();
         // A window left open behind the editor all day, never touched.
         let mut forgotten = application("forgotten", &[]);
-        forgotten.segments = vec![segment(-300, 40, true, false)];
+        forgotten.segments = vec![segment(-300, 40, true, false)].into();
         let mut background = application("music", &[]);
-        background.segments = vec![segment(0, 40, false, false)];
+        background.segments = vec![segment(0, 40, false, false)].into();
         let snapshot = snapshot(
             at(-10),
             at(40),

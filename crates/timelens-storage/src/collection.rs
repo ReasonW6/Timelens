@@ -7,6 +7,22 @@ struct MergeRules {
     policy: Policy,
     snapshots: BTreeSet<String>,
 }
+/// Every identity merged with `identity`, itself included; the first is the group's root.
+pub(crate) fn merge_group(identity: &str, edges: &[(String, String)]) -> BTreeSet<String> {
+    let mut members = BTreeSet::from([identity.into()]);
+    loop {
+        let before = members.len();
+        for (a, b) in edges {
+            if members.contains(a) || members.contains(b) {
+                members.insert(a.clone());
+                members.insert(b.clone());
+            }
+        }
+        if before == members.len() {
+            return members;
+        }
+    }
+}
 impl Storage {
     pub fn collection_policy(&self) -> Result<Policy> {
         let raw: String = self.connection.query_row(
@@ -47,20 +63,7 @@ impl Storage {
         Ok(self.connection.prepare("SELECT left_identity,right_identity FROM application_merges ORDER BY left_identity,right_identity")?.query_map([],|r|Ok((r.get(0)?,r.get(1)?)))?.collect::<rusqlite::Result<_>>()?)
     }
     pub fn merged_members(&self, identity: &str) -> Result<BTreeSet<String>> {
-        let edges = self.merge_links()?;
-        let mut members = BTreeSet::from([identity.into()]);
-        loop {
-            let before = members.len();
-            for (a, b) in &edges {
-                if members.contains(a) || members.contains(b) {
-                    members.insert(a.clone());
-                    members.insert(b.clone());
-                }
-            }
-            if before == members.len() {
-                return Ok(members);
-            }
-        }
+        Ok(merge_group(identity, &self.merge_links()?))
     }
     pub fn set_application_merge(&self, left: &str, right: &str, merge: bool) -> Result<()> {
         if left == right || left.is_empty() || right.is_empty() {
@@ -195,6 +198,10 @@ impl Storage {
     pub fn permanent_input_totals(&self) -> Result<[u64; 4]> {
         Ok(self.connection.query_row("SELECT COALESCE(SUM(keyboard_count),0),COALESCE(SUM(left_click_count),0),COALESCE(SUM(middle_click_count),0),COALESCE(SUM(right_click_count),0) FROM anonymous_daily_input_ledger",[],|r|Ok([r.get::<_,i64>(0)?.max(0) as u64,r.get::<_,i64>(1)?.max(0) as u64,r.get::<_,i64>(2)?.max(0) as u64,r.get::<_,i64>(3)?.max(0) as u64]))?)
     }
+    /// Keyboard, left, middle and right click counts of one local date.
+    pub fn daily_input_totals(&self, date: &str) -> Result<[u64; 4]> {
+        Ok(self.connection.query_row("SELECT COALESCE(SUM(keyboard_count),0),COALESCE(SUM(left_click_count),0),COALESCE(SUM(middle_click_count),0),COALESCE(SUM(right_click_count),0) FROM anonymous_daily_input_ledger WHERE local_date=?",[date],|r|Ok([r.get::<_,i64>(0)?.max(0) as u64,r.get::<_,i64>(1)?.max(0) as u64,r.get::<_,i64>(2)?.max(0) as u64,r.get::<_,i64>(3)?.max(0) as u64]))?)
+    }
     pub fn physical_key_frequencies(&self, date: &str) -> Result<Vec<(u32, u64)>> {
         Ok(self.connection.prepare("SELECT scan_code,SUM(key_count) FROM daily_physical_key_frequency WHERE local_date=? GROUP BY scan_code ORDER BY SUM(key_count) DESC")?.query_map([date],|r|Ok((r.get::<_,u32>(0)?,r.get::<_,i64>(1)?.max(0) as u64)))?.collect::<rusqlite::Result<_>>()?)
     }
@@ -231,6 +238,9 @@ impl Storage {
         Ok((windows, reports.len() as u64, versions.len() as u64))
     }
     pub fn delete_application_history(&self, identity: &str) -> Result<u64> {
+        self.timeline_cache
+            .borrow_mut()
+            .clear(self.connection.total_changes());
         let members = self.merged_members(identity)?;
         let tx = Transaction::new_unchecked(&self.connection, TransactionBehavior::Immediate)?;
         let mut rows = 0;

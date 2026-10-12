@@ -7,16 +7,21 @@ mod app_icon;
 mod collection_ui;
 mod collector_task;
 mod data_ui;
+mod general_ui;
 mod history;
+mod icon_cache;
 mod local_config;
 #[cfg(debug_assertions)]
 mod qa;
 mod recovery;
 mod snapshot;
+mod snapshot_grid;
+mod startup;
 mod timeline_ui;
 mod timeline_view;
 mod tray;
 mod ui_model;
+mod ui_refresh;
 mod window_chrome;
 mod window_placement;
 
@@ -35,7 +40,7 @@ use std::{
 };
 
 use anyhow::{Context, Result, bail};
-use slint::{Image, ModelRc, Rgba8Pixel, SharedPixelBuffer, Timer, TimerMode, VecModel};
+use slint::{Image, Model, ModelRc, Timer, TimerMode, VecModel};
 use timelens_ipc::{
     BatchRejection, COLLECTOR_RESET_PAUSED_FILE, COLLECTOR_RESET_REQUEST_FILE, PROTOCOL_VERSION,
     SingleInstanceGuard, current_pipe_name, run_server_collector_message, run_server_probe,
@@ -51,7 +56,7 @@ const COLLECTOR_NAMES: &[&str] = &["timelens-collector.exe", "Timelens.Collector
 slint::slint! {
     export { AppWindow, AppRow, WindowRow, SegmentRow, SnapshotRow, ReportAppRow,
              HistoryItem, DayAnchor, Participant, ShareSlice, StackApp, AiState, DataState,
-             CollectionState, KeyCell }
+             CollectionState, KeyCell, ButtonHeat, AppIcons }
         from "ui/main-window.slint";
 }
 fn main() -> Result<()> {
@@ -192,8 +197,8 @@ fn main() -> Result<()> {
         return Ok(());
     }
     snapshot::spawn_scheduler(Arc::clone(&storage), data_directory.clone());
-    if let Some(task) = collector_task {
-        collector_task::spawn_watchdog(task);
+    if let Some(task) = &collector_task {
+        collector_task::spawn_watchdog(task.clone());
     }
     let ai_service = ai::spawn(Arc::clone(&storage));
     let maintenance_storage = Arc::clone(&storage);
@@ -217,6 +222,7 @@ fn main() -> Result<()> {
         pipe_name,
         ai_service,
         options.background,
+        collector_task,
     )
 }
 
@@ -235,6 +241,11 @@ struct ActionStatus {
 struct SnapshotUiState {
     slots: Vec<SnapshotSlot>,
     selected_slot_id: Option<i64>,
+    /// Images ticked to delete, and the one ticked last, where a Shift span starts.
+    checked: std::collections::BTreeSet<i64>,
+    anchor: Option<i64>,
+    /// The first and last snapshot the grid shows.
+    visible: Option<(usize, usize)>,
 }
 
 struct UiState {
@@ -256,9 +267,9 @@ struct AppsState {
     /// When the totals were last requested and whether they covered today only;
     /// `None` requests them again.
     requested: Option<(bool, Instant)>,
-    pending: Option<(bool, mpsc::Receiver<Result<TimelineSnapshot>>)>,
+    pending: Option<(bool, mpsc::Receiver<Result<Arc<TimelineSnapshot>>>)>,
     /// The totals on screen, kept to show another selection without a reload.
-    shown: Option<(bool, TimelineSnapshot)>,
+    shown: Option<(bool, Arc<TimelineSnapshot>)>,
     /// The history generation these totals belong to; a merge changes it.
     generation: u64,
 }
@@ -287,8 +298,10 @@ fn run_window(
     pipe_name: String,
     ai_service: ai::AiService,
     background: bool,
+    collector_task: Option<String>,
 ) -> Result<()> {
     let window = AppWindow::new()?;
+    window.global::<AppIcons>().on_resize(app_icon::for_display);
     // A debug-only viewport override keeps native visual QA reproducible.
     #[cfg(debug_assertions)]
     if let Ok(viewport) = std::env::var("TIMELENS_QA_VIEWPORT")
@@ -390,7 +403,7 @@ fn run_window(
             if let Some((today, snapshot)) = shown
                 && let Some(window) = weak.upgrade()
             {
-                render_apps(&window, &ui_state, snapshot, today);
+                render_apps(&window, &ui_state, &snapshot, today);
             }
         });
     }
@@ -470,6 +483,7 @@ fn run_window(
         Rc::clone(&snapshot_ui_state),
     );
     let _tray_timer = tray::install(&window, Arc::clone(&storage))?;
+    let _general_timer = general_ui::install(&window, collector_task);
     let _collection_timer =
         collection_ui::install(&window, Arc::clone(&storage), Rc::clone(&ui_state))?;
 
@@ -479,8 +493,8 @@ fn run_window(
     let timer_snapshot_state = Rc::clone(&snapshot_ui_state);
     let timer_busy = Arc::clone(&action_busy);
     let timer_history = Rc::clone(&history_state);
-    let last_refresh = Rc::new(RefCell::new(Instant::now()));
-    let timer_last_refresh = Rc::clone(&last_refresh);
+    let mut ui_refresh = ui_refresh::UiRefresh::new(Instant::now());
+    let mut pending_report = None;
     let timer = Timer::default();
     let mut recovery_shown = false;
     let mut data_generation = ai_ui::data_generation();
@@ -506,13 +520,17 @@ fn run_window(
             last_data_status = data_status;
         }
         window.set_action_busy(timer_busy.load(Ordering::Acquire));
-        request_apps(&window, &timer_storage, &timer_state);
-        if let Err(error) = poll_apps(&window, &timer_state) {
-            window.set_action_status(format!("读取应用统计失败：{error}").into());
+        let ui_active = window.window().is_visible() && !window.window().is_minimized();
+        if ui_active {
+            request_apps(&window, &timer_storage, &timer_state);
+            if let Err(error) = poll_apps(&window, &timer_state) {
+                window.set_action_status(format!("读取应用统计失败：{error}").into());
+            }
         }
         window.global::<AiState>().set_open(
-            window.get_page() == 4
-                || (window.get_settings_open() && window.get_settings_tab() == 4),
+            ui_active
+                && (window.get_page() == 4
+                    || (window.get_settings_open() && window.get_settings_tab() == 4)),
         );
         if !recovery_shown && timer_storage.try_lock().is_ok_and(|s| s.is_quarantined()) {
             recovery_shown = true;
@@ -557,6 +575,7 @@ fn run_window(
             window.global::<DataState>().set_clear_credentials(false);
             history::reset(&timer_history);
             timer_state.borrow_mut().apps = AppsState::default();
+            pending_report = None;
             refresh_requested = true;
         }
         while let Ok(status) = action_receiver.try_recv() {
@@ -570,9 +589,7 @@ fn run_window(
             if let Some(report) = status.report {
                 match report {
                     Ok(report_id) => {
-                        if let Err(error) = refresh_report(&window, &timer_storage, report_id) {
-                            window.set_report_summary(format!("报告读取失败：{error}").into());
-                        }
+                        pending_report = Some(report_id);
                     }
                     Err(error) => {
                         window.set_report_summary(format!("报告生成失败：{error}").into())
@@ -580,10 +597,12 @@ fn run_window(
                 }
             }
         }
-        if !timer_busy.load(Ordering::Acquire)
-            && (refresh_requested
-                || timer_last_refresh.borrow().elapsed() >= Duration::from_secs(2))
-        {
+        ui_refresh.request(refresh_requested || pending_report.is_some());
+        if ui_refresh.due(
+            ui_active,
+            timer_busy.load(Ordering::Acquire),
+            Instant::now(),
+        ) {
             match refresh_timeline(&window, &timer_storage, &timer_state).and_then(|refreshed| {
                 if refreshed && window.get_snapshot_open() {
                     refresh_snapshot_panel(
@@ -598,7 +617,14 @@ fn run_window(
                 }
                 Ok(refreshed)
             }) {
-                Ok(true) => *timer_last_refresh.borrow_mut() = Instant::now(),
+                Ok(true) => {
+                    if let Some(report_id) = pending_report.take()
+                        && let Err(error) = refresh_report(&window, &timer_storage, report_id)
+                    {
+                        window.set_report_summary(format!("报告读取失败：{error}").into());
+                    }
+                    ui_refresh.refreshed(Instant::now());
+                }
                 // Storage is busy with a long task; try again on a later tick.
                 Ok(false) => {}
                 Err(error) => window.set_action_status(format!("刷新失败：{error}").into()),
@@ -703,7 +729,7 @@ fn refresh_timeline(
             state.range_ended_utc_ms.min(unix_time_ms()),
         )
     };
-    let (snapshot, policy, paused) = {
+    let (snapshot, policy, paused, icon_sources) = {
         let Some(storage) = try_lock_storage(storage)? else {
             return Ok(false);
         };
@@ -711,8 +737,10 @@ fn refresh_timeline(
             storage.timeline_snapshot(range_started, range_ended)?,
             storage.retention_policy()?,
             storage.collection_policy()?.paused,
+            storage.application_icon_sources()?,
         )
     };
+    app_icon::register_sources(icon_sources);
     window.global::<CollectionState>().set_paused(paused);
     render_snapshot(window, ui_state, snapshot, policy);
     Ok(true)
@@ -730,8 +758,10 @@ fn request_apps(
     ui_state: &Rc<RefCell<UiState>>,
 ) {
     let today = window.get_apps_today();
-    let visible =
-        window.window().is_visible() && window.get_page() == 3 && window.get_stats_tab() == 0;
+    let visible = window.window().is_visible()
+        && !window.window().is_minimized()
+        && window.get_page() == 3
+        && window.get_stats_tab() == 0;
     let mut state = ui_state.borrow_mut();
     let apps = &mut state.apps;
     if apps.generation != history::generation() {
@@ -766,7 +796,13 @@ fn request_apps(
         let result = storage
             .lock()
             .map_err(|_| anyhow::anyhow!("storage lock poisoned"))
-            .and_then(|storage| Ok(storage.timeline_snapshot(started, now)?));
+            .and_then(|storage| {
+                Ok(if today {
+                    storage.timeline_snapshot_cached(started, now)?
+                } else {
+                    Arc::new(storage.timeline_snapshot(started, now)?)
+                })
+            });
         let _ = sender.send(result);
     });
 }
@@ -793,7 +829,7 @@ fn poll_apps(window: &AppWindow, ui_state: &Rc<RefCell<UiState>>) -> Result<()> 
     }
     state.apps.shown = Some((today, snapshot.clone()));
     drop(state);
-    render_apps(window, ui_state, snapshot, today);
+    render_apps(window, ui_state, &snapshot, today);
     Ok(())
 }
 
@@ -829,23 +865,26 @@ fn render_snapshot(
 fn render_apps(
     window: &AppWindow,
     ui_state: &Rc<RefCell<UiState>>,
-    mut snapshot: TimelineSnapshot,
+    snapshot: &TimelineSnapshot,
     today: bool,
 ) {
     // All history starts with the first record, not at the query's lower bound.
-    if !today
-        && let Some(earliest) = snapshot
+    let range_start = if !today {
+        snapshot
             .applications
             .iter()
             .flat_map(|application| &application.segments)
             .map(|segment| segment.started_utc_ms)
             .min()
-    {
-        snapshot.range_started_utc_ms = earliest.max(snapshot.range_started_utc_ms);
-    }
+            .map_or(snapshot.range_started_utc_ms, |earliest| {
+                earliest.max(snapshot.range_started_utc_ms)
+            })
+    } else {
+        snapshot.range_started_utc_ms
+    };
     let range_ms = snapshot
         .range_ended_utc_ms
-        .saturating_sub(snapshot.range_started_utc_ms)
+        .saturating_sub(range_start)
         .max(1) as f64;
     let mut state = ui_state.borrow_mut();
     if state.selected_identity.as_ref().is_none_or(|selected| {
@@ -916,8 +955,8 @@ fn render_apps(
         )
         .into(),
     );
-    window.set_focus_total(format_duration(timeline_view::total_focus_ms(&snapshot)).into());
-    window.set_apps_range(timeline_ui::apps_range_label(&snapshot, today).into());
+    window.set_focus_total(format_duration(timeline_view::total_focus_ms(snapshot)).into());
+    window.set_apps_range(timeline_ui::apps_range_label(snapshot, range_start, today).into());
     window.set_apps(ui_model::sync(window.get_apps(), app_rows, |a, b| {
         a.identity == b.identity
     }));
@@ -925,7 +964,7 @@ fn render_apps(
     window.set_selected_index(selected_index);
 
     let selected = (selected_index >= 0).then(|| &snapshot.applications[selected_index as usize]);
-    render_application(window, selected, &snapshot);
+    render_application(window, selected, snapshot);
 }
 
 fn render_application(
@@ -1219,17 +1258,10 @@ fn install_snapshot_callbacks(
                     .lock()
                     .map_err(|_| anyhow::anyhow!("storage lock poisoned"))?
                     .load_snapshot_image(slot.id)?;
-                let rgba = image::load_from_memory(&image.webp)?.to_rgba8();
-                if rgba.dimensions() != (slot.pixel_width, slot.pixel_height) {
-                    bail!("解密图片尺寸与元数据不一致");
-                }
-                let pixels = SharedPixelBuffer::<Rgba8Pixel>::clone_from_slice(
-                    rgba.as_raw(),
-                    rgba.width(),
-                    rgba.height(),
-                );
+                let preview =
+                    snapshot::decode_preview(image.webp, slot.pixel_width, slot.pixel_height)?;
                 Ok((
-                    Image::from_rgba8(pixels),
+                    preview,
                     format!(
                         "{} × {} · {} · 完整性校验通过",
                         slot.pixel_width,
@@ -1259,10 +1291,18 @@ fn install_snapshot_callbacks(
             let Some(slot_id) = snapshot_state.borrow().selected_slot_id else {
                 return;
             };
+            let mut postponed = None;
             let result = storage
                 .lock()
                 .map_err(|_| anyhow::anyhow!("storage lock poisoned"))
-                .and_then(|storage| storage.delete_snapshot(slot_id).map_err(Into::into));
+                .and_then(|storage| match storage.delete_snapshot(slot_id) {
+                    // The slot is deleted; only scrubbing its old data waits for retention.
+                    Err(timelens_storage::StorageError::SnapshotCleanupPending(error)) => {
+                        postponed = Some(error);
+                        Ok(true)
+                    }
+                    result => result.map_err(Into::into),
+                });
             if let Some(window) = weak.upgrade() {
                 match result {
                     Ok(true) => {
@@ -1270,7 +1310,12 @@ fn install_snapshot_callbacks(
                         window.set_snapshot_preview(Image::default());
                         window
                             .set_snapshot_detail("图片已删除；该槽保留为明确的用户删除记录".into());
-                        window.set_action_status("已删除所选快照".into());
+                        window.set_action_status(match postponed {
+                            Some(error) => {
+                                format!("已删除所选快照；旧加密数据稍后清理：{error}").into()
+                            }
+                            None => "已删除所选快照".into(),
+                        });
                         if let Err(error) =
                             refresh_snapshot_panel(&window, &storage, &ui_state, &snapshot_state)
                         {
@@ -1281,6 +1326,103 @@ fn install_snapshot_callbacks(
                     Err(error) => window.set_action_status(format!("快照删除失败：{error}").into()),
                 }
             }
+        });
+    }
+    {
+        let weak = window.as_weak();
+        let storage = Arc::clone(&storage);
+        let snapshot_state = Rc::clone(&snapshot_state);
+        window.on_snapshot_visible(move |first, last| {
+            let mut state = snapshot_state.borrow_mut();
+            state.visible = Some((first.max(0) as usize, last.max(0) as usize));
+            if let Some(window) = weak.upgrade() {
+                snapshot_grid::load_thumbnails(&window, &storage, &state);
+            }
+        });
+    }
+    {
+        let weak = window.as_weak();
+        let snapshot_state = Rc::clone(&snapshot_state);
+        window.on_snapshot_check(move |index, span| {
+            let mut state = snapshot_state.borrow_mut();
+            if index >= 0 {
+                snapshot_grid::tick(&mut state, index as usize, span);
+            }
+            if let Some(window) = weak.upgrade() {
+                snapshot_grid::show_ticks(&window, &state);
+            }
+        });
+    }
+    {
+        let weak = window.as_weak();
+        let snapshot_state = Rc::clone(&snapshot_state);
+        window.on_snapshot_check_all(move |all| {
+            let mut state = snapshot_state.borrow_mut();
+            snapshot_grid::tick_all(&mut state, all);
+            if let Some(window) = weak.upgrade() {
+                snapshot_grid::show_ticks(&window, &state);
+            }
+        });
+    }
+    {
+        let weak = window.as_weak();
+        let storage = Arc::clone(&storage);
+        let snapshot_state = Rc::clone(&snapshot_state);
+        let busy = Arc::clone(&busy);
+        let sender = sender.clone();
+        window.on_snapshot_delete_checked(move || {
+            let Some(window) = weak.upgrade() else {
+                return;
+            };
+            let mut state = snapshot_state.borrow_mut();
+            let ids = state.checked.iter().copied().collect::<Vec<_>>();
+            if ids.is_empty() || busy.swap(true, Ordering::AcqRel) {
+                return;
+            }
+            if state
+                .selected_slot_id
+                .is_some_and(|id| state.checked.contains(&id))
+            {
+                state.selected_slot_id = None;
+                window.set_snapshot_selected_index(-1);
+                window.set_snapshot_deletable(false);
+                window.set_snapshot_preview(Image::default());
+                window.set_snapshot_detail("请选择一条成功快照进行解密预览".into());
+            }
+            snapshot_grid::tick_all(&mut state, false);
+            snapshot_grid::show_ticks(&window, &state);
+            window.set_snapshot_selecting(false);
+            let storage = Arc::clone(&storage);
+            let busy = Arc::clone(&busy);
+            let sender = sender.clone();
+            thread::spawn(move || {
+                let result = snapshot::run_heavy_task(|| {
+                    Ok(storage
+                        .lock()
+                        .map_err(|_| anyhow::anyhow!("storage lock poisoned"))?
+                        .delete_snapshots(&ids)?)
+                });
+                busy.store(false, Ordering::Release);
+                let message = match result {
+                    Ok(deletion) => {
+                        let mut message = format!(
+                            "已删除 {} 张快照，释放 {}",
+                            deletion.deleted,
+                            format_bytes(deletion.released_bytes)
+                        );
+                        if let Some(error) = deletion.cleanup_pending {
+                            message.push_str(&format!("；旧加密数据稍后清理：{error}"));
+                        }
+                        message
+                    }
+                    Err(error) => format!("批量删除失败：{error}"),
+                };
+                let _ = sender.send(ActionStatus {
+                    message,
+                    refresh: true,
+                    report: None,
+                });
+            });
         });
     }
     {
@@ -1441,6 +1583,7 @@ fn update_and_refresh_snapshot_policy(
         let mut policy = storage.snapshot_policy()?;
         update(&mut policy);
         storage.set_snapshot_policy(policy, unix_time_ms())?;
+        snapshot::wake_scheduler();
         storage.apply_retention(unix_time_ms())?;
         Ok(())
     });
@@ -1483,12 +1626,29 @@ fn refresh_snapshot_panel(
             storage.list_snapshot_slots(range_started, range_ended, 500)?,
         )
     };
+    snapshot_state
+        .borrow_mut()
+        .checked
+        .retain(|id| slots.iter().any(|slot| slot.id == *id && slot.success));
+    // Thumbnails already decoded stay; the grid asks for the rest it shows.
+    let thumbs = window
+        .get_snapshots()
+        .iter()
+        .filter(|row| row.thumb.size().width > 0)
+        .map(|row| (row.identity, row.thumb))
+        .collect::<std::collections::HashMap<_, _>>();
     // Missing slots stay listed with their reason, so an empty-looking range
     // still explains why nothing was saved.
     let rows = slots
         .iter()
         .map(|slot| SnapshotRow {
             identity: slot.id.to_string().into(),
+            success: slot.success,
+            thumb: thumbs
+                .get(slot.id.to_string().as_str())
+                .cloned()
+                .unwrap_or_default(),
+            checked: snapshot_state.borrow().checked.contains(&slot.id),
             time: snapshot_time_label(slot.slot_started_utc_ms).into(),
             display: slot
                 .display
@@ -1524,6 +1684,11 @@ fn refresh_snapshot_panel(
     window.set_snapshots(ui_model::sync(window.get_snapshots(), rows, |a, b| {
         a.identity == b.identity
     }));
+    if snapshot_state.borrow().slots.is_empty() {
+        window.set_snapshot_selecting(false);
+    }
+    window.set_snapshot_checked_count(snapshot_state.borrow().checked.len() as i32);
+    snapshot_grid::load_thumbnails(window, storage, &snapshot_state.borrow());
     window.set_snapshot_selected_index(selected_index);
     if selected_index < 0 {
         window.set_snapshot_preview(Image::default());

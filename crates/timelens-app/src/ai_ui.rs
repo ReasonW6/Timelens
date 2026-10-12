@@ -24,6 +24,7 @@ pub fn data_generation() -> u64 {
 }
 pub fn dataset_changed() {
     DATA_GENERATION.fetch_add(1, std::sync::atomic::Ordering::Release);
+    crate::snapshot::wake_scheduler();
 }
 
 struct UiData {
@@ -689,7 +690,7 @@ pub fn install(
     );
     let weak = w.as_weak();
     let timer = Timer::default();
-    let mut refresh = Instant::now() - Duration::from_secs(2);
+    let mut refresh = timelens_observer::PollInterval::new(Duration::from_secs(1));
     let mut generation = data_generation();
     timer.start(TimerMode::Repeated, Duration::from_millis(200), move || {
         let Some(w) = weak.upgrade() else {
@@ -776,7 +777,7 @@ pub fn install(
             }
         }
         if g.get_open()
-            && (changed || refresh.elapsed() >= Duration::from_secs(1))
+            && (changed || refresh.is_due(Instant::now()))
             && let Ok(s) = storage.try_lock()
         {
             let mut d = data.borrow_mut();
@@ -788,7 +789,7 @@ pub fn install(
             } else if d.version.is_some() {
                 let _ = show_version(&w, &mut d, &s);
             }
-            refresh = Instant::now();
+            refresh.mark(Instant::now());
         }
     });
     Ok(timer)

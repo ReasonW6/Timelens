@@ -1,4 +1,4 @@
-use crate::{AiState, AppWindow};
+use crate::{AiState, AppWindow, CollectionState};
 use anyhow::{Result, anyhow};
 use slint::ComponentHandle;
 use std::{
@@ -16,7 +16,11 @@ const SHOW: u32 = WM_APP + 28;
 const STOP: u32 = WM_APP + 29;
 static WINDOW: std::sync::atomic::AtomicIsize = std::sync::atomic::AtomicIsize::new(0);
 static SHUTDOWN_READY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-static EVENTS: Mutex<Option<mpsc::Sender<Event>>> = Mutex::new(None);
+static EVENTS: Mutex<Option<EventSink>> = Mutex::new(None);
+static COLLECTION_MENU: Mutex<CollectionMenu> = Mutex::new(CollectionMenu {
+    paused: false,
+    busy: false,
+});
 static NOTICE: Mutex<Option<Notice>> = Mutex::new(None);
 static HIDE_EXPLAINED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 struct Notice {
@@ -26,9 +30,20 @@ struct Notice {
     text: &'static str,
     success: bool,
 }
+struct EventSink {
+    sender: mpsc::Sender<Event>,
+    window: slint::Weak<AppWindow>,
+}
+#[derive(Clone, Copy, Default)]
+struct CollectionMenu {
+    paused: bool,
+    busy: bool,
+}
+#[cfg_attr(test, derive(Debug, PartialEq))]
 enum Event {
     Open,
     Summary(i64),
+    SetPaused(bool),
     Quit,
     QuitReady,
     QuitFailed(String),
@@ -37,10 +52,67 @@ fn wide(text: &str) -> Vec<u16> {
     text.encode_utf16().chain(Some(0)).collect()
 }
 fn emit(event: Event) {
-    if let Ok(sender) = EVENTS.lock()
-        && let Some(sender) = &*sender
+    if let Ok(sink) = EVENTS.lock()
+        && let Some(sink) = &*sink
     {
-        let _ = sender.send(event);
+        match event {
+            Event::Open | Event::Summary(_) => {
+                // Handle the user's activation immediately, while Windows still
+                // allows this process to take foreground focus.
+                let _ = sink.window.upgrade_in_event_loop(move |w| {
+                    if let Err(error) = crate::window_chrome::show_and_activate(&w) {
+                        w.set_action_status(format!("打开窗口失败：{error}").into());
+                        return;
+                    }
+                    if let Event::Summary(id) = event {
+                        w.invoke_navigate(4);
+                        let g = w.global::<AiState>();
+                        g.set_status(format!("任务 #{id}，可在任务历史中查看结果").into());
+                        g.set_page(4);
+                    }
+                });
+            }
+            _ => {
+                let _ = sink.sender.send(event);
+            }
+        }
+    }
+}
+fn collection_menu(w: &AppWindow, quitting: bool) {
+    if let Ok(mut menu) = COLLECTION_MENU.lock() {
+        let state = w.global::<CollectionState>();
+        menu.paused = state.get_paused();
+        menu.busy = state.get_busy() || quitting;
+    }
+}
+fn popup_menu(state: CollectionMenu) -> HMENU {
+    unsafe {
+        let menu = CreatePopupMenu();
+        if !menu.is_null() {
+            AppendMenuW(menu, MF_STRING, 1, wide("打开 Timelens").as_ptr());
+            AppendMenuW(
+                menu,
+                MF_STRING | if state.busy { MF_GRAYED } else { 0 },
+                2,
+                wide(if state.paused {
+                    "开始采集"
+                } else {
+                    "停止采集"
+                })
+                .as_ptr(),
+            );
+            AppendMenuW(menu, MF_SEPARATOR, 0, null());
+            AppendMenuW(menu, MF_STRING, 3, wide("退出 Timelens").as_ptr());
+        }
+        menu
+    }
+}
+fn menu_event(selected: i32, state: CollectionMenu) -> Option<Event> {
+    match selected {
+        1 => Some(Event::Open),
+        2 if !state.busy => Some(Event::SetPaused(!state.paused)),
+        3 => Some(Event::Quit),
+        _ => None,
     }
 }
 /// The embedded Timelens icon (resource 1 in app.rc) at the small-icon size.
@@ -83,6 +155,15 @@ fn notification_data(hwnd: HWND) -> NOTIFYICONDATAW {
 }
 unsafe extern "system" fn procedure(hwnd: HWND, message: u32, w: WPARAM, l: LPARAM) -> LRESULT {
     match message {
+        WM_POWERBROADCAST => {
+            crate::snapshot::wake_scheduler();
+            1
+        }
+        WM_TIMECHANGE | WM_SETTINGCHANGE => {
+            crate::snapshot::wake_scheduler();
+            crate::history::invalidate();
+            unsafe { DefWindowProcW(hwnd, message, w, l) }
+        }
         WM_QUERYENDSESSION => 1,
         WM_ENDSESSION if w != 0 => {
             // This native message thread can wait while Slint, IPC and the
@@ -115,14 +196,11 @@ unsafe extern "system" fn procedure(hwnd: HWND, message: u32, w: WPARAM, l: LPAR
                     }
                 }
                 WM_RBUTTONUP | WM_CONTEXTMENU => unsafe {
-                    let menu = CreatePopupMenu();
-                    AppendMenuW(menu, MF_STRING, 1, wide("打开 Timelens").as_ptr());
-                    AppendMenuW(
-                        menu,
-                        MF_STRING,
-                        2,
-                        wide("退出 Timelens 并停止采集").as_ptr(),
-                    );
+                    let state = COLLECTION_MENU.lock().map(|s| *s).unwrap_or_default();
+                    let menu = popup_menu(state);
+                    if menu.is_null() {
+                        return 0;
+                    }
                     let mut point = POINT::default();
                     GetCursorPos(&mut point);
                     SetForegroundWindow(hwnd);
@@ -136,10 +214,11 @@ unsafe extern "system" fn procedure(hwnd: HWND, message: u32, w: WPARAM, l: LPAR
                         null(),
                     );
                     DestroyMenu(menu);
-                    if selected == 1 {
-                        emit(Event::Open);
-                    } else if selected == 2 {
-                        emit(Event::Quit);
+                    // Complete the tray menu's foreground transition before an
+                    // Open command activates the main window on the UI thread.
+                    PostMessageW(hwnd, WM_NULL, 0, 0);
+                    if let Some(event) = menu_event(selected, state) {
+                        emit(event);
                     }
                 },
                 _ => {}
@@ -196,6 +275,15 @@ pub fn activate_existing(stop: bool) -> bool {
         if hwnd.is_null() {
             return false;
         }
+        if !stop {
+            // A shortcut launch owns the foreground permission; pass it to the
+            // existing core before requesting that it show its window.
+            let mut process = 0;
+            GetWindowThreadProcessId(hwnd, &mut process);
+            if process != 0 {
+                AllowSetForegroundWindow(process);
+            }
+        }
         PostMessageW(hwnd, if stop { STOP } else { SHOW }, 0, 0) != 0
     }
 }
@@ -227,7 +315,11 @@ pub fn install(
     storage: Arc<Mutex<timelens_storage::Storage>>,
 ) -> Result<slint::Timer> {
     let (sender, receiver) = mpsc::channel();
-    *EVENTS.lock().map_err(|_| anyhow!("托盘锁不可用"))? = Some(sender);
+    *EVENTS.lock().map_err(|_| anyhow!("托盘锁不可用"))? = Some(EventSink {
+        sender,
+        window: w.as_weak(),
+    });
+    collection_menu(w, false);
     let (ready_sender, ready_receiver) = mpsc::channel();
     thread::spawn(move || unsafe {
         let name = wide("Timelens.Tray.v1");
@@ -282,8 +374,8 @@ pub fn install(
         if !HIDE_EXPLAINED.swap(true, std::sync::atomic::Ordering::AcqRel) {
             show_notice(Notice {
                 job: None,
-                title: "Timelens 仍在后台记录",
-                text: "窗口已收起到通知区域。点击托盘图标可重新打开；右键选择“退出”会停止采集。",
+                title: "Timelens 仍在后台运行",
+                text: "窗口已收起到通知区域。点击托盘图标可重新打开；右键可以停止／开始采集，或退出 Timelens。",
                 success: true,
             });
         }
@@ -301,19 +393,13 @@ pub fn install(
             };
             while let Ok(event) = receiver.try_recv() {
                 match event {
-                    Event::Open => {
-                        let _ = w.show();
-                        w.window().set_minimized(false);
-                        crate::window_placement::fit_after_show(&w);
-                    }
-                    Event::Summary(id) => {
-                        let _ = w.show();
-                        w.window().set_minimized(false);
-                        crate::window_placement::fit_after_show(&w);
-                        w.invoke_navigate(4);
-                        let g = w.global::<AiState>();
-                        g.set_status(format!("任务 #{id}，可在任务历史中查看结果").into());
-                        g.set_page(4);
+                    Event::Open | Event::Summary(_) => unreachable!("activation bypasses polling"),
+                    Event::SetPaused(paused) => {
+                        let state = w.global::<CollectionState>();
+                        if !quitting && !state.get_busy() {
+                            state.set_paused(paused);
+                            state.invoke_action(0);
+                        }
                     }
                     Event::Quit => {
                         if quitting {
@@ -321,7 +407,7 @@ pub fn install(
                         }
                         quitting = true;
                         crate::collector_task::suspend();
-                        w.set_action_status("正在保存最后的观察并停止采集…".into());
+                        w.set_action_status("正在保存并退出 Timelens…".into());
                         let storage = Arc::clone(&storage);
                         thread::spawn(move || {
                             let result: Result<()> = (|| {
@@ -373,7 +459,78 @@ pub fn install(
                     }
                 }
             }
+            collection_menu(&w, quitting);
         },
     );
     Ok(timer)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn capture_commands_are_distinct_from_exit() {
+        for paused in [false, true] {
+            let state = CollectionMenu {
+                paused,
+                busy: false,
+            };
+            assert_eq!(menu_event(1, state), Some(Event::Open));
+            assert_eq!(menu_event(2, state), Some(Event::SetPaused(!paused)));
+            assert_eq!(menu_event(3, state), Some(Event::Quit));
+            assert_eq!(menu_event(0, state), None);
+            assert_eq!(
+                menu_event(
+                    2,
+                    CollectionMenu {
+                        busy: true,
+                        ..state
+                    }
+                ),
+                None
+            );
+        }
+    }
+
+    #[test]
+    fn native_menu_shows_capture_state_and_disables_pending_changes() {
+        for paused in [false, true] {
+            for busy in [false, true] {
+                let menu = popup_menu(CollectionMenu { paused, busy });
+                assert!(!menu.is_null());
+                unsafe {
+                    assert_eq!(GetMenuItemCount(menu), 4);
+                    for (position, id, expected) in [
+                        (0, 1, "打开 Timelens"),
+                        (
+                            1,
+                            2,
+                            if paused {
+                                "开始采集"
+                            } else {
+                                "停止采集"
+                            },
+                        ),
+                        (3, 3, "退出 Timelens"),
+                    ] {
+                        assert_eq!(GetMenuItemID(menu, position), id);
+                        let mut label = [0_u16; 80];
+                        let len = GetMenuStringW(
+                            menu,
+                            id,
+                            label.as_mut_ptr(),
+                            label.len() as i32,
+                            MF_BYCOMMAND,
+                        );
+                        assert_eq!(String::from_utf16_lossy(&label[..len as usize]), expected);
+                    }
+                    assert_ne!(GetMenuState(menu, 2, MF_BYPOSITION) & MF_SEPARATOR, 0);
+                    assert_eq!(GetMenuState(menu, 2, MF_BYCOMMAND) & MF_GRAYED != 0, busy);
+                    assert_eq!(GetMenuState(menu, 3, MF_BYCOMMAND) & MF_GRAYED, 0);
+                    DestroyMenu(menu);
+                }
+            }
+        }
+    }
 }

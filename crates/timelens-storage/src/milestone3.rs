@@ -1,5 +1,4 @@
 use std::{
-    collections::HashSet,
     ffi::c_void,
     fs::{self, OpenOptions},
     io::Write,
@@ -16,7 +15,7 @@ use windows_sys::Win32::Security::Cryptography::{
     BCryptHash, BCryptOpenAlgorithmProvider, BCryptSetProperty,
 };
 
-use super::{Result, Storage, StorageError, TimelineApplication, load_key, to_sql_u64};
+use super::{Result, Storage, StorageError, TimelineApplication, to_sql_u64};
 
 const SNAPSHOT_DIRECTORY: &str = "snapshots";
 const SNAPSHOT_MAGIC: &[u8; 8] = b"TLSNAP\0\x01";
@@ -78,7 +77,7 @@ pub enum SnapshotTrigger {
 }
 
 impl SnapshotTrigger {
-    fn as_str(self) -> &'static str {
+    pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::Scheduled => "scheduled",
             Self::Manual => "manual",
@@ -234,6 +233,15 @@ pub struct LocalReportGap {
 pub struct LocalReportSnapshotReason {
     pub reason: String,
     pub slot_count: u64,
+}
+
+/// The outcome of deleting several snapshot images at once.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct SnapshotDeletion {
+    pub deleted: u64,
+    pub released_bytes: u64,
+    /// The images are deleted; only scrubbing their old data waits for the next cleanup.
+    pub cleanup_pending: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -397,114 +405,7 @@ impl Storage {
 
         let content_sha256 =
             snapshot_pixel_hash(&request.webp, request.pixel_width, request.pixel_height)?;
-        let existing_blob = self
-            .connection
-            .query_row(
-                "SELECT blob_id, pixel_width, pixel_height
-                 FROM snapshot_blobs WHERE content_sha256 = ?1",
-                params![content_sha256.as_slice()],
-                |row| {
-                    Ok((
-                        row.get::<_, i64>(0)?,
-                        row.get::<_, u32>(1)?,
-                        row.get::<_, u32>(2)?,
-                    ))
-                },
-            )
-            .optional()?;
-        let mut new_file: Option<PathBuf> = None;
-
-        let transaction =
-            Transaction::new_unchecked(&self.connection, TransactionBehavior::Immediate)?;
-        let blob_id = if let Some((blob_id, width, height)) = existing_blob {
-            if width != request.pixel_width || height != request.pixel_height {
-                return Err(StorageError::Integrity(
-                    "snapshot content hash has inconsistent dimensions".to_owned(),
-                ));
-            }
-            blob_id
-        } else {
-            let key = load_key(&self.key_path)?;
-            let encrypted = encrypt_snapshot(&key, &request.webp, &content_sha256)?;
-            let directory = self.snapshot_directory();
-            fs::create_dir_all(&directory)?;
-            let file_name = random_snapshot_file_name()?;
-            let final_path = directory.join(&file_name);
-            write_new_file(&final_path, &encrypted)?;
-            let inserted = transaction.execute(
-                "INSERT INTO snapshot_blobs (
-                    file_name, content_sha256, plaintext_bytes, encrypted_bytes,
-                    pixel_width, pixel_height, created_utc_ms
-                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-                params![
-                    file_name,
-                    content_sha256.as_slice(),
-                    to_sql_u64(request.webp.len() as u64, "snapshot plaintext bytes")?,
-                    to_sql_u64(encrypted.len() as u64, "snapshot encrypted bytes")?,
-                    request.pixel_width,
-                    request.pixel_height,
-                    request.captured_at_utc_ms,
-                ],
-            );
-            if let Err(error) = inserted {
-                let _ = fs::remove_file(&final_path);
-                return Err(error.into());
-            }
-            new_file = Some(final_path);
-            transaction.last_insert_rowid()
-        };
-
-        let inserted = transaction.execute(
-            "INSERT INTO snapshot_slots (
-                slot_started_utc_ms, captured_at_utc_ms, display_key,
-                display_x, display_y, display_width, display_height,
-                orientation_degrees, pixel_width, pixel_height, blob_id,
-                trigger, capture_method, result, missing_reason,
-                timeline_started_utc_ms, timeline_ended_utc_ms
-             ) VALUES (
-                ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11,
-                ?12, 'desktop_duplication', 'success', NULL, ?1, ?13
-             )",
-            params![
-                request.slot_started_utc_ms,
-                request.captured_at_utc_ms,
-                request.display.key,
-                request.display.x,
-                request.display.y,
-                request.display.width,
-                request.display.height,
-                request.display.orientation_degrees,
-                request.pixel_width,
-                request.pixel_height,
-                blob_id,
-                request.trigger.as_str(),
-                request.slot_started_utc_ms.saturating_add(1),
-            ],
-        );
-        let slot_id = match inserted {
-            Ok(1) => transaction.last_insert_rowid(),
-            Ok(_) => {
-                if let Some(path) = new_file {
-                    let _ = fs::remove_file(path);
-                }
-                return Err(StorageError::Integrity(
-                    "snapshot slot insert did not affect one row".to_owned(),
-                ));
-            }
-            Err(error) => {
-                if let Some(path) = new_file {
-                    let _ = fs::remove_file(path);
-                }
-                return Err(error.into());
-            }
-        };
-        if let Err(error) = transaction.commit() {
-            if let Some(path) = new_file {
-                let _ = fs::remove_file(path);
-            }
-            return Err(error.into());
-        }
-        Ok(slot_id)
+        self.append_snapshot(request, &content_sha256)
     }
 
     pub fn list_snapshot_slots(
@@ -542,13 +443,13 @@ impl Storage {
     }
 
     pub fn load_snapshot_image(&self, slot_id: i64) -> Result<SnapshotImage> {
-        let (slot, file_name, expected_hash, expected_bytes) = self.connection.query_row(
+        let (slot, blob_id, expected_hash, expected_bytes) = self.connection.query_row(
             "SELECT slots.slot_id, slots.slot_started_utc_ms, slots.captured_at_utc_ms,
                     slots.display_key, slots.display_x, slots.display_y,
                     slots.display_width, slots.display_height, slots.orientation_degrees,
                     slots.pixel_width, slots.pixel_height, slots.trigger,
                     slots.result, slots.missing_reason, blobs.plaintext_bytes,
-                    blobs.file_name, blobs.content_sha256, blobs.plaintext_bytes
+                    blobs.blob_id, blobs.content_sha256, blobs.plaintext_bytes
              FROM snapshot_slots AS slots
              JOIN snapshot_blobs AS blobs ON blobs.blob_id = slots.blob_id
              WHERE slots.slot_id = ?1 AND slots.result = 'success'",
@@ -556,7 +457,7 @@ impl Storage {
             |row| {
                 Ok((
                     snapshot_slot_from_row(row)?,
-                    row.get::<_, String>(15)?,
+                    row.get::<_, i64>(15)?,
                     row.get::<_, Vec<u8>>(16)?,
                     row_u64(row, 17)?,
                 ))
@@ -569,9 +470,7 @@ impl Storage {
         }
         let mut hash = [0_u8; 32];
         hash.copy_from_slice(&expected_hash);
-        let encrypted = fs::read(self.snapshot_directory().join(file_name))?;
-        let key = load_key(&self.key_path)?;
-        let webp = decrypt_snapshot(&key, &encrypted, &hash)?;
+        let webp = self.read_snapshot_payload(blob_id, Some(slot_id))?;
         if webp.len() as u64 != expected_bytes
             || snapshot_pixel_hash(&webp, slot.pixel_width, slot.pixel_height)? != hash
         {
@@ -583,8 +482,12 @@ impl Storage {
     }
 
     pub fn delete_snapshot(&self, slot_id: i64) -> Result<bool> {
-        self.clean_snapshot_slot(slot_id, SnapshotMissingReason::UserDeleted)
+        self.delete_snapshot_from_container(slot_id, SnapshotMissingReason::UserDeleted)
             .map(|outcome| outcome.is_some())
+    }
+
+    pub fn delete_snapshots(&self, slot_ids: &[i64]) -> Result<SnapshotDeletion> {
+        self.delete_snapshots_from_containers(slot_ids, SnapshotMissingReason::UserDeleted)
     }
 
     pub fn generate_local_report(
@@ -899,29 +802,9 @@ impl Storage {
                 params![cutoff],
             )? as u64;
         }
-        let policy = self.snapshot_policy()?;
-        if let Some(days) = policy.retention_days {
-            let cutoff = now_utc_ms.saturating_sub(i64::from(days) * 86_400_000);
-            for slot_id in self.successful_snapshot_ids_before(cutoff)? {
-                if let Some(released) =
-                    self.clean_snapshot_slot(slot_id, SnapshotMissingReason::RetentionCleaned)?
-                {
-                    outcome.snapshot_items += 1;
-                    outcome.released_bytes = outcome.released_bytes.saturating_add(released);
-                }
-            }
-        }
-        while self.snapshot_live_bytes()? > policy.max_bytes {
-            let Some(slot_id) = self.oldest_successful_snapshot_id()? else {
-                break;
-            };
-            if let Some(released) =
-                self.clean_snapshot_slot(slot_id, SnapshotMissingReason::RetentionCleaned)?
-            {
-                outcome.snapshot_items += 1;
-                outcome.released_bytes = outcome.released_bytes.saturating_add(released);
-            }
-        }
+        let images = self.apply_snapshot_day_retention(now_utc_ms)?;
+        outcome.snapshot_items = images.snapshot_items;
+        outcome.released_bytes = images.released_bytes;
         Ok(outcome)
     }
 
@@ -940,90 +823,7 @@ impl Storage {
     }
 
     pub(crate) fn reconcile_snapshot_files(&self) -> Result<()> {
-        let directory = self.snapshot_directory();
-        let entries = match fs::read_dir(&directory) {
-            Ok(entries) => entries,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-            Err(error) => return Err(error.into()),
-        };
-        let entries = entries.collect::<std::result::Result<Vec<_>, _>>()?;
-        for entry in &entries {
-            let path = entry.path();
-            let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
-                continue;
-            };
-            let Some(original_name) = file_name.strip_suffix(".deleting") else {
-                continue;
-            };
-            let referenced = self.connection.query_row(
-                "SELECT EXISTS(SELECT 1 FROM snapshot_blobs WHERE file_name = ?1)",
-                params![original_name],
-                |row| row.get::<_, i64>(0),
-            )? != 0;
-            if referenced {
-                let original_path = directory.join(original_name);
-                if original_path.exists() {
-                    fs::remove_file(path)?;
-                } else {
-                    fs::rename(path, original_path)?;
-                }
-            } else {
-                fs::remove_file(path)?;
-            }
-        }
-
-        let referenced = {
-            let mut statement = self
-                .connection
-                .prepare("SELECT file_name FROM snapshot_blobs")?;
-            statement
-                .query_map([], |row| row.get::<_, String>(0))?
-                .collect::<std::result::Result<HashSet<_>, _>>()?
-        };
-        for entry in fs::read_dir(&directory)? {
-            let path = entry?.path();
-            let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
-                continue;
-            };
-            if file_name.ends_with(".tlsnap") && !referenced.contains(file_name) {
-                fs::remove_file(path)?;
-            }
-        }
-
-        let missing = referenced
-            .iter()
-            .filter(|file_name| !directory.join(file_name).is_file())
-            .cloned()
-            .collect::<Vec<_>>();
-        if !missing.is_empty() {
-            let transaction =
-                Transaction::new_unchecked(&self.connection, TransactionBehavior::Immediate)?;
-            for file_name in missing {
-                let blob_id = transaction.query_row(
-                    "SELECT blob_id FROM snapshot_blobs WHERE file_name = ?1",
-                    params![file_name],
-                    |row| row.get::<_, i64>(0),
-                )?;
-                transaction.execute(
-                    "UPDATE snapshot_slots SET
-                        captured_at_utc_ms = NULL,
-                        pixel_width = 0,
-                        pixel_height = 0,
-                        blob_id = NULL,
-                        capture_method = 'none',
-                        result = 'cleaned',
-                        missing_reason = 'capture_failed'
-                     WHERE blob_id = ?1",
-                    params![blob_id],
-                )?;
-                transaction.execute(
-                    "DELETE FROM snapshot_blobs WHERE blob_id = ?1",
-                    params![blob_id],
-                )?;
-            }
-            transaction.commit()?;
-        }
-        Ok(())
+        self.reconcile_snapshot_containers()
     }
 
     pub(crate) fn has_local_report(&self) -> Result<bool> {
@@ -1050,7 +850,7 @@ impl Storage {
             .map(|deleted| deleted.unwrap_or(false))
     }
 
-    fn snapshot_directory(&self) -> PathBuf {
+    pub(crate) fn snapshot_directory(&self) -> PathBuf {
         self.data_directory.join(SNAPSHOT_DIRECTORY)
     }
 
@@ -1069,123 +869,6 @@ impl Storage {
             )
             .optional()
             .map_err(Into::into)
-    }
-
-    fn successful_snapshot_ids_before(&self, cutoff_utc_ms: i64) -> Result<Vec<i64>> {
-        let mut statement = self.connection.prepare(
-            "SELECT slot_id FROM snapshot_slots
-             WHERE result = 'success' AND slot_started_utc_ms < ?1
-             ORDER BY slot_started_utc_ms, slot_id",
-        )?;
-        statement
-            .query_map(params![cutoff_utc_ms], |row| row.get(0))?
-            .collect::<std::result::Result<Vec<_>, _>>()
-            .map_err(Into::into)
-    }
-
-    fn oldest_successful_snapshot_id(&self) -> Result<Option<i64>> {
-        self.connection
-            .query_row(
-                "SELECT slot_id FROM snapshot_slots WHERE result = 'success'
-                 ORDER BY slot_started_utc_ms, slot_id LIMIT 1",
-                [],
-                |row| row.get(0),
-            )
-            .optional()
-            .map_err(Into::into)
-    }
-
-    fn snapshot_live_bytes(&self) -> Result<u64> {
-        self.connection
-            .query_row(
-                "SELECT COALESCE(SUM(encrypted_bytes), 0) FROM snapshot_blobs",
-                [],
-                |row| row_u64(row, 0),
-            )
-            .map_err(Into::into)
-    }
-
-    fn clean_snapshot_slot(
-        &self,
-        slot_id: i64,
-        reason: SnapshotMissingReason,
-    ) -> Result<Option<u64>> {
-        let transaction =
-            Transaction::new_unchecked(&self.connection, TransactionBehavior::Immediate)?;
-        let blob = transaction
-            .query_row(
-                "SELECT blobs.blob_id, blobs.file_name, blobs.encrypted_bytes
-                 FROM snapshot_slots AS slots
-                 JOIN snapshot_blobs AS blobs ON blobs.blob_id = slots.blob_id
-                 WHERE slots.slot_id = ?1 AND slots.result = 'success'",
-                params![slot_id],
-                |row| {
-                    Ok((
-                        row.get::<_, i64>(0)?,
-                        row.get::<_, String>(1)?,
-                        row_u64(row, 2)?,
-                    ))
-                },
-            )
-            .optional()?;
-        let Some((blob_id, file_name, encrypted_bytes)) = blob else {
-            return Ok(None);
-        };
-        transaction.execute(
-            "UPDATE snapshot_slots SET
-                captured_at_utc_ms = NULL,
-                pixel_width = 0,
-                pixel_height = 0,
-                blob_id = NULL,
-                capture_method = 'none',
-                result = 'cleaned',
-                missing_reason = ?2
-             WHERE slot_id = ?1",
-            params![slot_id, reason.as_str()],
-        )?;
-        let remaining: i64 = transaction.query_row(
-            "SELECT COUNT(*) FROM snapshot_slots WHERE blob_id = ?1",
-            params![blob_id],
-            |row| row.get(0),
-        )?;
-        if remaining == 0 {
-            transaction.execute(
-                "DELETE FROM snapshot_blobs WHERE blob_id = ?1",
-                params![blob_id],
-            )?;
-        }
-        let staged_delete = if remaining == 0 {
-            let path = self.snapshot_directory().join(&file_name);
-            if path.exists() {
-                let staged = self
-                    .snapshot_directory()
-                    .join(format!("{file_name}.deleting"));
-                fs::rename(&path, &staged)?;
-                Some((path, staged))
-            } else {
-                None
-            }
-        } else {
-            None
-        };
-        if let Err(error) = transaction.commit() {
-            if let Some((path, staged)) = &staged_delete {
-                let _ = fs::rename(staged, path);
-            }
-            return Err(error.into());
-        }
-        if remaining == 0 {
-            if let Some((_, staged)) = staged_delete {
-                match fs::remove_file(staged) {
-                    Ok(()) => {}
-                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-                    Err(error) => return Err(error.into()),
-                }
-            }
-            Ok(Some(encrypted_bytes))
-        } else {
-            Ok(Some(0))
-        }
     }
 }
 
@@ -1223,7 +906,7 @@ fn validate_slot(
     Ok(())
 }
 
-fn row_u64(row: &rusqlite::Row<'_>, index: usize) -> rusqlite::Result<u64> {
+pub(crate) fn row_u64(row: &rusqlite::Row<'_>, index: usize) -> rusqlite::Result<u64> {
     let value = row.get::<_, i64>(index)?;
     u64::try_from(value).map_err(|error| {
         rusqlite::Error::FromSqlConversionFailure(
@@ -1609,7 +1292,7 @@ mod tests {
         assert_eq!(blob_count, 1);
         let encrypted_path = storage
             .connection
-            .query_row("SELECT file_name FROM snapshot_blobs", [], |row| {
+            .query_row("SELECT file_name FROM snapshot_containers", [], |row| {
                 row.get::<_, String>(0)
             })
             .map(|name| storage.snapshot_directory().join(name))
@@ -1689,8 +1372,9 @@ mod tests {
             .unwrap();
         assert!(storage.snapshot_live_bytes().unwrap() > policy.max_bytes);
 
+        // Capacity cleanup never removes the current local day.
         let outcome = storage
-            .apply_milestone3_retention(1_700_000_000_020, None)
+            .apply_milestone3_retention(1_700_000_000_020 + 2 * 86_400_000, None)
             .unwrap();
         assert_eq!(outcome.snapshot_items, 1);
         assert!(storage.snapshot_live_bytes().unwrap() <= policy.max_bytes);
@@ -1720,7 +1404,7 @@ mod tests {
             .unwrap();
         let file_name = storage
             .connection
-            .query_row("SELECT file_name FROM snapshot_blobs", [], |row| {
+            .query_row("SELECT file_name FROM snapshot_containers", [], |row| {
                 row.get::<_, String>(0)
             })
             .unwrap();
@@ -1730,7 +1414,9 @@ mod tests {
             .join(format!("{file_name}.deleting"));
         fs::rename(&original, &staged).unwrap();
         fs::write(
-            storage.snapshot_directory().join("unreferenced.tlsnap"),
+            storage
+                .snapshot_directory()
+                .join("00000000000000000000000000000000.tlsnap"),
             b"orphan",
         )
         .unwrap();
@@ -1743,7 +1429,7 @@ mod tests {
         assert!(
             !recovered
                 .snapshot_directory()
-                .join("unreferenced.tlsnap")
+                .join("00000000000000000000000000000000.tlsnap")
                 .exists()
         );
         fs::remove_file(&original).unwrap();

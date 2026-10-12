@@ -3,7 +3,7 @@ use std::{
     os::windows::ffi::OsStrExt,
     path::{Path, PathBuf},
     ptr::null_mut,
-    sync::{Arc, Mutex, TryLockError},
+    sync::{Arc, Condvar, Mutex, TryLockError},
     thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
@@ -66,8 +66,43 @@ use windows::{
 
 const LOW_DISK_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 const MAX_SNAPSHOT_DIMENSION: u32 = 1280;
-const SCHEDULER_POLL: Duration = Duration::from_millis(500);
 static HEAVY_TASK_GATE: Mutex<()> = Mutex::new(());
+static SCHEDULER_WAKE: SchedulerWake = SchedulerWake {
+    revision: Mutex::new(0),
+    changed: Condvar::new(),
+};
+
+struct SchedulerWake {
+    revision: Mutex<u64>,
+    changed: Condvar,
+}
+
+impl SchedulerWake {
+    fn revision(&self) -> u64 {
+        *self.revision.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    fn wake(&self) {
+        let mut revision = self.revision.lock().unwrap_or_else(|e| e.into_inner());
+        *revision = revision.wrapping_add(1);
+        self.changed.notify_all();
+    }
+
+    fn wait(&self, seen: u64, timeout: Option<Duration>) {
+        let revision = self.revision.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(timeout) = timeout {
+            let _ = self
+                .changed
+                .wait_timeout_while(revision, timeout, |r| *r == seen);
+        } else {
+            drop(self.changed.wait_while(revision, |r| *r == seen));
+        }
+    }
+}
+
+pub(crate) fn wake_scheduler() {
+    SCHEDULER_WAKE.wake();
+}
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct CaptureSummary {
@@ -113,10 +148,17 @@ pub fn spawn_scheduler(storage: Arc<Mutex<Storage>>, data_directory: PathBuf) {
     thread::spawn(move || {
         let mut scheduler = Scheduler::new(storage, data_directory);
         loop {
-            if let Err(error) = scheduler.tick() {
-                eprintln!("snapshot scheduler failed: {error:#}");
-            }
-            thread::sleep(SCHEDULER_POLL);
+            // Read the revision before loading settings so a change racing with
+            // tick or the wait cannot leave the scheduler asleep on old settings.
+            let seen = SCHEDULER_WAKE.revision();
+            let timeout = match scheduler.tick() {
+                Ok(()) => scheduler.wait_duration(unix_time_ms()),
+                Err(error) => {
+                    eprintln!("snapshot scheduler failed: {error:#}");
+                    Some(Duration::from_secs(1))
+                }
+            };
+            SCHEDULER_WAKE.wait(seen, timeout);
         }
     });
 }
@@ -143,6 +185,35 @@ pub fn run_heavy_task<T>(operation: impl FnOnce() -> Result<T>) -> Result<T> {
     operation()
 }
 
+pub(crate) fn decode_preview(webp: Vec<u8>, width: u32, height: u32) -> Result<slint::Image> {
+    let rgba = image::load_from_memory(&webp)?.into_rgba8();
+    drop(webp);
+    if rgba.dimensions() != (width, height) {
+        bail!("解密图片尺寸与元数据不一致");
+    }
+    let pixels = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
+        rgba.as_raw(),
+        width,
+        height,
+    );
+    Ok(slint::Image::from_rgba8(pixels))
+}
+
+/// Grid thumbnails are small enough that a screenful costs a few MiB.
+const THUMBNAIL_WIDTH: u32 = 240;
+const THUMBNAIL_HEIGHT: u32 = 135;
+
+pub(crate) fn decode_thumbnail(webp: &[u8]) -> Result<slint::SharedPixelBuffer<slint::Rgb8Pixel>> {
+    let thumbnail = image::load_from_memory(webp)?
+        .thumbnail(THUMBNAIL_WIDTH, THUMBNAIL_HEIGHT)
+        .into_rgb8();
+    Ok(slint::SharedPixelBuffer::clone_from_slice(
+        thumbnail.as_raw(),
+        thumbnail.width(),
+        thumbnail.height(),
+    ))
+}
+
 fn try_run_heavy_task<T>(operation: impl FnOnce() -> Result<T>) -> Option<Result<T>> {
     match HEAVY_TASK_GATE.try_lock() {
         Ok(_guard) => Some(operation()),
@@ -162,6 +233,9 @@ struct Scheduler {
 }
 
 impl Scheduler {
+    fn wait_duration(&self, now: i64) -> Option<Duration> {
+        deadline_delay(self.schedule_key.map(|_| self.next_slot_utc_ms), now)
+    }
     fn new(storage: Arc<Mutex<Storage>>, data_directory: PathBuf) -> Self {
         Self {
             storage,
@@ -288,6 +362,10 @@ impl Scheduler {
         )?;
         Ok(())
     }
+}
+
+fn deadline_delay(next_slot: Option<i64>, now: i64) -> Option<Duration> {
+    next_slot.map(|deadline| Duration::from_millis(deadline.saturating_sub(now).max(0) as u64))
 }
 
 fn capture_slot(
@@ -586,7 +664,7 @@ fn select_display_index(
 
 fn capture_output(target: &OutputTarget) -> Result<CapturedFrame> {
     let mut image = match duplicate_frame(target)? {
-        Some(image) => rotate_image(image, target.desc.Rotation),
+        Some(image) => image,
         // A still desktop may present nothing after the pointer-only first frame;
         // copy the same area through GDI instead.
         None => copy_screen_area(&target.desc.DesktopCoordinates)?,
@@ -661,9 +739,11 @@ fn duplicate_frame(target: &OutputTarget) -> Result<Option<RgbaImage>> {
         unsafe { context.CopyResource(&staging, &texture) };
         let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
         unsafe { context.Map(&staging, 0, D3D11_MAP_READ, 0, Some(&mut mapped)) }?;
-        let converted = copy_mapped_rgba(&source_desc, &mapped);
+        let converted = copy_mapped_rgba_rotated(&source_desc, &mapped, target.desc.Rotation);
         unsafe { context.Unmap(&staging, 0) };
-        RgbaImage::from_raw(source_desc.Width, source_desc.Height, converted?)
+        let (width, height) =
+            rotated_dimensions(source_desc.Width, source_desc.Height, target.desc.Rotation);
+        RgbaImage::from_raw(width, height, converted?)
             .context("captured desktop buffer has inconsistent dimensions")
     })();
     let released = unsafe { duplication.ReleaseFrame() };
@@ -813,6 +893,72 @@ fn copy_mapped_rgba(
     Ok(rgba)
 }
 
+fn rotated_dimensions(width: u32, height: u32, rotation: DXGI_MODE_ROTATION) -> (u32, u32) {
+    if rotation == DXGI_MODE_ROTATION_ROTATE90 || rotation == DXGI_MODE_ROTATION_ROTATE270 {
+        (height, width)
+    } else {
+        (width, height)
+    }
+}
+
+/// Convert the mapped pixels directly into the rotated output, retaining one
+/// full RGBA buffer instead of an unrotated buffer and another rotated copy.
+fn copy_mapped_rgba_rotated(
+    desc: &D3D11_TEXTURE2D_DESC,
+    mapped: &D3D11_MAPPED_SUBRESOURCE,
+    rotation: DXGI_MODE_ROTATION,
+) -> Result<Vec<u8>> {
+    if rotation == DXGI_MODE_ROTATION_IDENTITY || rotation == DXGI_MODE_ROTATION(0) {
+        return copy_mapped_rgba(desc, mapped);
+    }
+    let stride = if desc.Format == DXGI_FORMAT_B8G8R8A8_UNORM {
+        4
+    } else if desc.Format == DXGI_FORMAT_R16G16B16A16_FLOAT {
+        8
+    } else {
+        bail!("unsupported desktop duplication format {}", desc.Format.0);
+    };
+    let (width, height) = (desc.Width as usize, desc.Height as usize);
+    if mapped.pData.is_null() || (mapped.RowPitch as usize) < width * stride {
+        bail!("desktop duplication returned an invalid mapped surface");
+    }
+    let (output_width, _) = rotated_dimensions(desc.Width, desc.Height, rotation);
+    let mut rgba = vec![0; width * height * 4];
+    for y in 0..height {
+        let row = unsafe {
+            std::slice::from_raw_parts(
+                (mapped.pData as *const u8).add(y * mapped.RowPitch as usize),
+                width * stride,
+            )
+        };
+        for (x, pixel) in row.chunks_exact(stride).enumerate() {
+            let color = if stride == 4 {
+                [pixel[2], pixel[1], pixel[0], 255]
+            } else {
+                let channel = |index: usize| {
+                    tone_map_scrgb(half_to_f32(u16::from_le_bytes([
+                        pixel[index * 2],
+                        pixel[index * 2 + 1],
+                    ])))
+                };
+                [channel(0), channel(1), channel(2), 255]
+            };
+            let (to_x, to_y) = if rotation == DXGI_MODE_ROTATION_ROTATE90 {
+                (height - 1 - y, x)
+            } else if rotation == DXGI_MODE_ROTATION_ROTATE180 {
+                (width - 1 - x, height - 1 - y)
+            } else {
+                debug_assert_eq!(rotation, DXGI_MODE_ROTATION_ROTATE270);
+                (y, width - 1 - x)
+            };
+            let offset = (to_y * output_width as usize + to_x) * 4;
+            rgba[offset..offset + 4].copy_from_slice(&color);
+        }
+    }
+    Ok(rgba)
+}
+
+#[cfg(test)]
 fn rotate_image(image: RgbaImage, rotation: DXGI_MODE_ROTATION) -> RgbaImage {
     if rotation == DXGI_MODE_ROTATION_ROTATE90 {
         image::imageops::rotate90(&image)
@@ -1127,6 +1273,148 @@ fn unix_time_ms() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fused_rotation_matches_the_previous_pixels_for_bgra_and_hdr() {
+        for format in [DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_R16G16B16A16_FLOAT] {
+            let stride = if format == DXGI_FORMAT_B8G8R8A8_UNORM {
+                4
+            } else {
+                8
+            };
+            let row_pitch = 3 * stride + 8;
+            let mut source = vec![0u8; row_pitch * 2];
+            for y in 0..2 {
+                for x in 0..3 {
+                    let pixel =
+                        &mut source[y * row_pitch + x * stride..y * row_pitch + (x + 1) * stride];
+                    if stride == 4 {
+                        pixel.copy_from_slice(&[x as u8 * 40, y as u8 * 70, 200, 23]);
+                    } else {
+                        for (index, value) in [0u16, 0x3800, 0x3c00, 0x3c00].into_iter().enumerate()
+                        {
+                            pixel[index * 2..index * 2 + 2].copy_from_slice(&value.to_le_bytes());
+                        }
+                    }
+                }
+            }
+            let desc = D3D11_TEXTURE2D_DESC {
+                Width: 3,
+                Height: 2,
+                Format: format,
+                ..Default::default()
+            };
+            let mapped = D3D11_MAPPED_SUBRESOURCE {
+                pData: source.as_mut_ptr().cast(),
+                RowPitch: row_pitch as u32,
+                ..Default::default()
+            };
+            let original = copy_mapped_rgba(&desc, &mapped).unwrap();
+            for rotation in [
+                DXGI_MODE_ROTATION_IDENTITY,
+                DXGI_MODE_ROTATION_ROTATE90,
+                DXGI_MODE_ROTATION_ROTATE180,
+                DXGI_MODE_ROTATION_ROTATE270,
+            ] {
+                let reference = rotate_image(
+                    RgbaImage::from_raw(3, 2, original.clone()).unwrap(),
+                    rotation,
+                );
+                let (width, height) = rotated_dimensions(3, 2, rotation);
+                let actual = RgbaImage::from_raw(
+                    width,
+                    height,
+                    copy_mapped_rgba_rotated(&desc, &mapped, rotation).unwrap(),
+                )
+                .unwrap();
+                assert_eq!(actual, reference);
+                let old = bound_image(reference, 2);
+                let new = bound_image(actual, 2);
+                assert_eq!(new, old);
+                let encode = |pixels: &RgbaImage| {
+                    let mut webp = Vec::new();
+                    image::codecs::webp::WebPEncoder::new_lossless(&mut webp)
+                        .write_image(
+                            pixels.as_raw(),
+                            pixels.width(),
+                            pixels.height(),
+                            ExtendedColorType::Rgba8,
+                        )
+                        .unwrap();
+                    webp
+                };
+                assert_eq!(encode(&new), encode(&old));
+            }
+        }
+    }
+
+    #[test]
+    fn preview_keeps_decoded_colors_alpha_and_dimensions() {
+        let pixels = RgbaImage::from_fn(8, 3, |x, y| {
+            image::Rgba([x as u8 * 20, y as u8 * 60, 120, (x * 30) as u8])
+        });
+        let mut webp = Vec::new();
+        image::codecs::webp::WebPEncoder::new_lossless(&mut webp)
+            .write_image(pixels.as_raw(), 8, 3, ExtendedColorType::Rgba8)
+            .unwrap();
+        let previous = image::load_from_memory(&webp).unwrap().to_rgba8();
+        let actual = decode_preview(webp.clone(), 8, 3)
+            .unwrap()
+            .to_rgba8()
+            .unwrap();
+        assert_eq!(actual.as_bytes(), previous.as_raw());
+        assert!(decode_preview(webp, 7, 3).is_err());
+    }
+
+    #[test]
+    fn thumbnails_fit_the_grid_and_keep_the_aspect_ratio() {
+        for (width, height, expected) in [(1920, 1080, (240, 135)), (1080, 1920, (76, 135))] {
+            let pixels = RgbaImage::from_pixel(width, height, image::Rgba([40, 90, 200, 255]));
+            let mut webp = Vec::new();
+            image::codecs::webp::WebPEncoder::new_lossless(&mut webp)
+                .write_image(pixels.as_raw(), width, height, ExtendedColorType::Rgba8)
+                .unwrap();
+            let thumbnail = decode_thumbnail(&webp).unwrap();
+            assert_eq!((thumbnail.width(), thumbnail.height()), expected);
+            assert_eq!(thumbnail.as_slice()[0], slint::Rgb8Pixel::new(40, 90, 200));
+        }
+    }
+
+    #[test]
+    fn scheduler_sleeps_until_the_slot_and_disabled_capture_waits_for_a_change() {
+        assert_eq!(
+            deadline_delay(Some(901_000), 1_000),
+            Some(Duration::from_secs(900))
+        );
+        assert_eq!(deadline_delay(Some(901_000), 901_001), Some(Duration::ZERO));
+        assert_eq!(deadline_delay(None, 1_000), None);
+    }
+
+    #[test]
+    fn a_change_between_reading_settings_and_waiting_is_not_lost() {
+        let wake = SchedulerWake {
+            revision: Mutex::new(0),
+            changed: Condvar::new(),
+        };
+        let seen = wake.revision();
+        wake.wake();
+        let started = Instant::now();
+        wake.wait(seen, Some(Duration::from_secs(60)));
+        assert!(started.elapsed() < Duration::from_secs(1));
+    }
+
+    #[test]
+    fn a_disabled_scheduler_wakes_when_settings_or_the_system_change() {
+        let wake = Arc::new(SchedulerWake {
+            revision: Mutex::new(0),
+            changed: Condvar::new(),
+        });
+        let worker = Arc::clone(&wake);
+        let seen = wake.revision();
+        let waiting = thread::spawn(move || worker.wait(seen, None));
+        wake.wake();
+        waiting.join().unwrap();
+    }
 
     #[test]
     fn fixed_slots_start_at_the_next_boundary() {
