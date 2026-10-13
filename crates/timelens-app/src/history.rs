@@ -714,12 +714,9 @@ fn show_detail(
                 .applications
                 .iter()
                 .find(|application| application.identity == participant.identity);
+            // Displayed time includes focused time, as on every other page.
             let (focused, displayed, background) = application.map_or((0, 0, 0), |a| {
-                (
-                    a.focused_ms,
-                    a.displayed_ms.saturating_sub(a.focused_ms),
-                    a.background_ms,
-                )
+                (a.focused_ms, a.displayed_ms, a.background_ms)
             });
             let tint = app_icon::tint(&participant.identity);
             let segments = application
