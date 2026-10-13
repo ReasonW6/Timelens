@@ -22,7 +22,7 @@ component WindowItem inherits Rectangle {
     background: touch.has-hover ? Theme.hover-tint : transparent;
     Image { x: 8px; y: 10px; width: 16px; height: 16px; source: @image-url("icons/app-window.svg"); colorize: Theme.ink-3; }
     Text { x: 32px; y: 0px; width: parent.width - 150px; height: 36px; text: root.item.label; color: Theme.ink; font-size: 13px; vertical-alignment: center; overflow: elide; }
-    Text { x: parent.width - 136px; width: 104px; height: 36px; text: root.item.focused; color: Theme.ink-2; font-size: 13px; horizontal-alignment: right; vertical-alignment: center; }
+    Text { x: parent.width - 136px; y: 0px; width: 104px; height: 36px; text: root.item.focused; color: Theme.ink-2; font-size: 13px; horizontal-alignment: right; vertical-alignment: center; }
     Image { x: parent.width - 24px; y: 10px; width: 16px; height: 16px; source: @image-url("icons/chevron-right.svg"); colorize: Theme.ink-4; transform-rotation: root.expanded ? 90deg : 0deg; animate transform-rotation { duration: 120ms; } }
     if root.expanded : Note { x: 32px; y: 38px; width: parent.width - 44px; height: 52px; text: root.item.summary; font-size: 12px; }
     touch := TouchArea { mouse-cursor: pointer; clicked => { key.focus(); root.expanded = !root.expanded; } }

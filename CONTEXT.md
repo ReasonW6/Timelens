@@ -25,7 +25,7 @@ A user-confirmed rule that treats two previously separate application identities
 _Avoid_: Automatic fuzzy match, rename
 
 **Window instance**:
-One independently switchable, user-facing top-level window belonging to an application. Dialogs, menus, tooltips, tabs, and processes without such a window are not window instances.
+One independently switchable, user-facing top-level window with a taskbar button, belonging to an application. It ends when the window leaves the taskbar, for example by hiding to the notification area. Dialogs, menus, tooltips, tabs, shell surfaces such as Start and Search, and processes without such a window are not window instances.
 _Avoid_: Process, application, dialog, tab
 
 **Application session**:
@@ -33,7 +33,7 @@ The logical span from an application's first tracked window opening through its 
 _Avoid_: Process lifetime, summed window time
 
 **Inferred tray continuation**:
-A background-only continuation after an application's last window disappears while the originating application remains alive. It ends with that originating application and never guesses a handoff to an unrelated helper.
+A background-only continuation after an application's last window disappears while the originating application remains alive. No longer created: notification-area time is not counted. Continuations recorded earlier remain in history and end with that originating application.
 _Avoid_: Window instance, auxiliary-process activity
 
 **Timeline segment**:
@@ -45,11 +45,11 @@ A period in which an application has at least one unminimized, unhidden window e
 _Avoid_: Focus interval, active time
 
 **Focus interval**:
-A period in which an application owns the single Windows foreground window that receives keyboard input. Input counts are attributed to this application.
+A period in which an application owns the single Windows foreground window that receives keyboard input. A minimized foreground window is not focused. Focus is always part of a displayed interval, so focused time never exceeds displayed time. Input counts are attributed to this application.
 _Avoid_: Displayed interval, foreground time
 
 **Background interval**:
-A period in which an application session continues without a displayed window. It includes minimized, notification-area, other-virtual-desktop, and locked-session time, and may overlap other applications' intervals.
+A period in which an application session continues without a displayed window. It includes minimized, other-virtual-desktop, and locked-session time while the window keeps its taskbar button, and may overlap other applications' intervals. Notification-area time is not background.
 _Avoid_: Sleep interval, desktop idle interval
 
 **Desktop idle interval**:
