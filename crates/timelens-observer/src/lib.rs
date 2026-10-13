@@ -18,7 +18,7 @@ use windows::{
     Win32::{
         Foundation::{CloseHandle, FILETIME, HANDLE, HWND, LPARAM, PROPERTYKEY, RECT},
         Graphics::{
-            Dwm::{DWMWA_CLOAKED, DwmGetWindowAttribute},
+            Dwm::{DWM_CLOAKED_APP, DWMWA_CLOAKED, DwmGetWindowAttribute},
             Gdi::{MONITOR_DEFAULTTONULL, MonitorFromWindow},
         },
         Storage::Packaging::Appx::{GetApplicationUserModelId, GetPackageFullName},
@@ -733,7 +733,6 @@ struct WindowFacts {
 #[derive(Clone, Copy, Default)]
 struct ClassifierInput {
     root_is_self: bool,
-    core_window: bool,
     has_owner: bool,
     app_window: bool,
     tool_window: bool,
@@ -741,6 +740,7 @@ struct ClassifierInput {
     visible: bool,
     minimized: bool,
     cloaked: Option<bool>,
+    app_cloaked: bool,
     monitor_present: bool,
     has_area: bool,
     on_current_virtual_desktop: Option<bool>,
@@ -756,10 +756,7 @@ struct Classification {
 }
 
 fn classify(input: ClassifierInput) -> Classification {
-    // Top-level core windows are shell surfaces such as Start and Search; packaged
-    // applications show their core window inside an ApplicationFrameHost frame.
     let structural_candidate = input.root_is_self
-        && !input.core_window
         && (!input.has_owner || input.app_window)
         && (!input.tool_window || input.app_window)
         && (!input.no_activate || input.app_window);
@@ -768,10 +765,12 @@ fn classify(input: ClassifierInput) -> Classification {
         || input.focused;
     // The window has a taskbar button on this or another virtual desktop. Hidden,
     // tool and cloaked-away windows have none, and minimized windows keep theirs.
-    // Unknown desktop membership keeps a cloaked window until a later query.
+    // Unknown desktop membership keeps a cloaked window until a later query, and
+    // a window cloaked only by its own application keeps its button.
     let on_taskbar = structural_candidate
         && input.visible
         && (!input.cloaked.unwrap_or(false)
+            || input.app_cloaked
             || input.on_current_virtual_desktop != Some(true)
             || input.focused);
     let onboarding_candidate =
@@ -825,7 +824,7 @@ fn inspect_window(
     let extended_style = unsafe { GetWindowLongPtrW(hwnd, GWL_EXSTYLE) } as u32;
     let visible = unsafe { IsWindowVisible(hwnd) }.as_bool();
     let minimized = unsafe { IsIconic(hwnd) }.as_bool();
-    let cloaked = window_cloaked(hwnd);
+    let cloak = window_cloak(hwnd);
     let rect = window_rect(hwnd);
     let monitor_present = !unsafe { MonitorFromWindow(hwnd, MONITOR_DEFAULTTONULL) }.is_invalid();
     let (on_current_virtual_desktop, virtual_desktop_id) = virtual_desktop
@@ -844,14 +843,14 @@ fn inspect_window(
         .unwrap_or((None, None));
     let classification = classify(ClassifierInput {
         root_is_self: root == hwnd,
-        core_window: is_core_window(hwnd),
         has_owner: owner.is_some(),
         app_window: extended_style & WS_EX_APPWINDOW.0 != 0,
         tool_window: extended_style & WS_EX_TOOLWINDOW.0 != 0,
         no_activate: extended_style & WS_EX_NOACTIVATE.0 != 0,
         visible,
         minimized,
-        cloaked,
+        cloaked: cloak.map(|value| value != 0),
+        app_cloaked: cloak == Some(DWM_CLOAKED_APP),
         monitor_present,
         has_area: rect.is_some_and(|value| value.right > value.left && value.bottom > value.top),
         on_current_virtual_desktop,
@@ -1029,7 +1028,9 @@ fn query_process_string(
 }
 
 fn resolve_identity(hwnd: HWND, process: &ProcessInfo) -> Option<ResolvedIdentity> {
-    if process.path.as_deref().is_some_and(is_one_time_installer) {
+    if process.path.as_deref().is_some_and(is_one_time_installer)
+        || (process.path.as_deref().is_some_and(is_system_app) && is_core_window(hwnd))
+    {
         return None;
     }
     let window_aumid = window_app_user_model_id(hwnd);
@@ -1120,13 +1121,20 @@ fn window_rect(hwnd: HWND) -> Option<RECT> {
     Some(rect)
 }
 
+/// Start, Search, the notification center, the touch keyboard and the lock screen
+/// are top-level core windows of Windows' own system apps. A packaged application
+/// shows its core window inside an ApplicationFrameHost frame instead.
+fn is_system_app(path: &str) -> bool {
+    normalize_path(path).contains(r"\windows\systemapps\")
+}
+
 fn is_core_window(hwnd: HWND) -> bool {
     let mut class = [0_u16; 32];
     let length = unsafe { GetClassNameW(hwnd, &mut class) }.max(0) as usize;
     String::from_utf16_lossy(&class[..length]) == "Windows.UI.Core.CoreWindow"
 }
 
-fn window_cloaked(hwnd: HWND) -> Option<bool> {
+fn window_cloak(hwnd: HWND) -> Option<u32> {
     let mut value = 0_u32;
     unsafe {
         DwmGetWindowAttribute(
@@ -1137,7 +1145,7 @@ fn window_cloaked(hwnd: HWND) -> Option<bool> {
         )
     }
     .ok()?;
-    Some(value != 0)
+    Some(value)
 }
 
 fn window_id(hwnd: HWND) -> u64 {
@@ -1438,9 +1446,15 @@ mod tests {
         ] {
             assert!(!classify(input).on_taskbar);
         }
-        // A cloaked window stays open while its desktop membership is unknown,
-        // and an app window keeps its button despite WS_EX_NOACTIVATE.
+        // A cloaked window stays open while its desktop membership is unknown or
+        // when only its application cloaked it, and an app window keeps its
+        // button despite WS_EX_NOACTIVATE.
         for input in [
+            ClassifierInput {
+                cloaked: Some(true),
+                app_cloaked: true,
+                ..visible_window()
+            },
             ClassifierInput {
                 cloaked: Some(true),
                 on_current_virtual_desktop: None,
@@ -1466,14 +1480,20 @@ mod tests {
     }
 
     #[test]
-    fn shell_core_windows_such_as_start_and_search_are_not_applications() {
-        let classified = classify(ClassifierInput {
-            core_window: true,
-            focused: true,
-            ..visible_window()
-        });
-        assert!(!classified.on_taskbar);
-        assert!(!classified.onboarding_candidate);
+    fn system_app_shell_surfaces_such_as_start_and_search_are_recognized() {
+        for shell in [
+            r"C:\Windows\SystemApps\Microsoft.Windows.StartMenuExperienceHost_cw5n1h2txyewy\StartMenuExperienceHost.exe",
+            r"C:\Windows\SystemApps\MicrosoftWindows.Client.CBS_cw5n1h2txyewy\SearchHost.exe",
+        ] {
+            assert!(is_system_app(shell), "{shell}");
+        }
+        // Ordinary packaged and system applications keep their core windows.
+        for application in [
+            r"C:\Program Files\WindowsApps\Vendor.App_1.0.0.0_x64__abc\App.exe",
+            r"C:\Windows\ImmersiveControlPanel\SystemSettings.exe",
+        ] {
+            assert!(!is_system_app(application), "{application}");
+        }
     }
 
     #[test]
