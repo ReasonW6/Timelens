@@ -475,10 +475,11 @@ fn update_tray_candidates(
 ) -> Vec<TrayTransition> {
     let mut transitions = Vec::new();
     candidates.retain(|key, _| {
+        // Any window of the same process generation ends it, even when that window
+        // now resolves to another identity, such as a helper's launcher.
         let alive = !current.iter().any(|w| {
             w.process_id == key.process_id
                 && w.process_started_at_100ns == key.process_started_at_100ns
-                && w.application_identity == key.application_identity
         }) && process_is_alive(key.process_id, key.process_started_at_100ns);
         if !alive {
             transitions.push(tray_transition(
@@ -761,14 +762,20 @@ fn classify(input: ClassifierInput) -> Classification {
         && !input.core_window
         && (!input.has_owner || input.app_window)
         && (!input.tool_window || input.app_window)
-        && !input.no_activate;
+        && (!input.no_activate || input.app_window);
     let cloak_allows_onboarding = !input.cloaked.unwrap_or(false)
         || input.on_current_virtual_desktop == Some(false)
         || input.focused;
     // The window has a taskbar button on this or another virtual desktop. Hidden,
     // tool and cloaked-away windows have none, and minimized windows keep theirs.
-    let on_taskbar = structural_candidate && input.visible && cloak_allows_onboarding;
-    let onboarding_candidate = on_taskbar && input.monitor_present && input.has_area;
+    // Unknown desktop membership keeps a cloaked window until a later query.
+    let on_taskbar = structural_candidate
+        && input.visible
+        && (!input.cloaked.unwrap_or(false)
+            || input.on_current_virtual_desktop != Some(true)
+            || input.focused);
+    let onboarding_candidate =
+        on_taskbar && cloak_allows_onboarding && input.monitor_present && input.has_area;
     let displayed = structural_candidate
         && input.visible
         && !input.minimized
@@ -1396,7 +1403,12 @@ mod tests {
         };
         let mut candidates = HashMap::from([(key.clone(), TrayCandidate)]);
         assert!(update_tray_candidates(&mut candidates, &[], 100, 10, |_, _| true).is_empty());
-        let ended = update_tray_candidates(&mut candidates, &[window], 200, 110, |_, _| true);
+        // The window may now resolve to another identity, such as a helper's launcher.
+        let reopened = WindowObservation {
+            application_identity: "path:c:\\apps\\launcher.exe".to_owned(),
+            ..window
+        };
+        let ended = update_tray_candidates(&mut candidates, &[reopened], 200, 110, |_, _| true);
         assert_eq!(ended[0].kind, TrayTransitionKind::Ended);
         assert!(candidates.is_empty());
 
@@ -1425,6 +1437,22 @@ mod tests {
             },
         ] {
             assert!(!classify(input).on_taskbar);
+        }
+        // A cloaked window stays open while its desktop membership is unknown,
+        // and an app window keeps its button despite WS_EX_NOACTIVATE.
+        for input in [
+            ClassifierInput {
+                cloaked: Some(true),
+                on_current_virtual_desktop: None,
+                ..visible_window()
+            },
+            ClassifierInput {
+                no_activate: true,
+                app_window: true,
+                ..visible_window()
+            },
+        ] {
+            assert!(classify(input).on_taskbar);
         }
         // Minimized windows keep their taskbar button off any monitor.
         assert!(
