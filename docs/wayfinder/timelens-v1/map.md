@@ -38,6 +38,7 @@ Canonical path: docs/wayfinder/timelens-v1/map.md
 - [定义 AI 总结任务合同](issues/09-define-ai-summary-job-contract.md)：多供应商与可选模型、每日/间隔/手动调度、本地分支对话、可编辑提示词、流式推理展示、重试版本和快照能力边界均已锁定。
 - [校准窗口状态分类器](issues/12-calibrate-window-state-classifier.md)：V1 锁定结构候选、用户窗口 onboarding、已追踪状态三层分类；WinEvent 只作增量触发，公开查询作事实源，启动/恢复/低频对账修复缺口。隐藏消息窗不建会话，显式窗口 AUMID 可跨路径归组，完全隐藏后的采集器重启必须由核心回种已知活动会话。
 - [验证性能与安装体积预算](issues/10-validate-performance-and-packaging-budgets.md)：当前主机 Release 证据满足空闲/正常 CPU、100 MiB 常驻内存、20 MiB 安装包代理和 30 天 100 MiB 非截图数据预算；30 天合成库为 18.83 MiB，最终三进程安装器保守代理上界为 6.52 MiB。UI、观测器和核心重任务叠加的短时峰值为 111.32 MiB，因此重任务必须串行调度，最终签名 Inno 包及常驻/按需峰值仍是发布验收门槛。
+- [只以任务栏窗口计时](issues/16-count-only-taskbar-windows.md)：后台只含仍在任务栏的窗口，隐藏到通知区域即结束窗口实例且不再推断托盘后台（取代票据 05 相应结论）；“开始”“搜索”等外壳面板不计；`*helper` 进程的窗口归属于从安装目录启动它的主程序。
 
 ## Not yet specified
 

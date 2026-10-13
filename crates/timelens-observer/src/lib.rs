@@ -18,7 +18,7 @@ use windows::{
     Win32::{
         Foundation::{CloseHandle, FILETIME, HANDLE, HWND, LPARAM, PROPERTYKEY, RECT},
         Graphics::{
-            Dwm::{DWMWA_CLOAKED, DwmGetWindowAttribute},
+            Dwm::{DWM_CLOAKED_APP, DWMWA_CLOAKED, DwmGetWindowAttribute},
             Gdi::{MONITOR_DEFAULTTONULL, MonitorFromWindow},
         },
         Storage::Packaging::Appx::{GetApplicationUserModelId, GetPackageFullName},
@@ -27,6 +27,10 @@ use windows::{
             Com::{
                 CLSCTX_ALL, COINIT_MULTITHREADED, CoCreateInstance, CoInitializeEx, CoTaskMemFree,
                 CoUninitialize,
+            },
+            Diagnostics::ToolHelp::{
+                CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW,
+                TH32CS_SNAPPROCESS,
             },
             Threading::{
                 GetProcessTimes, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
@@ -42,7 +46,7 @@ use windows::{
                 EVENT_OBJECT_DESTROY, EVENT_OBJECT_HIDE, EVENT_OBJECT_UNCLOAKED,
                 EVENT_SYSTEM_DESKTOPSWITCH, EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_MINIMIZEEND,
                 EVENT_SYSTEM_MINIMIZESTART, EVENT_SYSTEM_MOVESIZEEND, EnumWindows, GA_ROOT,
-                GW_OWNER, GWL_EXSTYLE, GetAncestor, GetForegroundWindow, GetWindow,
+                GW_OWNER, GWL_EXSTYLE, GetAncestor, GetClassNameW, GetForegroundWindow, GetWindow,
                 GetWindowLongPtrW, GetWindowRect, GetWindowThreadProcessId, IsIconic, IsWindow,
                 IsWindowVisible, MSG, MWMO_INPUTAVAILABLE, MsgWaitForMultipleObjectsEx,
                 OBJID_WINDOW, PM_REMOVE, PeekMessageW, QS_ALLINPUT, TranslateMessage,
@@ -292,7 +296,10 @@ impl WindowObserver {
 
         for hwnd in windows {
             let handle = window_id(hwnd) as usize;
+            // A window that leaves the taskbar, for example by hiding to the
+            // notification area, is no longer an open window instance.
             let Some(facts) = inspect_window(hwnd, foreground, self.virtual_desktop.as_ref())
+                .filter(|facts| facts.on_taskbar)
             else {
                 close_tracked(
                     &mut self.tracked,
@@ -401,7 +408,6 @@ impl WindowObserver {
         let tray_transitions = update_tray_candidates(
             &mut self.tray_candidates,
             &self.current,
-            &transitions,
             observed_at_utc_ms,
             monotonic_ms,
             process_matches,
@@ -457,90 +463,35 @@ struct TrayKey {
 #[derive(Clone, Debug)]
 struct TrayCandidate;
 
+/// Notification-area time is not inferred: an application counts only while it
+/// has a taskbar window. Continuations seeded from an earlier collector still
+/// end once the application shows a window again or exits.
 fn update_tray_candidates(
     candidates: &mut HashMap<TrayKey, TrayCandidate>,
     current: &[WindowObservation],
-    window_transitions: &[WindowTransition],
     observed_at_utc_ms: i64,
     monotonic_ms: u64,
     process_is_alive: impl Fn(u32, u64) -> bool,
 ) -> Vec<TrayTransition> {
-    if candidates.is_empty()
-        && !window_transitions
-            .iter()
-            .any(|t| t.kind == WindowTransitionKind::Closed)
-    {
-        return Vec::new();
-    }
-    if window_transitions.is_empty() {
-        let mut transitions = Vec::new();
-        candidates.retain(|key, _| {
-            let alive = !current.iter().any(|w| {
-                w.process_id == key.process_id
-                    && w.process_started_at_100ns == key.process_started_at_100ns
-                    && w.application_identity == key.application_identity
-            }) && process_is_alive(key.process_id, key.process_started_at_100ns);
-            if !alive {
-                transitions.push(tray_transition(
-                    TrayTransitionKind::Ended,
-                    key.clone(),
-                    observed_at_utc_ms,
-                    monotonic_ms,
-                ));
-            }
-            alive
-        });
-        return transitions;
-    }
-    let current_keys = current.iter().map(tray_key).collect::<HashSet<_>>();
     let mut transitions = Vec::new();
-
-    let ended = candidates
-        .keys()
-        .filter(|key| {
-            current_keys.contains(*key)
-                || !process_is_alive(key.process_id, key.process_started_at_100ns)
-        })
-        .cloned()
-        .collect::<Vec<_>>();
-    for key in ended {
-        candidates.remove(&key);
-        transitions.push(tray_transition(
-            TrayTransitionKind::Ended,
-            key,
-            observed_at_utc_ms,
-            monotonic_ms,
-        ));
-    }
-
-    let closed_keys = window_transitions
-        .iter()
-        .filter(|transition| transition.kind == WindowTransitionKind::Closed)
-        .map(|transition| tray_key(&transition.window))
-        .collect::<HashSet<_>>();
-    for key in closed_keys {
-        if !current_keys.contains(&key)
-            && !candidates.contains_key(&key)
-            && process_is_alive(key.process_id, key.process_started_at_100ns)
-        {
-            candidates.insert(key.clone(), TrayCandidate);
+    candidates.retain(|key, _| {
+        // Any window of the same process generation ends it, even when that window
+        // now resolves to another identity, such as a helper's launcher.
+        let alive = !current.iter().any(|w| {
+            w.process_id == key.process_id
+                && w.process_started_at_100ns == key.process_started_at_100ns
+        }) && process_is_alive(key.process_id, key.process_started_at_100ns);
+        if !alive {
             transitions.push(tray_transition(
-                TrayTransitionKind::Started,
-                key,
+                TrayTransitionKind::Ended,
+                key.clone(),
                 observed_at_utc_ms,
                 monotonic_ms,
             ));
         }
-    }
+        alive
+    });
     transitions
-}
-
-fn tray_key(window: &WindowObservation) -> TrayKey {
-    TrayKey {
-        process_id: window.process_id,
-        process_started_at_100ns: window.process_started_at_100ns,
-        application_identity: window.application_identity.clone(),
-    }
 }
 
 fn tray_transition(
@@ -771,6 +722,7 @@ fn close_tracked(
 
 struct WindowFacts {
     process_id: u32,
+    on_taskbar: bool,
     onboarding_candidate: bool,
     displayed: bool,
     focused: bool,
@@ -788,6 +740,7 @@ struct ClassifierInput {
     visible: bool,
     minimized: bool,
     cloaked: Option<bool>,
+    app_cloaked: bool,
     monitor_present: bool,
     has_area: bool,
     on_current_virtual_desktop: Option<bool>,
@@ -796,6 +749,7 @@ struct ClassifierInput {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct Classification {
+    on_taskbar: bool,
     onboarding_candidate: bool,
     displayed: bool,
     focused: bool,
@@ -805,15 +759,22 @@ fn classify(input: ClassifierInput) -> Classification {
     let structural_candidate = input.root_is_self
         && (!input.has_owner || input.app_window)
         && (!input.tool_window || input.app_window)
-        && !input.no_activate;
+        && (!input.no_activate || input.app_window);
     let cloak_allows_onboarding = !input.cloaked.unwrap_or(false)
         || input.on_current_virtual_desktop == Some(false)
         || input.focused;
-    let onboarding_candidate = structural_candidate
+    // The window has a taskbar button on this or another virtual desktop. Hidden,
+    // tool and cloaked-away windows have none, and minimized windows keep theirs.
+    // Unknown desktop membership keeps a cloaked window until a later query, and
+    // a window cloaked only by its own application keeps its button.
+    let on_taskbar = structural_candidate
         && input.visible
-        && input.monitor_present
-        && input.has_area
-        && cloak_allows_onboarding;
+        && (!input.cloaked.unwrap_or(false)
+            || input.app_cloaked
+            || input.on_current_virtual_desktop != Some(true)
+            || input.focused);
+    let onboarding_candidate =
+        on_taskbar && cloak_allows_onboarding && input.monitor_present && input.has_area;
     let displayed = structural_candidate
         && input.visible
         && !input.minimized
@@ -822,9 +783,12 @@ fn classify(input: ClassifierInput) -> Classification {
         && input.has_area
         && input.on_current_virtual_desktop.unwrap_or(true);
     Classification {
+        on_taskbar,
         onboarding_candidate,
         displayed,
-        focused: input.focused,
+        // Windows may leave the foreground on a minimized window that is not on
+        // screen; it is not focused until restored.
+        focused: input.focused && !input.minimized,
     }
 }
 
@@ -860,7 +824,7 @@ fn inspect_window(
     let extended_style = unsafe { GetWindowLongPtrW(hwnd, GWL_EXSTYLE) } as u32;
     let visible = unsafe { IsWindowVisible(hwnd) }.as_bool();
     let minimized = unsafe { IsIconic(hwnd) }.as_bool();
-    let cloaked = window_cloaked(hwnd);
+    let cloak = window_cloak(hwnd);
     let rect = window_rect(hwnd);
     let monitor_present = !unsafe { MonitorFromWindow(hwnd, MONITOR_DEFAULTTONULL) }.is_invalid();
     let (on_current_virtual_desktop, virtual_desktop_id) = virtual_desktop
@@ -885,7 +849,8 @@ fn inspect_window(
         no_activate: extended_style & WS_EX_NOACTIVATE.0 != 0,
         visible,
         minimized,
-        cloaked,
+        cloaked: cloak.map(|value| value != 0),
+        app_cloaked: cloak == Some(DWM_CLOAKED_APP),
         monitor_present,
         has_area: rect.is_some_and(|value| value.right > value.left && value.bottom > value.top),
         on_current_virtual_desktop,
@@ -894,6 +859,7 @@ fn inspect_window(
 
     Some(WindowFacts {
         process_id,
+        on_taskbar: classification.on_taskbar,
         onboarding_candidate: classification.onboarding_candidate,
         displayed: classification.displayed,
         focused: classification.focused,
@@ -903,6 +869,24 @@ fn inspect_window(
 }
 
 fn process_info(process_id: u32) -> Option<ProcessInfo> {
+    let mut info = read_process_info(process_id)?;
+    if let Some(launcher) = info
+        .path
+        .as_deref()
+        .filter(|path| is_window_helper(path))
+        .and_then(|helper| helper_launcher(process_id, info.started_at_100ns, helper))
+    {
+        // Identity and metadata come from the launcher; window and PID-reuse
+        // checks still use the helper process that owns the window.
+        info = ProcessInfo {
+            started_at_100ns: info.started_at_100ns,
+            ..launcher
+        };
+    }
+    Some(info)
+}
+
+fn read_process_info(process_id: u32) -> Option<ProcessInfo> {
     let handle =
         unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, process_id) }.ok()?;
     let handle = ProcessHandle(handle);
@@ -926,6 +910,62 @@ fn process_info(process_id: u32) -> Option<ProcessInfo> {
         app_user_model_id: query_process_string(handle.0, GetApplicationUserModelId),
         package_identity: query_process_string(handle.0, GetPackageFullName),
     })
+}
+
+/// Some programs draw their main window from a helper process, as Steam does with
+/// `steamwebhelper.exe`. Such a window belongs to the program that started the
+/// helper from its own installation folder, which is what the taskbar presents.
+fn is_window_helper(path: &str) -> bool {
+    let path = normalize_path(path);
+    let name = path.rsplit('\\').next().unwrap_or_default();
+    name.rsplit_once('.')
+        .map_or(name, |(stem, _)| stem)
+        .ends_with("helper")
+}
+
+fn installs_helper(launcher: &str, helper: &str) -> bool {
+    let launcher = normalize_path(launcher);
+    let helper = normalize_path(helper);
+    launcher != helper
+        && launcher
+            .rsplit_once('\\')
+            .is_some_and(|(folder, _)| helper.starts_with(&format!("{folder}\\")))
+}
+
+fn helper_launcher(process_id: u32, started_at_100ns: u64, helper: &str) -> Option<ProcessInfo> {
+    let (mut child, mut child_started) = (process_id, started_at_100ns);
+    // Browser-style helpers may be started by another copy of the same helper.
+    for _ in 0..4 {
+        let parent_id = parent_process_id(child)?;
+        let parent = read_process_info(parent_id)?;
+        // A parent started after its child is an unrelated process reusing the PID.
+        if parent.started_at_100ns > child_started {
+            return None;
+        }
+        let path = parent.path.as_deref()?;
+        if normalize_path(path) != normalize_path(helper) {
+            return installs_helper(path, helper).then_some(parent);
+        }
+        child = parent_id;
+        child_started = parent.started_at_100ns;
+    }
+    None
+}
+
+fn parent_process_id(process_id: u32) -> Option<u32> {
+    let snapshot = ProcessHandle(unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) }.ok()?);
+    let mut entry = PROCESSENTRY32W {
+        dwSize: std::mem::size_of::<PROCESSENTRY32W>() as u32,
+        ..Default::default()
+    };
+    let mut found = unsafe { Process32FirstW(snapshot.0, &mut entry) }.is_ok();
+    while found {
+        if entry.th32ProcessID == process_id {
+            return Some(entry.th32ParentProcessID);
+        }
+        found = unsafe { Process32NextW(snapshot.0, &mut entry) }.is_ok();
+    }
+    None
 }
 
 fn process_matches(process_id: u32, expected_started_at_100ns: u64) -> bool {
@@ -988,7 +1028,9 @@ fn query_process_string(
 }
 
 fn resolve_identity(hwnd: HWND, process: &ProcessInfo) -> Option<ResolvedIdentity> {
-    if process.path.as_deref().is_some_and(is_one_time_installer) {
+    if process.path.as_deref().is_some_and(is_one_time_installer)
+        || (process.path.as_deref().is_some_and(is_system_app) && is_core_window(hwnd))
+    {
         return None;
     }
     let window_aumid = window_app_user_model_id(hwnd);
@@ -1079,7 +1121,20 @@ fn window_rect(hwnd: HWND) -> Option<RECT> {
     Some(rect)
 }
 
-fn window_cloaked(hwnd: HWND) -> Option<bool> {
+/// Start, Search, the notification center, the touch keyboard and the lock screen
+/// are top-level core windows of Windows' own system apps. A packaged application
+/// shows its core window inside an ApplicationFrameHost frame instead.
+fn is_system_app(path: &str) -> bool {
+    normalize_path(path).contains(r"\windows\systemapps\")
+}
+
+fn is_core_window(hwnd: HWND) -> bool {
+    let mut class = [0_u16; 32];
+    let length = unsafe { GetClassNameW(hwnd, &mut class) }.max(0) as usize;
+    String::from_utf16_lossy(&class[..length]) == "Windows.UI.Core.CoreWindow"
+}
+
+fn window_cloak(hwnd: HWND) -> Option<u32> {
     let mut value = 0_u32;
     unsafe {
         DwmGetWindowAttribute(
@@ -1090,7 +1145,7 @@ fn window_cloaked(hwnd: HWND) -> Option<bool> {
         )
     }
     .ok()?;
-    Some(value != 0)
+    Some(value)
 }
 
 fn window_id(hwnd: HWND) -> u64 {
@@ -1292,6 +1347,18 @@ mod tests {
     }
 
     #[test]
+    fn minimized_foreground_window_is_not_focused() {
+        let classified = classify(ClassifierInput {
+            minimized: true,
+            focused: true,
+            ..visible_window()
+        });
+        assert!(classified.on_taskbar);
+        assert!(!classified.displayed);
+        assert!(!classified.focused);
+    }
+
+    #[test]
     fn other_desktop_cloaked_window_can_onboard_as_background() {
         let classified = classify(ClassifierInput {
             cloaked: Some(true),
@@ -1328,73 +1395,129 @@ mod tests {
     }
 
     #[test]
-    fn tray_background_starts_after_the_last_window_and_ends_on_process_exit() {
-        let window = observation(false, false);
-        let closed = WindowTransition {
-            kind: WindowTransitionKind::Closed,
-            observed_at_utc_ms: 100,
-            monotonic_ms: 10,
-            window: window.clone(),
-        };
+    fn closing_the_last_window_does_not_start_tray_background() {
         let mut candidates = HashMap::new();
-        let started = update_tray_candidates(
-            &mut candidates,
-            &[],
-            &[closed],
-            100,
-            10,
-            |process_id, started_at| process_id == 20 && started_at == 30,
-        );
-        assert_eq!(started.len(), 1);
-        assert_eq!(started[0].kind, TrayTransitionKind::Started);
+        assert!(update_tray_candidates(&mut candidates, &[], 100, 10, |_, _| true).is_empty());
+        assert!(candidates.is_empty());
+    }
 
-        let ended = update_tray_candidates(&mut candidates, &[], &[], 200, 110, |_, _| false);
-        assert_eq!(ended.len(), 1);
+    #[test]
+    fn seeded_tray_background_ends_when_a_window_returns_or_the_process_exits() {
+        let window = observation(false, false);
+        let key = TrayKey {
+            process_id: window.process_id,
+            process_started_at_100ns: window.process_started_at_100ns,
+            application_identity: window.application_identity.clone(),
+        };
+        let mut candidates = HashMap::from([(key.clone(), TrayCandidate)]);
+        assert!(update_tray_candidates(&mut candidates, &[], 100, 10, |_, _| true).is_empty());
+        // The window may now resolve to another identity, such as a helper's launcher.
+        let reopened = WindowObservation {
+            application_identity: "path:c:\\apps\\launcher.exe".to_owned(),
+            ..window
+        };
+        let ended = update_tray_candidates(&mut candidates, &[reopened], 200, 110, |_, _| true);
+        assert_eq!(ended[0].kind, TrayTransitionKind::Ended);
+        assert!(candidates.is_empty());
+
+        candidates.insert(key, TrayCandidate);
+        let ended = update_tray_candidates(&mut candidates, &[], 300, 210, |_, _| false);
         assert_eq!(ended[0].kind, TrayTransitionKind::Ended);
         assert!(candidates.is_empty());
     }
 
     #[test]
-    fn another_window_for_the_same_application_prevents_or_ends_tray_inference() {
-        let mut first = observation(false, false);
-        let second = WindowObservation {
-            window_id: 11,
-            ..first.clone()
-        };
-        let closed = WindowTransition {
-            kind: WindowTransitionKind::Closed,
-            observed_at_utc_ms: 100,
-            monotonic_ms: 10,
-            window: first.clone(),
-        };
-        let mut candidates = HashMap::new();
+    fn windows_without_a_taskbar_button_are_not_open() {
+        // Hidden to the notification area, turned into a tool window, or
+        // cloaked away on the current desktop.
+        for input in [
+            ClassifierInput {
+                visible: false,
+                ..visible_window()
+            },
+            ClassifierInput {
+                tool_window: true,
+                ..visible_window()
+            },
+            ClassifierInput {
+                cloaked: Some(true),
+                ..visible_window()
+            },
+        ] {
+            assert!(!classify(input).on_taskbar);
+        }
+        // A cloaked window stays open while its desktop membership is unknown or
+        // when only its application cloaked it, and an app window keeps its
+        // button despite WS_EX_NOACTIVATE.
+        for input in [
+            ClassifierInput {
+                cloaked: Some(true),
+                app_cloaked: true,
+                ..visible_window()
+            },
+            ClassifierInput {
+                cloaked: Some(true),
+                on_current_virtual_desktop: None,
+                ..visible_window()
+            },
+            ClassifierInput {
+                no_activate: true,
+                app_window: true,
+                ..visible_window()
+            },
+        ] {
+            assert!(classify(input).on_taskbar);
+        }
+        // Minimized windows keep their taskbar button off any monitor.
         assert!(
-            update_tray_candidates(
-                &mut candidates,
-                std::slice::from_ref(&second),
-                std::slice::from_ref(&closed),
-                100,
-                10,
-                |_, _| true,
-            )
-            .is_empty()
+            classify(ClassifierInput {
+                minimized: true,
+                monitor_present: false,
+                ..visible_window()
+            })
+            .on_taskbar
         );
+    }
 
-        first.window_id = 12;
-        let started = update_tray_candidates(
-            &mut candidates,
-            &[],
-            &[WindowTransition {
-                window: first,
-                ..closed
-            }],
-            200,
-            110,
-            |_, _| true,
-        );
-        assert_eq!(started[0].kind, TrayTransitionKind::Started);
-        let ended = update_tray_candidates(&mut candidates, &[second], &[], 300, 210, |_, _| true);
-        assert_eq!(ended[0].kind, TrayTransitionKind::Ended);
+    #[test]
+    fn system_app_shell_surfaces_such_as_start_and_search_are_recognized() {
+        for shell in [
+            r"C:\Windows\SystemApps\Microsoft.Windows.StartMenuExperienceHost_cw5n1h2txyewy\StartMenuExperienceHost.exe",
+            r"C:\Windows\SystemApps\MicrosoftWindows.Client.CBS_cw5n1h2txyewy\SearchHost.exe",
+        ] {
+            assert!(is_system_app(shell), "{shell}");
+        }
+        // Ordinary packaged and system applications keep their core windows.
+        for application in [
+            r"C:\Program Files\WindowsApps\Vendor.App_1.0.0.0_x64__abc\App.exe",
+            r"C:\Windows\ImmersiveControlPanel\SystemSettings.exe",
+        ] {
+            assert!(!is_system_app(application), "{application}");
+        }
+    }
+
+    #[test]
+    fn helper_windows_belong_to_the_launcher_that_installs_them() {
+        assert!(is_window_helper(
+            r"C:\Program Files (x86)\Steam\bin\cef\cef.win7x64\steamwebhelper.exe"
+        ));
+        assert!(installs_helper(
+            r"C:\Program Files (x86)\Steam\steam.exe",
+            r"C:\Program Files (x86)\Steam\bin\cef\cef.win7x64\steamwebhelper.exe"
+        ));
+        // Games launched from a library folder are applications in their own right.
+        assert!(!is_window_helper(
+            r"C:\Program Files (x86)\Steam\steamapps\common\Game\Game.exe"
+        ));
+        // A helper started from elsewhere keeps its own identity.
+        assert!(!installs_helper(
+            r"C:\Windows\explorer.exe",
+            r"D:\Tools\Helper\ToolHelper.exe"
+        ));
+        assert!(!installs_helper(
+            r"C:\Apps\Helper.exe",
+            r"C:\Apps\Helper.exe"
+        ));
     }
 
     #[test]

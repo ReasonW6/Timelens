@@ -56,6 +56,7 @@ windows = { version = "0.62.2", features = [
     "Win32_Storage_Packaging_Appx",
     "Win32_System_Com",
     "Win32_System_Com_StructuredStorage",
+    "Win32_System_Diagnostics_ToolHelp",
     "Win32_System_RemoteDesktop",
     "Win32_System_StationsAndDesktops",
     "Win32_System_TaskScheduler",

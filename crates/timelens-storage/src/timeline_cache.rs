@@ -275,7 +275,7 @@ impl Storage {
             *index += 1;
         }
         let mut states = self.connection.prepare(
-            "SELECT s.window_instance_id, w.application_identity, s.started_utc_ms, s.displayed, s.focused
+            "SELECT s.window_instance_id, w.application_identity, s.started_utc_ms, s.displayed OR s.focused, s.focused
              FROM window_state_intervals s JOIN window_instances w ON w.instance_id=s.window_instance_id
              WHERE s.started_utc_ms < ?2 AND COALESCE(s.ended_utc_ms, ?2 + 1) > ?2"
         )?;
@@ -522,6 +522,27 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let s = Storage::open(dir.path()).unwrap();
         (dir, s)
+    }
+
+    #[test]
+    fn focused_time_always_counts_as_displayed() {
+        let (_dir, s) = fixture();
+        // A full-screen game can take the foreground before it is seen restored.
+        ingest(
+            &s,
+            1,
+            vec![
+                window(1, "game", 0, WindowTransitionKind::Opened, false, true),
+                window(1, "game", 100, WindowTransitionKind::Updated, true, true),
+            ],
+        );
+        for end in [100, 200, 300] {
+            let view = check(&s, -1, end);
+            let (app, window) = (&view.applications[0], &view.applications[0].windows[0]);
+            assert_eq!(app.displayed_ms, app.focused_ms);
+            assert_eq!(window.displayed_ms, window.focused_ms);
+            assert!(app.segments.iter().all(|segment| segment.displayed));
+        }
     }
 
     #[test]

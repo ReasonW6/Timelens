@@ -574,10 +574,12 @@ impl Storage {
             }
         }
         {
+            // The window receiving input is on screen, so focused time is always
+            // displayed time even when the collector saw it before the restore.
             let mut statement = self.connection.prepare(
                 "SELECT states.window_instance_id, instances.application_identity,
                         states.started_utc_ms, COALESCE(states.ended_utc_ms, ?2),
-                        states.displayed, states.focused
+                        states.displayed OR states.focused, states.focused
                  FROM window_state_intervals AS states
                  JOIN window_instances AS instances
                    ON instances.instance_id = states.window_instance_id
