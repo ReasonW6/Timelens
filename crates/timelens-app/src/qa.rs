@@ -78,6 +78,17 @@ const STEPS: &[Step] = &[
         w.invoke_report_generate();
     }),
     ("07-ai", |w| w.invoke_navigate(4)),
+    ("07a-ai-reader", |w| {
+        let ai = w.global::<AiState>();
+        if ai.get_history().row_count() > 0 {
+            ai.invoke_choose_history(0);
+        }
+    }),
+    ("07b-ai-snapshots", |w| {
+        let ai = w.global::<AiState>();
+        ai.invoke_list_images();
+        ai.set_page(6);
+    }),
     ("08-settings-privacy", |w| settings(w, 0)),
     ("09-settings-snapshots", |w| settings(w, 1)),
     ("10-settings-rules", |w| settings(w, 2)),
