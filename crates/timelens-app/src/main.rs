@@ -260,16 +260,24 @@ struct UiState {
     apps: AppsState,
 }
 
+/// What the application totals cover: all records, or the shared range by its
+/// start and planned end.
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum AppsScope {
+    All,
+    Range(i64, i64),
+}
+
 /// The application totals, gathered off the UI thread: all records can take a
 /// while to total, and storage stays locked meanwhile.
 #[derive(Default)]
 struct AppsState {
-    /// When the totals were last requested and whether they covered today only;
-    /// `None` requests them again.
-    requested: Option<(bool, Instant)>,
-    pending: Option<(bool, mpsc::Receiver<Result<Arc<TimelineSnapshot>>>)>,
+    /// When the totals were last requested and for which scope; `None`
+    /// requests them again.
+    requested: Option<(AppsScope, Instant)>,
+    pending: Option<(AppsScope, mpsc::Receiver<Result<Arc<TimelineSnapshot>>>)>,
     /// The totals on screen, kept to show another selection without a reload.
-    shown: Option<(bool, Arc<TimelineSnapshot>)>,
+    shown: Option<(AppsScope, Arc<TimelineSnapshot>)>,
     /// The history generation these totals belong to; a merge changes it.
     generation: u64,
 }
@@ -400,10 +408,10 @@ fn run_window(
             state.selected_identity = state.application_identities.get(index as usize).cloned();
             let shown = state.apps.shown.clone();
             drop(state);
-            if let Some((today, snapshot)) = shown
+            if let Some((scope, snapshot)) = shown
                 && let Some(window) = weak.upgrade()
             {
-                render_apps(&window, &ui_state, &snapshot, today);
+                render_apps(&window, &ui_state, &snapshot, scope == AppsScope::All);
             }
         });
     }
@@ -746,9 +754,19 @@ fn refresh_timeline(
     Ok(true)
 }
 
-/// How often the application totals are gathered while their list is on screen.
-const TODAY_REFRESH: Duration = Duration::from_secs(2);
-const ALL_TIME_REFRESH: Duration = Duration::from_secs(30);
+/// How often the application totals are gathered while their list is on screen:
+/// often while the range runs with the clock, rarely otherwise.
+const LIVE_REFRESH: Duration = Duration::from_secs(2);
+const SETTLED_REFRESH: Duration = Duration::from_secs(30);
+
+/// The scope the statistics page asks for.
+fn apps_scope(window: &AppWindow, state: &UiState) -> AppsScope {
+    if window.get_stats_all() {
+        AppsScope::All
+    } else {
+        AppsScope::Range(state.range_started_utc_ms, state.horizon_ended_utc_ms)
+    }
+}
 
 /// Start gathering the application totals in the background when their list is
 /// on screen and due; `poll_apps` shows them once ready.
@@ -757,12 +775,13 @@ fn request_apps(
     storage: &Arc<Mutex<Storage>>,
     ui_state: &Rc<RefCell<UiState>>,
 ) {
-    let today = window.get_apps_today();
     let visible = window.window().is_visible()
         && !window.window().is_minimized()
         && window.get_page() == 3
         && window.get_stats_tab() == 0;
     let mut state = ui_state.borrow_mut();
+    let scope = apps_scope(window, &state);
+    let live = state.follow_now;
     let apps = &mut state.apps;
     if apps.generation != history::generation() {
         // Applications were merged or split: drop what was gathered before.
@@ -771,36 +790,32 @@ fn request_apps(
             ..AppsState::default()
         };
     }
-    let interval = if today {
-        TODAY_REFRESH
+    let interval = if scope != AppsScope::All && live {
+        LIVE_REFRESH
     } else {
-        ALL_TIME_REFRESH
+        SETTLED_REFRESH
     };
     let due = apps
         .requested
-        .is_none_or(|(was_today, at)| was_today != today || at.elapsed() >= interval);
+        .is_none_or(|(was, at)| was != scope || at.elapsed() >= interval);
     if !visible || !due || apps.pending.is_some() {
         return;
     }
-    apps.requested = Some((today, Instant::now()));
+    apps.requested = Some((scope, Instant::now()));
     let (sender, receiver) = mpsc::channel();
-    apps.pending = Some((today, receiver));
+    apps.pending = Some((scope, receiver));
     let storage = Arc::clone(storage);
     thread::spawn(move || {
         let now = unix_time_ms();
-        let started = if today {
-            timeline_view::selected_day_bounds(now, 0).map_or(now - 1, |(start, _)| start)
-        } else {
-            1
-        };
         let result = storage
             .lock()
             .map_err(|_| anyhow::anyhow!("storage lock poisoned"))
             .and_then(|storage| {
-                Ok(if today {
-                    storage.timeline_snapshot_cached(started, now)?
-                } else {
-                    Arc::new(storage.timeline_snapshot(started, now)?)
+                Ok(match scope {
+                    AppsScope::All => Arc::new(storage.timeline_snapshot(1, now)?),
+                    AppsScope::Range(start, end) => {
+                        storage.timeline_snapshot_cached(start, end.min(now).max(start + 1))?
+                    }
                 })
             });
         let _ = sender.send(result);
@@ -810,10 +825,10 @@ fn request_apps(
 /// Show gathered application totals, unless the scope changed meanwhile.
 fn poll_apps(window: &AppWindow, ui_state: &Rc<RefCell<UiState>>) -> Result<()> {
     let mut state = ui_state.borrow_mut();
-    let Some((today, receiver)) = &state.apps.pending else {
+    let Some((scope, receiver)) = &state.apps.pending else {
         return Ok(());
     };
-    let today = *today;
+    let scope = *scope;
     let result = match receiver.try_recv() {
         Ok(result) => result,
         Err(mpsc::TryRecvError::Empty) => return Ok(()),
@@ -824,12 +839,12 @@ fn poll_apps(window: &AppWindow, ui_state: &Rc<RefCell<UiState>>) -> Result<()> 
     };
     state.apps.pending = None;
     let snapshot = result?;
-    if today != window.get_apps_today() {
+    if scope != apps_scope(window, &state) {
         return Ok(());
     }
-    state.apps.shown = Some((today, snapshot.clone()));
+    state.apps.shown = Some((scope, snapshot.clone()));
     drop(state);
-    render_apps(window, ui_state, &snapshot, today);
+    render_apps(window, ui_state, &snapshot, scope == AppsScope::All);
     Ok(())
 }
 
@@ -861,15 +876,15 @@ fn render_snapshot(
     timeline_ui::render(window, ui_state, &snapshot);
 }
 
-/// The application totals: everything recorded, or today only.
+/// The application totals: everything recorded, or the chosen range.
 fn render_apps(
     window: &AppWindow,
     ui_state: &Rc<RefCell<UiState>>,
     snapshot: &TimelineSnapshot,
-    today: bool,
+    all: bool,
 ) {
     // All history starts with the first record, not at the query's lower bound.
-    let range_start = if !today {
+    let range_start = if all {
         snapshot
             .applications
             .iter()
@@ -956,7 +971,7 @@ fn render_apps(
         .into(),
     );
     window.set_focus_total(format_duration(timeline_view::total_focus_ms(snapshot)).into());
-    window.set_apps_range(timeline_ui::apps_range_label(snapshot, range_start, today).into());
+    window.set_apps_range(timeline_ui::apps_range_label(snapshot, range_start, all).into());
     window.set_apps(ui_model::sync(window.get_apps(), app_rows, |a, b| {
         a.identity == b.identity
     }));
@@ -964,13 +979,16 @@ fn render_apps(
     window.set_selected_index(selected_index);
 
     let selected = (selected_index >= 0).then(|| &snapshot.applications[selected_index as usize]);
-    render_application(window, selected, snapshot);
+    render_application(window, selected, snapshot, range_start);
 }
 
+/// Show one application's totals; its activity bar spans `range_start` to the
+/// end of the snapshot.
 fn render_application(
     window: &AppWindow,
     application: Option<&TimelineApplication>,
     snapshot: &TimelineSnapshot,
+    range_start: i64,
 ) {
     let Some(application) = application else {
         window.set_selected_name("尚无应用数据".into());
@@ -1025,15 +1043,13 @@ fn render_application(
 
     let span = snapshot
         .range_ended_utc_ms
-        .saturating_sub(snapshot.range_started_utc_ms)
+        .saturating_sub(range_start)
         .max(1) as f64;
     let segments = application
         .segments
         .iter()
         .map(|segment| SegmentRow {
-            offset: ((segment
-                .started_utc_ms
-                .saturating_sub(snapshot.range_started_utc_ms) as f64
+            offset: ((segment.started_utc_ms.saturating_sub(range_start) as f64
                 / span)
                 .clamp(0.0, 1.0)) as f32,
             width: ((segment.ended_utc_ms.saturating_sub(segment.started_utc_ms) as f64 / span)

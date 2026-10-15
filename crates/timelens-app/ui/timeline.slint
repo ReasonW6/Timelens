@@ -1,7 +1,7 @@
 // The home history: rows of a continuous, chat-history-like timeline, the card
 // stack of applications used together, and the detail pane's accordion items.
 import { Theme, AppIcon } from "theme.slint";
-import { HistoryItem, ShareSlice, StackApp, Participant } from "models.slint";
+import { HistoryItem, ShareSlice, StackApp, Participant, SegmentRow } from "models.slint";
 
 // Shared horizontal grid of history rows.
 global HistoryGrid {
@@ -286,44 +286,89 @@ export component HistoryRow inherits Rectangle {
 }
 
 // Where within an activity an application was focused, shown or behind, and
-// for how long.
-export component AppTimes inherits VerticalLayout {
+// for how long. Pointing at the bar tells the time there and what the
+// application was doing.
+export component AppTimes inherits Rectangle {
     in property <Participant> app;
-    spacing: 10px;
-    Rectangle {
-        height: 14px; border-radius: 4px; background: Theme.surface-2; clip: true;
-        for segment in root.app.segments : Rectangle {
-            x: segment.offset * parent.width; width: max(1px, segment.width * parent.width);
-            y: segment.kind == 2 ? 0px : segment.kind == 1 ? 3px : 6px;
-            height: segment.kind == 2 ? parent.height : segment.kind == 1 ? 8px : 2px;
-            background: segment.kind == 2 ? root.app.tint : segment.kind == 1 ? root.app.tint.with-alpha(0.35) : Theme.ink-4;
+    // Where the pointer is along the bar, from 0 to 1.
+    private property <float> at: clamp(hover.mouse-x / max(1px, bar.width), 0, 1);
+    private property <int> under: root.app.lookup.length == 0 ? -1
+        : root.app.lookup[clamp(floor(root.at * root.app.lookup.length), 0, root.app.lookup.length - 1)];
+    private property <SegmentRow> segment: root.app.segments[max(0, root.under)];
+    pure function two(value: int) -> string { return (value < 10 ? "0" : "") + value; }
+    // A whole minute must not read as the one before through rounding.
+    pure function clock(minute: float) -> string {
+        return root.two(floor(Math.mod(floor(minute + 0.001), 1440) / 60)) + ":" + root.two(Math.mod(floor(minute + 0.001), 60));
+    }
+    pure function at-ratio(ratio: float) -> string { return root.clock(root.app.start-minute + ratio * root.app.span-minutes); }
+    height: rows.preferred-height;
+    vertical-stretch: 0;
+    rows := VerticalLayout {
+        spacing: 10px;
+        bar := Rectangle {
+            height: 14px; border-radius: 4px; background: Theme.surface-2; clip: true;
+            for segment in root.app.segments : Rectangle {
+                x: segment.offset * parent.width; width: max(1px, segment.width * parent.width);
+                y: segment.kind == 2 ? 0px : segment.kind == 1 ? 3px : 6px;
+                height: segment.kind == 2 ? parent.height : segment.kind == 1 ? 8px : 2px;
+                background: segment.kind == 2 ? root.app.tint : segment.kind == 1 ? root.app.tint.with-alpha(0.35) : Theme.ink-4;
+            }
+            if hover.has-hover : Rectangle { x: hover.mouse-x - 1px; width: 2px; background: Theme.ink.with-alpha(0.7); }
+            hover := TouchArea { mouse-cursor: crosshair; }
+        }
+        HorizontalLayout {
+            spacing: 8px;
+            for metric in [
+                { label: "聚焦", value: root.app.focused, swatch: 2 },
+                { label: "前台可见", value: root.app.visible, swatch: 1 },
+                { label: "后台", value: root.app.background, swatch: 0 },
+            ] : Rectangle {
+                horizontal-stretch: 1;
+                height: 54px;
+                border-radius: 8px;
+                background: Theme.surface-2;
+                VerticalLayout {
+                    padding: 8px; spacing: 2px;
+                    HorizontalLayout {
+                        spacing: 5px;
+                        VerticalLayout {
+                            alignment: center;
+                            Rectangle {
+                                width: 8px; height: metric.swatch == 0 ? 2px : 8px; border-radius: 2px;
+                                background: metric.swatch == 2 ? root.app.tint : metric.swatch == 1 ? root.app.tint.with-alpha(0.35) : Theme.ink-4;
+                            }
+                        }
+                        Text { text: metric.label; color: Theme.ink-3; font-size: 11px; }
+                    }
+                    Text { text: metric.value; color: Theme.ink; font-size: 13px; font-weight: 600; font-family: Theme.font-display; }
+                }
+            }
         }
     }
-    HorizontalLayout {
-        spacing: 8px;
-        for metric in [
-            { label: "聚焦", value: root.app.focused, swatch: 2 },
-            { label: "前台可见", value: root.app.visible, swatch: 1 },
-            { label: "后台", value: root.app.background, swatch: 0 },
-        ] : Rectangle {
-            horizontal-stretch: 1;
-            height: 54px;
-            border-radius: 8px;
-            background: Theme.surface-2;
-            VerticalLayout {
-                padding: 8px; spacing: 2px;
-                HorizontalLayout {
-                    spacing: 5px;
-                    VerticalLayout {
-                        alignment: center;
-                        Rectangle {
-                            width: 8px; height: metric.swatch == 0 ? 2px : 8px; border-radius: 2px;
-                            background: metric.swatch == 2 ? root.app.tint : metric.swatch == 1 ? root.app.tint.with-alpha(0.35) : Theme.ink-4;
-                        }
-                    }
-                    Text { text: metric.label; color: Theme.ink-3; font-size: 11px; }
+    // The time under the pointer, and the stretch it falls in, above the bar.
+    if hover.has-hover : Rectangle {
+        x: clamp(hover.mouse-x - self.width / 2, 0px, max(0px, root.width - self.width));
+        y: bar.y - self.height - 6px;
+        width: tip.preferred-width; height: 26px;
+        border-radius: 7px;
+        background: Theme.tooltip;
+        drop-shadow-blur: 10px; drop-shadow-offset-y: 3px; drop-shadow-color: Theme.shadow-strong;
+        tip := HorizontalLayout {
+            padding-left: 9px; padding-right: 9px; spacing: 7px;
+            Text { text: root.at-ratio(root.at); color: Theme.on-tooltip; font-family: Theme.font-display; font-size: 12px; font-weight: 600; vertical-alignment: center; }
+            VerticalLayout { alignment: center; Rectangle { width: 1px; height: 12px; background: Theme.on-tooltip.with-alpha(0.25); } }
+            if root.under >= 0 : VerticalLayout {
+                alignment: center;
+                Rectangle {
+                    width: 8px; height: root.segment.kind == 0 ? 2px : 8px; border-radius: 2px;
+                    background: root.segment.kind == 2 ? root.app.tint : root.segment.kind == 1 ? root.app.tint.mix(Theme.tooltip, 0.5) : Theme.on-tooltip.with-alpha(0.6);
                 }
-                Text { text: metric.value; color: Theme.ink; font-size: 13px; font-weight: 600; font-family: Theme.font-display; }
+            }
+            Text {
+                text: root.under < 0 ? "未打开"
+                    : (root.segment.kind == 2 ? "聚焦 " : root.segment.kind == 1 ? "前台可见 " : "后台 ")
+                        + root.at-ratio(root.segment.offset) + "–" + root.at-ratio(root.segment.offset + root.segment.width);
+                color: Theme.on-tooltip.with-alpha(0.82); font-size: 12px; vertical-alignment: center;
             }
         }
     }

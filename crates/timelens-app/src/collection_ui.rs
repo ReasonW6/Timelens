@@ -1,6 +1,7 @@
 use crate::{AppWindow, ButtonHeat, CollectionState, KeyCell, UiState};
 use anyhow::{Context, Result, anyhow};
 use slint::{ComponentHandle, ModelRc, Timer, TimerMode, VecModel};
+use chrono::TimeZone;
 use std::{
     cell::RefCell,
     rc::Rc,
@@ -85,8 +86,6 @@ pub fn install(
 ) -> Result<Timer> {
     let data = Rc::new(RefCell::new(Data::default()));
     let (sender, receiver) = mpsc::channel::<Result<Option<String>, String>>();
-    w.global::<CollectionState>()
-        .set_date(chrono::Local::now().format("%Y-%m-%d").to_string().into());
     refresh(w, &mut data.borrow_mut(), &*lock(&storage)?)?;
     {
         let weak = w.as_weak();
@@ -288,12 +287,66 @@ pub fn install(
     });
     Ok(timer)
 }
+/// The local dates a range touches, both included, and whether it covers them
+/// whole; `None` stands for all records.
+fn range_dates(range: Option<&UiState>) -> (String, String, bool) {
+    let Some(range) = range else {
+        return ("0000-01-01".into(), "9999-12-31".into(), true);
+    };
+    let date = |timestamp: i64| {
+        chrono::Local
+            .timestamp_millis_opt(timestamp)
+            .single()
+            .map(|t| t.date_naive())
+    };
+    let start = range.range_started_utc_ms;
+    let end = range.range_ended_utc_ms.max(start + 1);
+    let (Some(first), Some(last)) = (date(start), date(end - 1)) else {
+        return (String::new(), String::new(), false);
+    };
+    let midnight = |day: chrono::NaiveDate| {
+        day.and_hms_opt(0, 0, 0)
+            .and_then(|t| chrono::Local.from_local_datetime(&t).earliest())
+            .map(|t| t.timestamp_millis())
+    };
+    // Whole days run from a midnight to a midnight; today counts while it runs.
+    let whole = midnight(first) == Some(start)
+        && last.succ_opt().and_then(midnight) == Some(range.horizon_ended_utc_ms);
+    (
+        first.format("%Y-%m-%d").to_string(),
+        last.format("%Y-%m-%d").to_string(),
+        whole,
+    )
+}
+
+fn date_label(date: &str) -> String {
+    chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d")
+        .map(|d| d.format("%-m月%-d日").to_string())
+        .unwrap_or_else(|_| date.to_owned())
+}
+
 fn statistics(w: &AppWindow, s: &Storage, range: &UiState) -> Result<()> {
     let g = w.global::<CollectionState>();
-    let date = g.get_date();
-    chrono::NaiveDate::parse_from_str(&date, "%Y-%m-%d")?;
-    let frequencies: std::collections::BTreeMap<_, _> =
-        s.physical_key_frequencies(&date)?.into_iter().collect();
+    let all = w.get_stats_all();
+    let (first, last, whole) = range_dates((!all).then_some(range));
+    if first.is_empty() {
+        anyhow::bail!("所选时段不可用");
+    }
+    g.set_scope(
+        if all {
+            "全部记录".to_owned()
+        } else if first == last {
+            date_label(&first)
+        } else {
+            format!("{}–{}", date_label(&first), date_label(&last))
+        }
+        .into(),
+    );
+    g.set_partial_day(!whole);
+    let frequencies: std::collections::BTreeMap<_, _> = s
+        .physical_key_frequencies_between(&first, &last)?
+        .into_iter()
+        .collect();
     let max = KEYBOARD
         .iter()
         .filter_map(|(code, ..)| frequencies.get(code).copied())
@@ -328,7 +381,7 @@ fn statistics(w: &AppWindow, s: &Storage, range: &UiState) -> Result<()> {
         )
         .into()
     });
-    let [_, left, middle, right] = s.daily_input_totals(&date)?;
+    let [_, left, middle, right] = s.input_totals_between(&first, &last)?;
     let most = left.max(middle).max(right).max(1) as f32;
     let heat = |count: u64| ButtonHeat {
         count: count.to_string().into(),
@@ -346,7 +399,11 @@ fn statistics(w: &AppWindow, s: &Storage, range: &UiState) -> Result<()> {
         )
         .into(),
     );
-    let totals = s.system_totals(range.range_started_utc_ms, range.range_ended_utc_ms)?;
+    let totals = if all {
+        s.system_totals(0, crate::unix_time_ms())?
+    } else {
+        s.system_totals(range.range_started_utc_ms, range.range_ended_utc_ms)?
+    };
     g.set_system(if totals.is_empty() {
         "此范围没有系统区间记录".into()
     } else {
@@ -475,7 +532,42 @@ const KEYBOARD: &[(u32, &str, f32, f32, f32, f32)] = &[
 
 #[cfg(test)]
 mod tests {
-    use super::KEYBOARD;
+    use super::{KEYBOARD, range_dates};
+    use crate::UiState;
+    use chrono::TimeZone;
+
+    #[test]
+    fn range_dates_cover_whole_days_and_flag_parts_of_days() {
+        let at = |day: u32, hour: u32| {
+            chrono::Local
+                .with_ymd_and_hms(2026, 9, day, hour, 0, 0)
+                .earliest()
+                .unwrap()
+                .timestamp_millis()
+        };
+        let mut range = UiState::recent_hours(24);
+        range.horizon_started_utc_ms = at(5, 0);
+        range.horizon_ended_utc_ms = at(6, 0);
+        range.range_started_utc_ms = at(5, 0);
+        // A day still running ends at the clock, yet counts whole.
+        range.range_ended_utc_ms = at(5, 10);
+        assert_eq!(
+            range_dates(Some(&range)),
+            ("2026-09-05".into(), "2026-09-05".into(), true)
+        );
+        range.range_started_utc_ms = at(5, 9);
+        range.horizon_ended_utc_ms = at(5, 18);
+        range.range_ended_utc_ms = at(5, 18);
+        assert!(!range_dates(Some(&range)).2);
+        range.range_started_utc_ms = at(1, 12);
+        range.horizon_ended_utc_ms = at(8, 12);
+        range.range_ended_utc_ms = at(8, 12);
+        assert_eq!(
+            range_dates(Some(&range)),
+            ("2026-09-01".into(), "2026-09-08".into(), false)
+        );
+        assert!(range_dates(None).2);
+    }
 
     #[test]
     fn keyboard_has_93_distinct_keys_that_do_not_overlap() {

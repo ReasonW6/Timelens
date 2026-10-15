@@ -145,18 +145,6 @@ export component AiPanel inherits Rectangle {
         spacing: 16px;
 
         if !root.settings-mode : HorizontalLayout {
-            vertical-stretch: 0;
-            spacing: 16px;
-            VerticalLayout {
-                spacing: 5px;
-                Text { text: "AI 总结"; color: Theme.ink; font-size: 26px; font-weight: 600; vertical-stretch: 0; }
-                Note { text: "把一段时间整理成可以回顾的内容。发送前可以预览，结果只保存在本机。"; }
-            }
-            Rectangle { horizontal-stretch: 1; }
-            VerticalLayout { alignment: center; Action { text: "AI 设置"; icon: @image-url("icons/settings.svg"); clicked => { root.open-settings(); } } }
-        }
-
-        if !root.settings-mode : HorizontalLayout {
             Segmented {
                 Segment { text: "总结"; icon: @image-url("icons/sparkles.svg"); selected: AiState.page == 0 || AiState.page == 6; clicked => { AiState.page = 0; } }
                 Segment { text: "提示词"; icon: @image-url("icons/file-description.svg"); selected: AiState.page == 2; clicked => { AiState.page = 2; } }

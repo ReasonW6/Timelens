@@ -25,4 +25,7 @@ export struct HistoryItem {
 // Where each day's rows start and end in the list, for the sticky day header.
 export struct DayAnchor { title: string, subtitle: string, duration: string, apps: string, shares: [ShareSlice], top: length, bottom: length }
 // An application used during the selected activity, with its own times there.
-export struct Participant { name: string, icon: image, tint: color, role: string, focused: string, visible: string, background: string, segments: [SegmentRow] }
+// `lookup` splits the activity into equal steps, each the index of the segment
+// there or -1; `start-minute` is the activity's local start in minutes after
+// midnight and `span-minutes` its length, so a point on the bar reads as a time.
+export struct Participant { name: string, icon: image, tint: color, role: string, focused: string, visible: string, background: string, segments: [SegmentRow], lookup: [int], start-minute: float, span-minutes: float }

@@ -1,5 +1,5 @@
-import { ComboBox, LineEdit, ScrollView } from "std-widgets.slint";
-import { Theme, Action, Label, Note, SectionTitle, Rule, CheckBox, StatusLine, Segmented, Segment, Switch, SettingRow, SettingsHeader, SettingsGroup, SettingExpander } from "theme.slint";
+import { ComboBox, ScrollView } from "std-widgets.slint";
+import { Theme, Action, Badge, Label, Note, SectionTitle, Rule, CheckBox, StatusLine, Segmented, Segment, Switch, SettingRow, SettingsHeader, SettingsGroup, SettingExpander } from "theme.slint";
 
 // A key's position and size are in key units on the 93-key board.
 export struct KeyCell { label: string, count: string, strength: float, x: float, y: float, w: float, h: float }
@@ -22,7 +22,10 @@ export global CollectionState {
     in-out property <bool> delete-confirmed: false;
     in-out property <string> impact;
     in-out property <string> status;
-    in-out property <string> date;
+    // What the key statistics cover, and whether that is only part of a day,
+    // which key and mouse counts, kept per day, cannot show.
+    in-out property <string> scope;
+    in-out property <bool> partial-day;
     in-out property <string> totals;
     in-out property <string> system;
     in-out property <[KeyCell]> keys;
@@ -265,16 +268,14 @@ export component CollectionPanel inherits Rectangle {
                 padding-right: 16px;
                 padding-bottom: 12px;
                 spacing: 16px;
-                Note { text: CollectionState.totals != "" ? CollectionState.totals : "选择日期，查看当天的物理键位统计。"; color: Theme.ink; }
-                Rule { }
                 HorizontalLayout {
                     spacing: 10px;
-                    LineEdit { width: 192px; height: 36px; text <=> CollectionState.date; placeholder-text: "YYYY-MM-DD"; enabled: !CollectionState.busy; }
-                    Action { width: 140px; text: "查看当天键位"; enabled: !CollectionState.busy && CollectionState.date != ""; clicked => { CollectionState.action(7); } }
+                    SectionTitle { text: "物理键位热度"; vertical-alignment: center; }
+                    VerticalLayout { alignment: center; Badge { text: CollectionState.scope; tone: Theme.brand-ink; fill: Theme.brand-soft; } }
                     Rectangle { horizontal-stretch: 1; }
+                    Note { text: CollectionState.totals; font-size: 12px; wrap: no-wrap; vertical-alignment: center; }
                 }
-                SectionTitle { text: "物理键位热度"; }
-                Note { text: "按键抬起后再次按下计为一次。键帽标记物理位置，不代表输入内容。"; }
+                Note { text: "按键抬起后再次按下计为一次。键帽标记物理位置，不代表输入内容。" + (CollectionState.partial-day ? "键位与鼠标按整天保存，这里显示所选时段所在日期的全天数据。" : ""); }
                 keyboard-scroll := ScrollView {
                     height: root.key-unit * 6.5 + 14px;
                     vertical-stretch: 0;
@@ -318,8 +319,8 @@ export component CollectionPanel inherits Rectangle {
                 }
                 if CollectionState.unplaced-keys != "" : Note { text: CollectionState.unplaced-keys; font-size: 12px; }
                 Rule { }
-                SectionTitle { text: "鼠标按键热度"; font-size: 18px; }
-                Note { text: "当天鼠标左键、中键和右键的按下次数，颜色与上方键位使用同一色阶。"; }
+                SectionTitle { text: "鼠标按键热度"; }
+                Note { text: "鼠标左键、中键和右键的按下次数，范围与颜色都与上方键位相同。"; }
                 HorizontalLayout {
                     spacing: 32px;
                     padding-left: 8px;
@@ -335,8 +336,8 @@ export component CollectionPanel inherits Rectangle {
                     Rectangle { horizontal-stretch: 1; }
                 }
                 Rule { }
-                SectionTitle { text: "所选范围的系统状态"; font-size: 18px; }
-                Note { text: "以下统计沿用时间线所选范围，键位热图按上方本地日期统计。"; }
+                SectionTitle { text: "系统状态"; }
+                Note { text: CollectionState.partial-day ? "按所选时段统计空闲、锁屏、睡眠等系统区间。" : "按所选范围统计空闲、锁屏、睡眠等系统区间。"; }
                 Note { text: CollectionState.system != "" ? CollectionState.system : "此范围暂无系统状态记录。"; color: Theme.ink; }
             }
         }

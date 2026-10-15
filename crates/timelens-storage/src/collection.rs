@@ -198,12 +198,15 @@ impl Storage {
     pub fn permanent_input_totals(&self) -> Result<[u64; 4]> {
         Ok(self.connection.query_row("SELECT COALESCE(SUM(keyboard_count),0),COALESCE(SUM(left_click_count),0),COALESCE(SUM(middle_click_count),0),COALESCE(SUM(right_click_count),0) FROM anonymous_daily_input_ledger",[],|r|Ok([r.get::<_,i64>(0)?.max(0) as u64,r.get::<_,i64>(1)?.max(0) as u64,r.get::<_,i64>(2)?.max(0) as u64,r.get::<_,i64>(3)?.max(0) as u64]))?)
     }
-    /// Keyboard, left, middle and right click counts of one local date.
-    pub fn daily_input_totals(&self, date: &str) -> Result<[u64; 4]> {
-        Ok(self.connection.query_row("SELECT COALESCE(SUM(keyboard_count),0),COALESCE(SUM(left_click_count),0),COALESCE(SUM(middle_click_count),0),COALESCE(SUM(right_click_count),0) FROM anonymous_daily_input_ledger WHERE local_date=?",[date],|r|Ok([r.get::<_,i64>(0)?.max(0) as u64,r.get::<_,i64>(1)?.max(0) as u64,r.get::<_,i64>(2)?.max(0) as u64,r.get::<_,i64>(3)?.max(0) as u64]))?)
+    /// Keyboard, left, middle and right click counts of the local dates from
+    /// `first` to `last`, both included (YYYY-MM-DD).
+    pub fn input_totals_between(&self, first: &str, last: &str) -> Result<[u64; 4]> {
+        Ok(self.connection.query_row("SELECT COALESCE(SUM(keyboard_count),0),COALESCE(SUM(left_click_count),0),COALESCE(SUM(middle_click_count),0),COALESCE(SUM(right_click_count),0) FROM anonymous_daily_input_ledger WHERE local_date BETWEEN ?1 AND ?2",[first, last],|r|Ok([r.get::<_,i64>(0)?.max(0) as u64,r.get::<_,i64>(1)?.max(0) as u64,r.get::<_,i64>(2)?.max(0) as u64,r.get::<_,i64>(3)?.max(0) as u64]))?)
     }
-    pub fn physical_key_frequencies(&self, date: &str) -> Result<Vec<(u32, u64)>> {
-        Ok(self.connection.prepare("SELECT scan_code,SUM(key_count) FROM daily_physical_key_frequency WHERE local_date=? GROUP BY scan_code ORDER BY SUM(key_count) DESC")?.query_map([date],|r|Ok((r.get::<_,u32>(0)?,r.get::<_,i64>(1)?.max(0) as u64)))?.collect::<rusqlite::Result<_>>()?)
+    /// Presses per physical key over the local dates from `first` to `last`,
+    /// both included (YYYY-MM-DD).
+    pub fn physical_key_frequencies_between(&self, first: &str, last: &str) -> Result<Vec<(u32, u64)>> {
+        Ok(self.connection.prepare("SELECT scan_code,SUM(key_count) FROM daily_physical_key_frequency WHERE local_date BETWEEN ?1 AND ?2 GROUP BY scan_code ORDER BY SUM(key_count) DESC")?.query_map([first, last],|r|Ok((r.get::<_,u32>(0)?,r.get::<_,i64>(1)?.max(0) as u64)))?.collect::<rusqlite::Result<_>>()?)
     }
     pub fn known_applications(&self) -> Result<Vec<(String, String)>> {
         let mut ids: BTreeSet<String> = self
@@ -323,6 +326,18 @@ mod tests {
         s.ingest_event_batch(&batch).unwrap();
         s.ingest_event_batch(&batch).unwrap();
         assert_eq!(s.permanent_input_totals().unwrap(), [9, 2, 0, 0]);
+        assert_eq!(
+            s.input_totals_between("2026-09-05", "2026-09-05").unwrap(),
+            [9, 2, 0, 0]
+        );
+        assert_eq!(
+            s.input_totals_between("0000-00-00", "9999-99-99").unwrap(),
+            [9, 2, 0, 0]
+        );
+        assert_eq!(
+            s.input_totals_between("2026-09-06", "2026-09-30").unwrap(),
+            [0; 4]
+        );
         for table in ["input_minute_buckets", "daily_physical_key_frequency"] {
             assert_eq!(
                 s.connection
@@ -338,6 +353,39 @@ mod tests {
         }
         invalid.first_sequence = 4;
         assert!(s.ingest_event_batch(&invalid).is_err());
+    }
+    #[test]
+    fn key_frequencies_sum_over_an_inclusive_date_range() {
+        let (_dir, s) = ai::tests::fixture();
+        for (date, code, count) in [
+            ("2026-09-04", 30, 5),
+            ("2026-09-05", 30, 2),
+            ("2026-09-05", 31, 7),
+            ("2026-09-07", 30, 1),
+        ] {
+            s.connection
+                .execute(
+                    "INSERT INTO daily_physical_key_frequency VALUES(?1,480,?2,0,?3)",
+                    params![date, code, count],
+                )
+                .unwrap();
+        }
+        assert_eq!(
+            s.physical_key_frequencies_between("2026-09-05", "2026-09-05")
+                .unwrap(),
+            [(31, 7), (30, 2)]
+        );
+        let all = s
+            .physical_key_frequencies_between("0000-00-00", "9999-99-99")
+            .unwrap()
+            .into_iter()
+            .collect::<BTreeMap<_, _>>();
+        assert_eq!(all, BTreeMap::from([(30, 8), (31, 7)]));
+        assert!(
+            s.physical_key_frequencies_between("2026-09-08", "2026-09-30")
+                .unwrap()
+                .is_empty()
+        );
     }
     #[test]
     fn merge_is_reversible_and_uses_real_interval_union() {

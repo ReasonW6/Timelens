@@ -149,59 +149,185 @@ component SnapshotTile inherits Rectangle {
     key := FocusScope { width: 0px; key-pressed(event) => { if event.text == " " || event.text == "\n" { root.activate(event.modifiers.shift); return accept; } return reject; } }
 }
 
-// Day stepping and the range picker for pages that look at one range.
-component RangeNav inherits HorizontalLayout {
-    in property <string> label;
-    in property <bool> can-next;
-    in property <bool> open;
-    callback step(int);
-    callback today;
-    callback toggle;
-    spacing: 4px;
-    VerticalLayout { alignment: center; Action { quiet: true; icon: @image-url("icons/chevron-left.svg"); accessible-label: "前一天"; clicked => { root.step(-1); } } }
-    VerticalLayout { alignment: center; Action { text: root.label; icon: @image-url("icons/calendar.svg"); selected: root.open; accessible-label: "选择时段，当前 " + root.label; clicked => { root.toggle(); } } }
-    VerticalLayout { alignment: center; Action { quiet: true; icon: @image-url("icons/chevron-right.svg"); accessible-label: "后一天"; enabled: root.can-next; clicked => { root.step(1); } } }
-    VerticalLayout { alignment: center; Action { text: "今天"; clicked => { root.today(); } } }
+// One entry in the picker's list of quick ranges.
+component QuickRange inherits Rectangle {
+    in property <string> text;
+    in property <bool> selected;
+    callback clicked;
+    height: 34px;
+    border-radius: 8px;
+    background: root.selected ? Theme.brand-soft : touch.has-hover ? Theme.hover-tint : transparent;
+    accessible-role: button;
+    accessible-label: root.text;
+    accessible-action-default => { root.clicked(); }
+    Text { x: 12px; text: root.text; color: root.selected ? Theme.brand-ink : Theme.ink; font-size: 13px; font-weight: root.selected ? 600 : 400; vertical-alignment: center; }
+    if root.selected : Image { x: parent.width - 26px; width: 14px; height: 14px; source: @image-url("icons/check.svg"); colorize: Theme.brand-ink; }
+    touch := TouchArea { mouse-cursor: pointer; clicked => { root.clicked(); } }
 }
 
-component RangeOptions inherits Card {
-    in-out property <string> date-input;
+// The range a page looks at. The arrows step a day at a time; the button opens
+// a picker with quick ranges, a month calendar and part of the day. The picker
+// floats over the page, so nothing beneath it moves.
+component RangePicker inherits HorizontalLayout {
+    in property <string> label;
+    // Whether "all records" is offered, and chosen.
+    in property <bool> allow-all;
+    in property <bool> all;
+    in property <bool> can-next;
+    in property <bool> is-today;
+    // Dates as yyyymmdd: today, and the day the range lies in, or 0 for a
+    // recent stretch that spans several days.
+    in property <int> today-ymd;
+    in property <int> selected-ymd;
     in-out property <string> start: "09:00";
     in-out property <string> end: "18:00";
+    callback step(int);
+    callback today;
+    callback choose-all;
+    callback days-ago(int);
     callback horizon(int);
     callback day(string);
     callback span(string, string);
-    height: options.preferred-height;
-    vertical-stretch: 0;
-    options := VerticalLayout {
-        padding: 16px; spacing: 12px;
-        HorizontalLayout {
-            spacing: 8px;
-            Eyebrow { text: "快速范围"; vertical-alignment: center; width: 64px; }
-            Segmented {
-                Segment { text: "上午"; icon: @image-url("icons/sunrise.svg"); clicked => { root.span("00:00", "12:00"); } }
-                Segment { text: "下午"; icon: @image-url("icons/sun.svg"); clicked => { root.span("12:00", "18:00"); } }
-                Segment { text: "晚上"; icon: @image-url("icons/moon.svg"); clicked => { root.span("18:00", "24:00"); } }
+    private property <int> view-y: 2026;
+    private property <int> view-m: 1;
+    private property <[int]> month-offsets: [0, 3, 2, 5, 0, 3, 5, 1, 4, 6, 2, 4];
+    private property <int> lead: root.first-weekday(root.view-y, root.view-m);
+    private property <int> days: root.month-days(root.view-y, root.view-m);
+    private property <bool> day-chosen: !root.all && root.selected-ymd > 0;
+    private property <bool> can-next-month: root.view-y * 100 + root.view-m < floor(root.today-ymd / 100);
+    pure function two(value: int) -> string { return (value < 10 ? "0" : "") + value; }
+    pure function leap(y: int) -> bool { return (Math.mod(y, 4) == 0 && Math.mod(y, 100) != 0) || Math.mod(y, 400) == 0; }
+    pure function month-days(y: int, m: int) -> int {
+        return m == 2 ? (root.leap(y) ? 29 : 28) : (m == 4 || m == 6 || m == 9 || m == 11) ? 30 : 31;
+    }
+    // The weekday of the month's first day, 0 for Monday (Sakamoto's method).
+    pure function first-weekday(y: int, m: int) -> int {
+        return Math.mod(root.sunday-based(m < 3 ? y - 1 : y, m) + 6, 7);
+    }
+    pure function sunday-based(yy: int, m: int) -> int {
+        return Math.mod(yy + floor(yy / 4) - floor(yy / 100) + floor(yy / 400) + root.month-offsets[m - 1] + 1, 7);
+    }
+    function show-month(ymd: int) {
+        root.view-y = floor(ymd / 10000);
+        root.view-m = Math.mod(floor(ymd / 100), 100);
+    }
+    function move-month(offset: int) {
+        root.view-m += offset;
+        if root.view-m < 1 { root.view-m = 12; root.view-y -= 1; }
+        if root.view-m > 12 { root.view-m = 1; root.view-y += 1; }
+    }
+    spacing: 4px;
+    VerticalLayout { alignment: center; Action { quiet: true; icon: @image-url("icons/chevron-left.svg"); accessible-label: "前一天"; enabled: !root.all; clicked => { root.step(-1); } } }
+    VerticalLayout {
+        alignment: center;
+        trigger := Action {
+            text: root.label;
+            icon: @image-url("icons/calendar.svg");
+            accessible-label: "选择范围，当前 " + root.label;
+            clicked => {
+                root.show-month(root.selected-ymd > 0 ? root.selected-ymd : root.today-ymd);
+                picker.show();
             }
-            Action { text: "最近 24 小时"; clicked => { root.horizon(24); } }
-            Action { text: "最近 7 天"; clicked => { root.horizon(168); } }
-            Rectangle { horizontal-stretch: 1; }
         }
-        HorizontalLayout {
-            spacing: 8px;
-            Eyebrow { text: "日期"; vertical-alignment: center; width: 64px; }
-            LineEdit { width: 168px; height: 34px; text <=> root.date-input; placeholder-text: "YYYY-MM-DD"; accepted => { root.day(root.date-input); } }
-            Action { text: "转到日期"; clicked => { root.day(root.date-input); } }
-            Rectangle { horizontal-stretch: 1; }
-        }
-        HorizontalLayout {
-            spacing: 8px;
-            Eyebrow { text: "时段"; vertical-alignment: center; width: 64px; }
-            LineEdit { width: 96px; height: 34px; text <=> root.start; placeholder-text: "HH:MM"; }
-            Text { text: "至"; color: Theme.ink-3; vertical-alignment: center; }
-            LineEdit { width: 96px; height: 34px; text <=> root.end; placeholder-text: "HH:MM"; }
-            Action { text: "应用时段"; accent: true; clicked => { root.span(root.start, root.end); } }
-            Rectangle { horizontal-stretch: 1; }
+    }
+    VerticalLayout { alignment: center; Action { quiet: true; icon: @image-url("icons/chevron-right.svg"); accessible-label: "后一天"; enabled: !root.all && root.can-next; clicked => { root.step(1); } } }
+    VerticalLayout { alignment: center; Action { text: "今天"; enabled: root.all || !root.is-today; clicked => { root.today(); } } }
+
+    picker := PopupWindow {
+        x: root.width - self.width;
+        y: root.height + 6px;
+        width: 568px;
+        height: sheet.preferred-height;
+        close-policy: PopupClosePolicy.close-on-click-outside;
+        Rectangle {
+            background: Theme.surface;
+            border-radius: 14px;
+            border-width: 1px; border-color: Theme.line-strong;
+            drop-shadow-blur: 28px; drop-shadow-offset-y: 10px; drop-shadow-color: Theme.shadow-strong;
+            sheet := VerticalLayout {
+                padding: 14px; spacing: 12px;
+                HorizontalLayout {
+                    spacing: 16px;
+                    // Quick ranges.
+                    VerticalLayout {
+                        width: 156px; spacing: 2px; alignment: LayoutAlignment.start;
+                        Eyebrow { text: "快速选择"; height: 26px; vertical-alignment: center; }
+                        if root.allow-all : QuickRange { text: "全部记录"; selected: root.all; clicked => { picker.close(); root.choose-all(); } }
+                        QuickRange { text: "今天"; selected: !root.all && root.is-today; clicked => { picker.close(); root.today(); } }
+                        QuickRange { text: "昨天"; clicked => { picker.close(); root.days-ago(1); } }
+                        QuickRange { text: "最近 7 天"; clicked => { picker.close(); root.horizon(168); } }
+                        QuickRange { text: "最近 30 天"; clicked => { picker.close(); root.horizon(720); } }
+                    }
+                    Rectangle { width: 1px; background: Theme.line; }
+                    // A month to pick a day from; days after today are not offered.
+                    VerticalLayout {
+                        horizontal-stretch: 1; spacing: 6px;
+                        HorizontalLayout {
+                            height: 26px;
+                            Text { text: root.view-y + "年" + root.view-m + "月"; color: Theme.ink; font-size: 14px; font-weight: 600; vertical-alignment: center; }
+                            Rectangle { horizontal-stretch: 1; }
+                            Action { height: 26px; quiet: true; icon: @image-url("icons/chevron-left.svg"); accessible-label: "上个月"; clicked => { root.move-month(-1); } }
+                            Action { height: 26px; quiet: true; icon: @image-url("icons/chevron-right.svg"); accessible-label: "下个月"; enabled: root.can-next-month; clicked => { root.move-month(1); } }
+                        }
+                        HorizontalLayout {
+                            for name in ["一", "二", "三", "四", "五", "六", "日"] : Text { horizontal-stretch: 1; text: name; color: Theme.ink-3; font-size: 11px; horizontal-alignment: center; }
+                        }
+                        calendar := Rectangle {
+                            height: 6 * 34px;
+                            for cell in 42 : day-cell := Rectangle {
+                                property <int> date: cell - root.lead + 1;
+                                property <int> ymd: root.view-y * 10000 + root.view-m * 100 + self.date;
+                                property <bool> real: self.date >= 1 && self.date <= root.days;
+                                property <bool> future: self.ymd > root.today-ymd;
+                                property <bool> chosen: root.day-chosen && self.ymd == root.selected-ymd;
+                                x: Math.mod(cell, 7) * calendar.width / 7;
+                                y: floor(cell / 7) * 34px;
+                                width: calendar.width / 7; height: 34px;
+                                if day-cell.real : Rectangle {
+                                    width: 30px; height: 30px; border-radius: 15px;
+                                    background: day-cell.chosen ? Theme.primary : day-touch.has-hover && !day-cell.future ? Theme.hover-tint : transparent;
+                                    border-width: day-cell.ymd == root.today-ymd && !day-cell.chosen ? 1.5px : 0px;
+                                    border-color: Theme.brand;
+                                    accessible-role: button;
+                                    accessible-label: root.view-m + "月" + day-cell.date + "日";
+                                    accessible-enabled: !day-cell.future;
+                                    Text {
+                                        text: day-cell.date;
+                                        color: day-cell.chosen ? Theme.on-primary : day-cell.future ? Theme.ink-4 : Theme.ink;
+                                        font-size: 13px; font-weight: day-cell.chosen ? 600 : 400;
+                                    }
+                                    day-touch := TouchArea {
+                                        enabled: !day-cell.future;
+                                        mouse-cursor: pointer;
+                                        clicked => {
+                                            picker.close();
+                                            root.day(root.view-y + "-" + root.two(root.view-m) + "-" + root.two(day-cell.date));
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                Rule { }
+                // Part of the chosen day.
+                HorizontalLayout {
+                    spacing: 8px;
+                    Eyebrow { text: "当天时段"; vertical-alignment: center; }
+                    Segmented {
+                        Segment { text: "全天"; enabled: root.day-chosen; clicked => { picker.close(); root.span("00:00", "24:00"); } }
+                        Segment { text: "上午"; enabled: root.day-chosen; clicked => { picker.close(); root.span("00:00", "12:00"); } }
+                        Segment { text: "下午"; enabled: root.day-chosen; clicked => { picker.close(); root.span("12:00", "18:00"); } }
+                        Segment { text: "晚上"; enabled: root.day-chosen; clicked => { picker.close(); root.span("18:00", "24:00"); } }
+                    }
+                    Rectangle { horizontal-stretch: 1; }
+                    LineEdit { width: 72px; height: 34px; text <=> root.start; placeholder-text: "HH:MM"; enabled: root.day-chosen; }
+                    Text { text: "–"; color: Theme.ink-3; vertical-alignment: center; }
+                    LineEdit { width: 72px; height: 34px; text <=> root.end; placeholder-text: "HH:MM"; enabled: root.day-chosen; accepted => { picker.close(); root.span(root.start, root.end); } }
+                    Action { text: "应用"; enabled: root.day-chosen; clicked => { picker.close(); root.span(root.start, root.end); } }
+                }
+                if !root.day-chosen : Note { text: "先在日历中选择一天，再缩小到当天的某个时段。"; font-size: 12px; }
+            }
         }
     }
 }
@@ -256,13 +382,13 @@ export component AppWindow inherits Window {
     in property <int> retention-days: 30;
     in-out property <string> action-status;
     in property <bool> action-busy;
-    in property <string> date-title;
     in property <string> calendar-date;
-    in property <string> previous-year;
-    in property <bool> multiple-days;
     in property <bool> is-today;
-    in property <string> weekday-title;
-    in property <string> range-time;
+    // The shared range in words, and its day and today as yyyymmdd; the day is
+    // 0 while the range is a recent stretch over several days.
+    in property <string> range-title;
+    in property <int> today-ymd;
+    in property <int> selected-ymd;
     in property <string> focus-total;
     in property <bool> can-next-day;
     // The home history and the activity picked in it.
@@ -292,8 +418,8 @@ export component AppWindow inherits Window {
     in property <string> detail-mouse;
     in property <[AppRow]> apps;
     in property <[AppRow]> filtered-apps;
-    // The application totals cover all records unless narrowed to today.
-    in-out property <bool> apps-today: false;
+    // Statistics cover all records unless narrowed to the shared range.
+    in-out property <bool> stats-all: true;
     in property <string> apps-range;
     in property <[WindowRow]> windows;
     in property <[SegmentRow]> segments;
@@ -338,7 +464,6 @@ export component AppWindow inherits Window {
     in-out property <bool> settings-open: false;
     // Bumped to repaint the whole window, see the layer at the end.
     in-out property <int> repaint-epoch: 0;
-    private property <bool> range-options: false;
     private property <bool> jump-open: false;
     private property <string> jump-date;
     private property <bool> clear-confirm-open: false;
@@ -366,10 +491,8 @@ export component AppWindow inherits Window {
     private property <bool> detail-fits: root.width - 246px - 380px >= main-area.min-width;
     private property <bool> detail-docked;
     changed detail-fits => { root.detail-docked = root.detail-fits; }
-    private property <string> range-label-short: root.date-title + " " + root.weekday-title + " · " + root.range-time;
     private property <string> manual-start: "09:00";
     private property <string> manual-end: "18:00";
-    private property <string> date-input;
 
     callback navigate(int);
     callback app-search-changed;
@@ -377,6 +500,8 @@ export component AppWindow inherits Window {
     callback day-selected(int);
     callback date-selected(string);
     callback today-selected;
+    // A day counted back from today: 1 is yesterday.
+    callback days-ago-selected(int);
     callback time-range-selected(string, string);
     callback history-load-more;
     callback history-viewport-changed;
@@ -432,21 +557,10 @@ export component AppWindow inherits Window {
             root.snapshot-retention-selected(days);
         }
     }
-    function go-day(offset: int) {
-        root.range-options = false;
-        root.day-selected(offset);
-    }
-    function go-today() {
-        root.range-options = false;
-        root.today-selected();
-    }
-    function preset(start: string, end: string) {
-        root.range-options = false;
-        root.time-range-selected(start, end);
-    }
-    function toggle-range() {
-        root.date-input = root.calendar-date;
-        root.range-options = !root.range-options;
+    // The statistics gather again after their scope or range changes.
+    function stats-changed() {
+        root.apps-scope-changed();
+        if root.stats-tab == 1 { CollectionState.action(7); }
     }
     // 0 show its snapshots, 1 summarize it, 2 open its application's rules.
     function act-on-activity(action: int) {
@@ -652,9 +766,16 @@ export component AppWindow inherits Window {
                                     if root.page == 2 : PageHeader {
                                         title: "快照";
                                         subtitle: root.snapshot-policy-label + "  ·  " + root.snapshots.length + " 条记录";
-                                        RangeNav {
-                                            label: root.range-label-short; can-next: root.can-next-day; open: root.range-options;
-                                            step(offset) => { root.go-day(offset); } today => { root.go-today(); } toggle => { root.toggle-range(); }
+                                        RangePicker {
+                                            label: root.range-title; can-next: root.can-next-day; is-today: root.is-today;
+                                            today-ymd: root.today-ymd; selected-ymd: root.selected-ymd;
+                                            start <=> root.manual-start; end <=> root.manual-end;
+                                            step(offset) => { root.day-selected(offset); }
+                                            today => { root.today-selected(); }
+                                            days-ago(days) => { root.days-ago-selected(days); }
+                                            horizon(hours) => { root.horizon-selected(hours); }
+                                            day(date) => { root.date-selected(date); }
+                                            span(a, b) => { root.time-range-selected(a, b); }
                                         }
                                         Rectangle { width: 6px; }
                                         VerticalLayout { alignment: center; Action { quiet: true; icon: @image-url("icons/settings.svg"); accessible-label: "快照设置"; clicked => { root.open-settings(1); } } }
@@ -668,12 +789,6 @@ export component AppWindow inherits Window {
                                             }
                                         }
                                         VerticalLayout { alignment: center; Action { text: "立即拍摄"; icon: @image-url("icons/camera.svg"); accent: true; enabled: !root.action-busy; clicked => { root.snapshot-capture-now(); } } }
-                                    }
-                                    if root.page == 2 && root.range-options : RangeOptions {
-                                        date-input <=> root.date-input; start <=> root.manual-start; end <=> root.manual-end;
-                                        horizon(hours) => { root.range-options = false; root.horizon-selected(hours); }
-                                        day(date) => { root.range-options = false; root.date-selected(date); }
-                                        span(a, b) => { root.preset(a, b); }
                                     }
                                     if root.page == 2 && root.snapshots.length > 0 : HorizontalLayout {
                                         vertical-stretch: 1;
@@ -780,43 +895,41 @@ export component AppWindow inherits Window {
                                     if root.page == 3 : PageHeader {
                                         title: "统计与报告";
                                         subtitle: "由本机记录直接计算，不经过 AI";
-                                        if root.stats-tab == 0 : VerticalLayout {
-                                            alignment: center;
-                                            Segmented {
-                                                Segment { text: "全部"; selected: !root.apps-today; clicked => { if root.apps-today { root.apps-today = false; root.apps-scope-changed(); } } }
-                                                Segment { text: "今天"; selected: root.apps-today; clicked => { if !root.apps-today { root.apps-today = true; root.apps-scope-changed(); } } }
-                                            }
+                                        // One picker for all three tabs; reports always cover a range.
+                                        RangePicker {
+                                            label: root.stats-tab != 2 && root.stats-all ? "全部记录" : root.range-title;
+                                            allow-all: root.stats-tab != 2;
+                                            all: root.stats-tab != 2 && root.stats-all;
+                                            can-next: root.can-next-day; is-today: root.is-today;
+                                            today-ymd: root.today-ymd; selected-ymd: root.selected-ymd;
+                                            start <=> root.manual-start; end <=> root.manual-end;
+                                            choose-all => { root.stats-all = true; root.stats-changed(); }
+                                            step(offset) => { root.stats-all = false; root.day-selected(offset); root.stats-changed(); }
+                                            today => { root.stats-all = false; root.today-selected(); root.stats-changed(); }
+                                            days-ago(days) => { root.stats-all = false; root.days-ago-selected(days); root.stats-changed(); }
+                                            horizon(hours) => { root.stats-all = false; root.horizon-selected(hours); root.stats-changed(); }
+                                            day(date) => { root.stats-all = false; root.date-selected(date); root.stats-changed(); }
+                                            span(a, b) => { root.stats-all = false; root.time-range-selected(a, b); root.stats-changed(); }
                                         }
-                                        if root.stats-tab == 0 : Rectangle { width: 6px; }
-                                        if root.stats-tab == 0 : VerticalLayout { alignment: center; Action { text: "应用规则"; icon: @image-url("icons/adjustments-horizontal.svg"); clicked => { root.open-settings(2); } } }
-                                        if root.stats-tab != 0 : RangeNav {
-                                            label: root.range-label-short; can-next: root.can-next-day; open: root.range-options;
-                                            step(offset) => { root.go-day(offset); } today => { root.go-today(); } toggle => { root.toggle-range(); }
-                                        }
-                                        if root.stats-tab == 2 : Rectangle { width: 6px; }
-                                        if root.stats-tab == 2 : VerticalLayout { alignment: center; Action { text: root.action-busy ? "正在生成…" : "生成本地报告"; icon: @image-url("icons/file-description.svg"); accent: true; enabled: !root.action-busy; clicked => { root.report-generate(); } } }
-                                    }
-                                    if root.page == 3 && root.stats-tab != 0 && root.range-options : RangeOptions {
-                                        date-input <=> root.date-input; start <=> root.manual-start; end <=> root.manual-end;
-                                        horizon(hours) => { root.range-options = false; root.horizon-selected(hours); }
-                                        day(date) => { root.range-options = false; root.date-selected(date); }
-                                        span(a, b) => { root.preset(a, b); }
                                     }
                                     if root.page == 3 : HorizontalLayout {
-                                        height: 34px;
+                                        height: 34px; spacing: 8px;
                                         Segmented {
                                             Segment { text: "应用"; icon: @image-url("icons/layout-grid.svg"); selected: root.stats-tab == 0; clicked => { root.stats-tab = 0; } }
                                             Segment { text: "本地报告"; icon: @image-url("icons/file-description.svg"); selected: root.stats-tab == 2; clicked => { root.app-detail-open = false; root.stats-tab = 2; } }
-                                            Segment { text: "键位与系统"; icon: @image-url("icons/keyboard.svg"); selected: root.stats-tab == 1; clicked => { root.app-detail-open = false; root.stats-tab = 1; CollectionState.page = 1; CollectionState.date = root.calendar-date; CollectionState.action(7); } }
+                                            Segment { text: "键位与系统"; icon: @image-url("icons/keyboard.svg"); selected: root.stats-tab == 1; clicked => { root.app-detail-open = false; root.stats-tab = 1; CollectionState.page = 1; CollectionState.action(7); } }
                                         }
                                         Rectangle { horizontal-stretch: 1; }
+                                        if root.stats-tab == 0 : Action { text: "应用规则"; icon: @image-url("icons/adjustments-horizontal.svg"); clicked => { root.open-settings(2); } }
                                         if root.stats-tab == 2 : HorizontalLayout {
                                             spacing: 8px;
                                             VerticalLayout { alignment: center; Dot { tone: root.has-gaps ? Theme.warn-line : Theme.ok; } }
                                             Note { text: root.coverage-value; vertical-alignment: center; color: root.has-gaps ? Theme.warn : Theme.ink-3; }
                                         }
+                                        if root.stats-tab == 2 : Rectangle { width: 4px; }
+                                        if root.stats-tab == 2 : Action { text: root.action-busy ? "正在生成…" : "生成本地报告"; icon: @image-url("icons/file-description.svg"); accent: true; enabled: !root.action-busy; clicked => { root.report-generate(); } }
                                     }
-                                    // Applications: totals for all records or today.
+                                    // Applications: totals for all records or the chosen range.
                                     if root.page == 3 && root.stats-tab == 0 : Card {
                                         height: overview.preferred-height;
                                         overview := VerticalLayout {
@@ -884,7 +997,7 @@ export component AppWindow inherits Window {
                                     }
                                     if root.page == 3 && root.stats-tab == 0 && root.filtered-apps.length == 0 : Rectangle {
                                         vertical-stretch: 1;
-                                        Note { y: 40px; text: root.app-search == "" ? (root.apps-today ? "今天还没有应用记录。" : "还没有应用记录。") : "没有匹配的应用，试试其他名称。"; horizontal-alignment: center; }
+                                        Note { y: 40px; text: root.app-search == "" ? (root.stats-all ? "还没有应用记录。" : "这段时间没有应用记录。") : "没有匹配的应用，试试其他名称。"; horizontal-alignment: center; }
                                     }
 
                                     if root.page == 3 && root.stats-tab == 2 && root.report-ready : HorizontalLayout {
@@ -935,6 +1048,24 @@ export component AppWindow inherits Window {
                                     if root.page == 3 && root.stats-tab == 1 : CollectionPanel { vertical-stretch: 1; }
 
                                     // ───── AI summaries ─────
+                                    // The range is the one the other pages share; AI reads it on every change.
+                                    if root.page == 4 : PageHeader {
+                                        title: "AI 总结";
+                                        subtitle: "把一段时间整理成可以回顾的内容，结果只保存在本机";
+                                        RangePicker {
+                                            label: root.range-title; can-next: root.can-next-day; is-today: root.is-today;
+                                            today-ymd: root.today-ymd; selected-ymd: root.selected-ymd;
+                                            start <=> root.manual-start; end <=> root.manual-end;
+                                            step(offset) => { root.day-selected(offset); AiState.opened(); }
+                                            today => { root.today-selected(); AiState.opened(); }
+                                            days-ago(days) => { root.days-ago-selected(days); AiState.opened(); }
+                                            horizon(hours) => { root.horizon-selected(hours); AiState.opened(); }
+                                            day(date) => { root.date-selected(date); AiState.opened(); }
+                                            span(a, b) => { root.time-range-selected(a, b); AiState.opened(); }
+                                        }
+                                        Rectangle { width: 6px; }
+                                        VerticalLayout { alignment: center; Action { text: "AI 设置"; icon: @image-url("icons/settings.svg"); clicked => { root.open-settings(4); } } }
+                                    }
                                     if root.page == 4 : AiPanel { vertical-stretch: 1; open-settings => { root.open-settings(4); } }
                                 }
                             }
@@ -1018,7 +1149,7 @@ export component AppWindow inherits Window {
                                     height: focus-card.preferred-height;
                                     focus-card := VerticalLayout {
                                         padding: 16px; spacing: 8px;
-                                        Eyebrow { text: root.apps-today ? "今天聚焦" : "累计聚焦"; }
+                                        Eyebrow { text: root.stats-all ? "累计聚焦" : "所选范围聚焦"; }
                                         Figure { text: root.focused-value; }
                                         // Where in the range the application was open, shown and focused.
                                         Rectangle {

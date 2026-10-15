@@ -12,7 +12,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use chrono::{Datelike, Local, NaiveDate, TimeZone};
+use chrono::{Datelike, Local, NaiveDate, TimeZone, Timelike};
 use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 use timelens_storage::{Storage, TimelineSnapshot};
 
@@ -706,6 +706,13 @@ fn show_detail(
     };
     let identity = entry.entry.identity.as_deref().unwrap_or_default();
     let length = end.saturating_sub(start).max(1) as f64;
+    let start_minute = Local
+        .timestamp_millis_opt(start)
+        .single()
+        .map_or(0.0, |t| {
+            (t.hour() * 60 + t.minute()) as f32 + t.second() as f32 / 60.0
+        });
+    let span_minutes = (length / 60_000.0) as f32;
     let participants = entry
         .participants
         .iter()
@@ -740,6 +747,7 @@ fn show_detail(
                         .collect::<Vec<_>>()
                 })
                 .unwrap_or_default();
+            let lookup = segment_lookup(&segments);
             Participant {
                 name: app_icon::display_name(&participant.identity, &participant.name).into(),
                 icon: app_icon::for_identity(&participant.identity),
@@ -754,6 +762,9 @@ fn show_detail(
                 visible: format_duration(displayed).into(),
                 background: format_duration(background).into(),
                 segments: ModelRc::new(VecModel::from(segments)),
+                lookup: ModelRc::new(VecModel::from(lookup)),
+                start_minute,
+                span_minutes,
             }
         })
         .collect::<Vec<_>>();
@@ -800,6 +811,26 @@ fn show_detail(
     );
     window.set_detail_open(true);
     Ok(())
+}
+
+/// Steps along an activity's bar for finding the segment under the pointer.
+const LOOKUP_STEPS: usize = 240;
+
+/// For each step along the bar, the segment at its middle, or -1 where the
+/// application was not open. Where segments meet inside a step, the stronger
+/// state wins, as the bar draws it on top.
+fn segment_lookup(segments: &[SegmentRow]) -> Vec<i32> {
+    (0..LOOKUP_STEPS)
+        .map(|step| {
+            let at = (step as f32 + 0.5) / LOOKUP_STEPS as f32;
+            segments
+                .iter()
+                .enumerate()
+                .filter(|(_, segment)| segment.offset <= at && at < segment.offset + segment.width)
+                .max_by_key(|(_, segment)| segment.kind)
+                .map_or(-1, |(index, _)| index as i32)
+        })
+        .collect()
 }
 
 /// Point the other pages at the selected entry's span.
@@ -1091,5 +1122,28 @@ mod tests {
         assert_eq!(keys(&model), ["end", "c"]);
         patch(&model, Vec::new());
         assert_eq!(model.row_count(), 0);
+    }
+
+    #[test]
+    fn segment_lookup_finds_the_stretch_under_each_step_and_prefers_focus() {
+        let segment = |offset: f32, width: f32, kind: i32| SegmentRow {
+            offset,
+            width,
+            kind,
+            tint: Default::default(),
+        };
+        // Focused for the first quarter, shown until half, closed after.
+        let lookup = segment_lookup(&[
+            segment(0.0, 0.25, 2),
+            segment(0.25, 0.25, 1),
+            segment(0.2, 0.1, 0),
+        ]);
+        assert_eq!(lookup.len(), LOOKUP_STEPS);
+        assert_eq!(lookup[0], 0);
+        assert_eq!(lookup[LOOKUP_STEPS / 4 - 1], 0);
+        assert_eq!(lookup[LOOKUP_STEPS / 4 + 1], 1);
+        assert_eq!(lookup[LOOKUP_STEPS / 2 + 1], -1);
+        assert_eq!(lookup[LOOKUP_STEPS - 1], -1);
+        assert!(segment_lookup(&[]).iter().all(|&index| index == -1));
     }
 }
