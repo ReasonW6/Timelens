@@ -476,7 +476,7 @@ export component AppWindow inherits Window {
     private property <int> pending-retention-days: -1;
     private property <bool> pending-retention-snapshots: false;
     private property <bool> retention-confirm-open: root.pending-retention-days >= 0;
-    private property <bool> any-modal-open: root.clear-confirm-open || root.delete-snapshot-confirm || root.delete-checked-confirm || root.retention-confirm-open || DataState.move-phase != 0 || root.snapshot-viewer-open;
+    private property <bool> any-modal-open: root.clear-confirm-open || root.delete-snapshot-confirm || root.delete-checked-confirm || root.retention-confirm-open || DataState.move-phase != 0 || root.snapshot-viewer-open || AiState.confirming;
     changed any-modal-open => { Theme.modal-open = root.any-modal-open; }
     private property <bool> recording-unavailable: !CollectionState.paused && root.collector-state == 2;
     private property <color> recording-tone: CollectionState.paused ? Theme.warn-line : root.collector-state == 2 ? Theme.danger : root.collector-state == 1 ? Theme.ink-4 : Theme.ok;

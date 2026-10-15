@@ -58,6 +58,7 @@ slint::slint! {
              HistoryItem, DayAnchor, Participant, ShareSlice, StackApp, AiState, DataState,
              CollectionState, KeyCell, ButtonHeat, AppIcons }
         from "ui/main-window.slint";
+    export { AiHistoryRow, AiConnectionRow } from "ui/ai-panel.slint";
 }
 fn main() -> Result<()> {
     let options = Options::parse(env::args_os().skip(1))?;

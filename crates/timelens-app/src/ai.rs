@@ -24,8 +24,8 @@ pub enum AiCommand {
 }
 pub enum AiEvent {
     Status(String),
-    Tested(String, bool),
-    Models(String, Vec<Model>),
+    Tested(String, Result<(), String>),
+    Models(String, Result<Vec<Model>, String>),
     Changed,
     Finished(i64, bool),
 }
@@ -94,9 +94,6 @@ pub fn spawn(storage: Arc<Mutex<Storage>>) -> AiService {
             match commands.recv_timeout(Duration::from_millis(250)) {
                 Ok(AiCommand::Test(mut profile)) => {
                     let id = profile.id.clone();
-                    let _ = events.send(AiEvent::Status(
-                        "正在发送不含活动数据的合成连接测试…".into(),
-                    ));
                     let request = WorkerRequest {
                         version: WORKER_PROTOCOL,
                         profile: profile.clone(),
@@ -124,11 +121,7 @@ pub fn spawn(storage: Arc<Mutex<Storage>>) -> AiService {
                         s.save_ai_profile(&profile)?;
                         Ok(())
                     });
-                    let _ = events.send(AiEvent::Status(match &result {
-                        Ok(()) => "连接测试通过；可手动总结，计划需分别启用".into(),
-                        Err(e) => format!("连接测试失败：{e}"),
-                    }));
-                    let _ = events.send(AiEvent::Tested(id, result.is_ok()));
+                    let _ = events.send(AiEvent::Tested(id, result.map_err(|e| e.to_string())));
                 }
                 Ok(AiCommand::Models(profile)) => {
                     let id = profile.id.clone();
@@ -137,16 +130,10 @@ pub fn spawn(storage: Arc<Mutex<Storage>>) -> AiService {
                         profile,
                         operation: WorkerOperation::Models,
                     };
-                    match run_worker(&request, || false, |_| Ok(())) {
-                        Ok(answer) => {
-                            let _ = events.send(AiEvent::Models(id, answer.models));
-                        }
-                        Err(e) => {
-                            let _ = events.send(AiEvent::Status(format!(
-                                "读取模型列表失败：{e}；仍可手动填写模型 ID"
-                            )));
-                        }
-                    }
+                    let result = run_worker(&request, || false, |_| Ok(()))
+                        .map(|answer| answer.models)
+                        .map_err(|e| e.to_string());
+                    let _ = events.send(AiEvent::Models(id, result));
                 }
                 Ok(AiCommand::Wake) | Err(mpsc::RecvTimeoutError::Timeout) => {}
                 Err(mpsc::RecvTimeoutError::Disconnected) => break,

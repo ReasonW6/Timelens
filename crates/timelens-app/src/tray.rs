@@ -66,9 +66,8 @@ fn emit(event: Event) {
                     }
                     if let Event::Summary(id) = event {
                         w.invoke_navigate(4);
-                        let g = w.global::<AiState>();
-                        g.set_status(format!("任务 #{id}，可在任务历史中查看结果").into());
-                        g.set_page(4);
+                        w.global::<AiState>()
+                            .invoke_open_job(i32::try_from(id).unwrap_or(-1));
                     }
                 });
             }
