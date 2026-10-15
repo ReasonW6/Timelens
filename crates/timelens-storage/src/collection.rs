@@ -205,7 +205,11 @@ impl Storage {
     }
     /// Presses per physical key over the local dates from `first` to `last`,
     /// both included (YYYY-MM-DD).
-    pub fn physical_key_frequencies_between(&self, first: &str, last: &str) -> Result<Vec<(u32, u64)>> {
+    pub fn physical_key_frequencies_between(
+        &self,
+        first: &str,
+        last: &str,
+    ) -> Result<Vec<(u32, u64)>> {
         Ok(self.connection.prepare("SELECT scan_code,SUM(key_count) FROM daily_physical_key_frequency WHERE local_date BETWEEN ?1 AND ?2 GROUP BY scan_code ORDER BY SUM(key_count) DESC")?.query_map([first, last],|r|Ok((r.get::<_,u32>(0)?,r.get::<_,i64>(1)?.max(0) as u64)))?.collect::<rusqlite::Result<_>>()?)
     }
     pub fn known_applications(&self) -> Result<Vec<(String, String)>> {

@@ -18,21 +18,23 @@ use windows::Win32::{
     UI::WindowsAndMessaging::{IsIconic, SW_RESTORE, SW_SHOW, SetForegroundWindow, ShowWindow},
 };
 
-/// The canvas color at the window's top edge, the title bar text and the frame.
-const CAPTION: (u8, u8, u8) = (0xe8, 0xec, 0xf8);
-const CAPTION_TEXT: (u8, u8, u8) = (0x1b, 0x21, 0x30);
-const BORDER: (u8, u8, u8) = (0xd3, 0xd8, 0xe6);
+/// The canvas color at the window's top edge, the title bar text and the
+/// frame, light and dark; they match `Theme.canvas-brush`, `ink` and `line`.
+const CAPTION: [(u8, u8, u8); 2] = [(0xe8, 0xec, 0xf8), (0x19, 0x1c, 0x24)];
+const CAPTION_TEXT: [(u8, u8, u8); 2] = [(0x1b, 0x21, 0x30), (0xe4, 0xe6, 0xec)];
+const BORDER: [(u8, u8, u8); 2] = [(0xd3, 0xd8, 0xe6), (0x2c, 0x30, 0x3a)];
 
-/// Returns whether the window had a native handle to style.
-pub fn apply(window: &slint::Window) -> bool {
+/// Colors the caption to match the light or dark UI, whatever the system
+/// theme. Returns whether the window had a native handle to style.
+pub fn apply(window: &slint::Window, dark: bool) -> bool {
     let Some(hwnd) = native_handle(window) else {
         return false;
     };
-    // The UI is light only; keep the caption light even under a dark system theme.
-    set(hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE.0, 0_u32);
-    set(hwnd, DWMWA_CAPTION_COLOR.0, colorref(CAPTION));
-    set(hwnd, DWMWA_TEXT_COLOR.0, colorref(CAPTION_TEXT));
-    set(hwnd, DWMWA_BORDER_COLOR.0, colorref(BORDER));
+    let tone = usize::from(dark);
+    set(hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE.0, u32::from(dark));
+    set(hwnd, DWMWA_CAPTION_COLOR.0, colorref(CAPTION[tone]));
+    set(hwnd, DWMWA_TEXT_COLOR.0, colorref(CAPTION_TEXT[tone]));
+    set(hwnd, DWMWA_BORDER_COLOR.0, colorref(BORDER[tone]));
     true
 }
 

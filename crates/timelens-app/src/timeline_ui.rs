@@ -265,7 +265,9 @@ fn ymd(timestamp: i64) -> i32 {
     Local
         .timestamp_millis_opt(timestamp)
         .single()
-        .map_or(0, |d| d.year() * 10_000 + d.month() as i32 * 100 + d.day() as i32)
+        .map_or(0, |d| {
+            d.year() * 10_000 + d.month() as i32 * 100 + d.day() as i32
+        })
 }
 
 /// The shared range in words: a day by its date, part of a day with its hours,
@@ -369,7 +371,11 @@ pub fn apps_range_label(snapshot: &TimelineSnapshot, range_start: i64, all: bool
     if !all {
         let same_day = local_label(range_start, "%Y-%m-%d")
             == local_label(snapshot.range_ended_utc_ms.saturating_sub(1), "%Y-%m-%d");
-        let format = if same_day { "%H:%M" } else { "%-m月%-d日 %H:%M" };
+        let format = if same_day {
+            "%H:%M"
+        } else {
+            "%-m月%-d日 %H:%M"
+        };
         format!(
             "{}{}–{}",
             if same_day {

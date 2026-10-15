@@ -129,6 +129,45 @@ pub(crate) fn tick_all(state: &mut SnapshotUiState, all: bool) {
     state.anchor = None;
 }
 
+/// The nearest snapshot with an image before (`step` < 0) or after `from`, so
+/// the viewer steps over slots that have none. `from` may be -1 when nothing
+/// is selected.
+pub(crate) fn neighbour(state: &SnapshotUiState, from: i32, step: i32) -> Option<usize> {
+    let mut index = i64::from(from);
+    loop {
+        index += i64::from(step.signum());
+        let slot = state.slots.get(usize::try_from(index).ok()?)?;
+        if step == 0 || slot.success {
+            return (step != 0).then_some(index as usize);
+        }
+    }
+}
+
+/// Whether the viewer can step to an image on either side of `index`.
+pub(crate) fn show_neighbours(window: &AppWindow, state: &SnapshotUiState, index: i32) {
+    window.set_snapshot_can_previous(index >= 0 && neighbour(state, index, -1).is_some());
+    window.set_snapshot_can_next(index >= 0 && neighbour(state, index, 1).is_some());
+    window.set_snapshot_position(position(state, index).into());
+}
+
+/// Where the snapshot at `index` falls among those with images, as the viewer
+/// counts them: "3 / 40".
+fn position(state: &SnapshotUiState, index: i32) -> String {
+    let Some(index) = usize::try_from(index)
+        .ok()
+        .filter(|&index| index < state.slots.len())
+    else {
+        return String::new();
+    };
+    let images =
+        |slots: &[timelens_storage::SnapshotSlot]| slots.iter().filter(|slot| slot.success).count();
+    format!(
+        "{} / {}",
+        images(&state.slots[..index]) + 1,
+        images(&state.slots)
+    )
+}
+
 /// Shows the ticks on the grid.
 pub(crate) fn show_ticks(window: &AppWindow, state: &SnapshotUiState) {
     let rows = window.get_snapshots();
@@ -187,6 +226,29 @@ mod tests {
         assert_eq!(ticked(&state), [2, 4]);
         tick(&mut state, 0, true);
         assert_eq!(ticked(&state), [1, 2, 4, 5]);
+    }
+
+    #[test]
+    fn stepping_skips_slots_without_images_and_stops_at_the_ends() {
+        let state = state(&[true, false, false, true, false]);
+        assert_eq!(neighbour(&state, 0, 1), Some(3));
+        assert_eq!(neighbour(&state, 3, -1), Some(0));
+        assert_eq!(neighbour(&state, 3, 1), None);
+        assert_eq!(neighbour(&state, 0, -1), None);
+        // From a deleted slot, the next image on either side.
+        assert_eq!(neighbour(&state, 1, 1), Some(3));
+        assert_eq!(neighbour(&state, 1, -1), Some(0));
+        assert_eq!(neighbour(&state, -1, 1), Some(0));
+        assert_eq!(neighbour(&state, 0, 0), None);
+    }
+
+    #[test]
+    fn the_viewer_counts_only_snapshots_with_images() {
+        let state = state(&[true, false, false, true, false]);
+        assert_eq!(position(&state, 0), "1 / 2");
+        assert_eq!(position(&state, 3), "2 / 2");
+        assert_eq!(position(&state, -1), "");
+        assert_eq!(position(&state, 5), "");
     }
 
     #[test]

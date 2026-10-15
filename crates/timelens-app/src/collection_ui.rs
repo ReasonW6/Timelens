@@ -1,7 +1,7 @@
 use crate::{AppWindow, ButtonHeat, CollectionState, KeyCell, UiState};
 use anyhow::{Context, Result, anyhow};
-use slint::{ComponentHandle, ModelRc, Timer, TimerMode, VecModel};
 use chrono::TimeZone;
+use slint::{ComponentHandle, ModelRc, Timer, TimerMode, VecModel};
 use std::{
     cell::RefCell,
     rc::Rc,

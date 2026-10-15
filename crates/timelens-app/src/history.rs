@@ -706,12 +706,9 @@ fn show_detail(
     };
     let identity = entry.entry.identity.as_deref().unwrap_or_default();
     let length = end.saturating_sub(start).max(1) as f64;
-    let start_minute = Local
-        .timestamp_millis_opt(start)
-        .single()
-        .map_or(0.0, |t| {
-            (t.hour() * 60 + t.minute()) as f32 + t.second() as f32 / 60.0
-        });
+    let start_minute = Local.timestamp_millis_opt(start).single().map_or(0.0, |t| {
+        (t.hour() * 60 + t.minute()) as f32 + t.second() as f32 / 60.0
+    });
     let span_minutes = (length / 60_000.0) as f32;
     let participants = entry
         .participants

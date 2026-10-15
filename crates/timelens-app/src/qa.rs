@@ -57,6 +57,21 @@ const STEPS: &[Step] = &[
         w.set_app_detail_open(false);
         w.invoke_navigate(2);
     }),
+    ("05a-snapshots-wide-list", |w| {
+        w.set_snapshot_list_width(760.0);
+        w.invoke_snapshot_step(-1, 1);
+    }),
+    ("05b-snapshot-viewer", |w| {
+        w.set_snapshot_list_width(432.0);
+        w.set_snapshot_viewer_open(true);
+    }),
+    ("05c-stats-keys", |w| {
+        w.set_snapshot_viewer_open(false);
+        w.set_stats_tab(1);
+        w.invoke_navigate(3);
+        w.global::<CollectionState>().set_page(1);
+        w.global::<CollectionState>().invoke_action(7);
+    }),
     ("06-stats", |w| {
         w.set_stats_tab(2);
         w.invoke_navigate(3);
@@ -84,6 +99,27 @@ const STEPS: &[Step] = &[
         );
         data.set_move_phase(3);
     }),
+    ("16-dark-timeline", |w| {
+        w.global::<DataState>().set_move_phase(0);
+        w.set_settings_open(false);
+        w.invoke_theme_mode_selected(2);
+        w.invoke_navigate(0);
+        select_activity(w);
+    }),
+    ("17-dark-apps", |w| {
+        w.invoke_history_close();
+        w.set_stats_tab(0);
+        w.invoke_navigate(3);
+    }),
+    ("18-dark-keys", |w| {
+        w.set_stats_tab(1);
+        w.global::<CollectionState>().set_page(1);
+        w.global::<CollectionState>().invoke_action(7);
+    }),
+    ("19-dark-snapshots", |w| w.invoke_navigate(2)),
+    ("20-dark-ai", |w| w.invoke_navigate(4)),
+    ("21-dark-settings-general", |w| settings(w, 6)),
+    ("22-dark-settings-data", |w| settings(w, 3)),
 ];
 
 pub fn install(window: &AppWindow) -> Option<Timer> {

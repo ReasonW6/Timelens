@@ -4,6 +4,7 @@
 mod ai;
 mod ai_ui;
 mod app_icon;
+mod appearance;
 mod collection_ui;
 mod collector_task;
 mod data_ui;
@@ -56,7 +57,7 @@ const COLLECTOR_NAMES: &[&str] = &["timelens-collector.exe", "Timelens.Collector
 slint::slint! {
     export { AppWindow, AppRow, WindowRow, SegmentRow, SnapshotRow, ReportAppRow,
              HistoryItem, DayAnchor, Participant, ShareSlice, StackApp, AiState, DataState,
-             CollectionState, KeyCell, ButtonHeat, AppIcons }
+             CollectionState, KeyCell, ButtonHeat, AppIcons, Theme }
         from "ui/main-window.slint";
 }
 fn main() -> Result<()> {
@@ -338,6 +339,8 @@ fn run_window(
             storage.control_directory().to_path_buf(),
         )
     };
+    // Before the first frame, so the window opens in the chosen look.
+    let _appearance_timer = appearance::install(&window, control_directory.clone());
     window.set_storage_status(storage_status.into());
     window.set_collector_status("等待受信采集器事件…".into());
     window.set_data_path(data_directory.display().to_string().into());
@@ -516,7 +519,8 @@ fn run_window(
             return;
         };
         if !chrome_applied && window.window().is_visible() {
-            chrome_applied = window_chrome::apply(window.window());
+            chrome_applied =
+                window_chrome::apply(window.window(), window.global::<Theme>().get_dark());
         }
         // Exporting a snapshot reports through the data status; show it where the
         // export was started.
@@ -1049,8 +1053,7 @@ fn render_application(
         .segments
         .iter()
         .map(|segment| SegmentRow {
-            offset: ((segment.started_utc_ms.saturating_sub(range_start) as f64
-                / span)
+            offset: ((segment.started_utc_ms.saturating_sub(range_start) as f64 / span)
                 .clamp(0.0, 1.0)) as f32,
             width: ((segment.ended_utc_ms.saturating_sub(segment.started_utc_ms) as f64 / span)
                 .clamp(0.0, 1.0)) as f32,
@@ -1255,6 +1258,7 @@ fn install_snapshot_callbacks(
                 return;
             };
             window.set_snapshot_selected_index(index);
+            snapshot_grid::show_neighbours(&window, &snapshot_state.borrow(), index);
             window.set_snapshot_deletable(slot.success);
             if !slot.success {
                 window.set_snapshot_preview(Image::default());
@@ -1279,7 +1283,7 @@ fn install_snapshot_callbacks(
                 Ok((
                     preview,
                     format!(
-                        "{} × {} · {} · 完整性校验通过",
+                        "{} × {} · {}",
                         slot.pixel_width,
                         slot.pixel_height,
                         format_bytes(slot.plaintext_bytes)
@@ -1341,6 +1345,21 @@ fn install_snapshot_callbacks(
                     Ok(false) => window.set_action_status("所选记录没有可删除的图片".into()),
                     Err(error) => window.set_action_status(format!("快照删除失败：{error}").into()),
                 }
+            }
+        });
+    }
+    {
+        // The viewer's previous and next: the nearest snapshot with an image.
+        let weak = window.as_weak();
+        let snapshot_state = Rc::clone(&snapshot_state);
+        window.on_snapshot_step(move |from, step| {
+            let next = snapshot_grid::neighbour(&snapshot_state.borrow(), from, step);
+            match (next, weak.upgrade()) {
+                (Some(index), Some(window)) => {
+                    window.invoke_snapshot_row_selected(index as i32);
+                    true
+                }
+                _ => false,
             }
         });
     }
@@ -1706,6 +1725,7 @@ fn refresh_snapshot_panel(
     window.set_snapshot_checked_count(snapshot_state.borrow().checked.len() as i32);
     snapshot_grid::load_thumbnails(window, storage, &snapshot_state.borrow());
     window.set_snapshot_selected_index(selected_index);
+    snapshot_grid::show_neighbours(window, &snapshot_state.borrow(), selected_index);
     if selected_index < 0 {
         window.set_snapshot_preview(Image::default());
         window.set_snapshot_detail("请选择一条成功快照进行解密预览".into());

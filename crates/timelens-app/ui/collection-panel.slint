@@ -41,6 +41,7 @@ export global CollectionState {
 // A heat color stays readable under its label.
 global Heat {
     public pure function ink(strength: float) -> color {
+        if Theme.dark { return strength > 0.6 ? Theme.on-primary : Theme.ink; }
         return strength >= 0.8 ? #ffffff : strength > 0.5 ? #000000 : Theme.ink;
     }
 }
@@ -58,7 +59,7 @@ component MouseButtonArea inherits Rectangle {
         x: -root.body-x; y: 0px;
         width: root.body-width; height: root.body-height;
         border-radius: root.body-radius;
-        background: #4a50c8.mix(#eceef3, root.heat.strength);
+        background: Theme.heat-hot.mix(Theme.heat-cold, root.heat.strength);
     }
     Text {
         y: root.height - 30px; height: 20px;
@@ -95,10 +96,10 @@ component MouseHeatMap inherits Rectangle {
         border-radius: 11px;
         border-width: 2px;
         border-color: Theme.layer;
-        background: #4a50c8.mix(#eceef3, CollectionState.mouse-middle.strength);
+        background: Theme.heat-hot.mix(Theme.heat-cold, CollectionState.mouse-middle.strength);
     }
     Rectangle { y: root.button-height; height: 1px; background: Theme.line; }
-    Rectangle { border-radius: root.radius; border-width: 1px; border-color: #c9cdd8; }
+    Rectangle { border-radius: root.radius; border-width: 1px; border-color: Theme.outline; }
     Image {
         y: root.button-height + 40px; width: 20px; height: 20px;
         source: @image-url("icons/mouse.svg");
@@ -110,7 +111,7 @@ component MouseLegend inherits HorizontalLayout {
     in property <string> label;
     in property <ButtonHeat> heat;
     spacing: 10px;
-    VerticalLayout { alignment: center; Rectangle { width: 14px; height: 14px; border-radius: 3px; border-width: 1px; border-color: Theme.line; background: #4a50c8.mix(#eceef3, root.heat.strength); } }
+    VerticalLayout { alignment: center; Rectangle { width: 14px; height: 14px; border-radius: 3px; border-width: 1px; border-color: Theme.line; background: Theme.heat-hot.mix(Theme.heat-cold, root.heat.strength); } }
     Text { width: 128px; text: root.label; color: Theme.ink-2; font-size: 13px; vertical-alignment: center; }
     Text { text: root.heat.count + " 次"; color: Theme.ink; font-size: 14px; font-weight: 600; font-family: Theme.font-display; vertical-alignment: center; }
 }
@@ -244,7 +245,7 @@ export component CollectionPanel inherits Rectangle {
                 Rectangle { height: 8px; }
                 SettingsHeader { text: "删除历史"; color: Theme.danger; }
                 SettingsGroup {
-                    border-color: #c8352f2e;
+                    border-color: Theme.danger-line;
                     SettingExpander {
                         title: "删除所选应用的全部历史";
                         description: "同时删除引用它的本地报告、AI 总结和对话。此操作无法撤销。";
@@ -293,9 +294,9 @@ export component CollectionPanel inherits Rectangle {
                             height: key.h * root.key-unit - 4px;
                             border-radius: 5px;
                             border-width: 1px;
-                            border-color: key.strength > 0 ? #b6baf0 : Theme.line;
+                            border-color: key.strength > 0 ? Theme.heat-line : Theme.line;
                             // Slint mix() applies the factor to its receiver: zero stays paper-gray.
-                            background: #4a50c8.mix(#eceef3, key.strength);
+                            background: Theme.heat-hot.mix(Theme.heat-cold, key.strength);
                             VerticalLayout {
                                 padding: 3px;
                                 spacing: 1px;
@@ -309,11 +310,11 @@ export component CollectionPanel inherits Rectangle {
                 HorizontalLayout {
                     spacing: 6px;
                     Note { text: "少"; }
-                    Rectangle { width: 22px; height: 12px; border-radius: 2px; background: #eceef3; }
-                    Rectangle { width: 22px; height: 12px; border-radius: 2px; background: #4a50c8.mix(#eceef3, 0.25); }
-                    Rectangle { width: 22px; height: 12px; border-radius: 2px; background: #4a50c8.mix(#eceef3, 0.5); }
-                    Rectangle { width: 22px; height: 12px; border-radius: 2px; background: #4a50c8.mix(#eceef3, 0.75); }
-                    Rectangle { width: 22px; height: 12px; border-radius: 2px; background: #4a50c8; }
+                    Rectangle { width: 22px; height: 12px; border-radius: 2px; background: Theme.heat-cold; }
+                    Rectangle { width: 22px; height: 12px; border-radius: 2px; background: Theme.heat-hot.mix(Theme.heat-cold, 0.25); }
+                    Rectangle { width: 22px; height: 12px; border-radius: 2px; background: Theme.heat-hot.mix(Theme.heat-cold, 0.5); }
+                    Rectangle { width: 22px; height: 12px; border-radius: 2px; background: Theme.heat-hot.mix(Theme.heat-cold, 0.75); }
+                    Rectangle { width: 22px; height: 12px; border-radius: 2px; background: Theme.heat-hot; }
                     Note { text: "多"; }
                     Rectangle { horizontal-stretch: 1; }
                 }

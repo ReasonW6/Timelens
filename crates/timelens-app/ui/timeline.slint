@@ -52,7 +52,7 @@ export component StickyDay inherits Rectangle {
     background: Theme.layer;
     drop-shadow-blur: 12px;
     drop-shadow-offset-y: 6px;
-    drop-shadow-color: #161c2d10;
+    drop-shadow-color: Theme.shadow-soft;
     DayHeader { title: root.title; subtitle: root.subtitle; duration: root.duration; apps: root.apps; shares: root.shares; }
     Rectangle { y: parent.height - 1px; height: 1px; background: Theme.line; }
 }
@@ -77,7 +77,7 @@ component AppStack inherits Rectangle {
         border-radius: 9px;
         background: Theme.surface;
         border-width: 1px; border-color: Theme.line-strong;
-        drop-shadow-blur: 3px; drop-shadow-color: #161c2d1a;
+        drop-shadow-blur: 3px; drop-shadow-color: Theme.shadow;
         opacity: root.expanded ? 0 : 1;
         animate opacity { duration: 120ms; }
         AppIcon { size: parent.width - 8px; icon: app.icon; tint: app.tint; }
@@ -89,7 +89,7 @@ component AppStack inherits Rectangle {
         border-width: root.stack.length > 0 ? 1px : 0px;
         border-color: Theme.line;
         drop-shadow-blur: root.stack.length > 0 ? 4px : 0px;
-        drop-shadow-color: #161c2d1f;
+        drop-shadow-color: Theme.shadow;
         opacity: root.expanded ? 0 : 1;
         animate opacity { duration: 120ms; }
         AppIcon { size: root.stack.length > 0 ? 28px : 32px; icon: root.icon; tint: root.tint; }
@@ -103,7 +103,7 @@ component AppStack inherits Rectangle {
         border-radius: 14px;
         background: Theme.surface;
         border-width: 1px; border-color: Theme.line;
-        drop-shadow-blur: 18px; drop-shadow-offset-y: 6px; drop-shadow-color: #161c2d2e;
+        drop-shadow-blur: 18px; drop-shadow-offset-y: 6px; drop-shadow-color: Theme.shadow-strong;
         opacity: root.expanded ? 1 : 0;
         clip: true;
         animate width { duration: 200ms; easing: ease-out; }
@@ -209,7 +209,7 @@ export component HistoryRow inherits Rectangle {
         border-color: key.has-focus ? Theme.focus : Theme.line;
         drop-shadow-blur: root.selected ? 12px : 0px;
         drop-shadow-offset-y: 3px;
-        drop-shadow-color: #161c2d14;
+        drop-shadow-color: Theme.shadow-soft;
         animate background, drop-shadow-blur { duration: 140ms; easing: ease-out; }
 
         touch := TouchArea { mouse-cursor: pointer; clicked => { key.focus(); root.select(); } }
@@ -259,7 +259,7 @@ export component HistoryRow inherits Rectangle {
                 background: Theme.surface;
                 border-radius: 10px;
                 border-width: 1px; border-color: Theme.line;
-                drop-shadow-blur: 22px; drop-shadow-offset-y: 8px; drop-shadow-color: #161c2d33;
+                drop-shadow-blur: 22px; drop-shadow-offset-y: 8px; drop-shadow-color: Theme.shadow-strong;
                 VerticalLayout {
                     padding: 5px;
                     for label[index] in ["查看这段的快照", "为这段生成总结", "这个应用的规则"] : Rectangle {

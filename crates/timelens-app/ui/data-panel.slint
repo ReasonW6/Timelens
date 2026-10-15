@@ -185,7 +185,7 @@ export component MoveDialog inherits Rectangle {
             width: min(460px, parent.width - 48px); height: sheet.preferred-height;
             x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
             background: Theme.surface; border-radius: 16px; border-width: 1px; border-color: Theme.line;
-            drop-shadow-blur: 48px; drop-shadow-offset-y: 18px; drop-shadow-color: #161c2d40;
+            drop-shadow-blur: 48px; drop-shadow-offset-y: 18px; drop-shadow-color: Theme.shadow-strong;
             sheet := VerticalLayout {
                 padding: 26px; padding-bottom: 22px; spacing: 14px;
                 HorizontalLayout {
