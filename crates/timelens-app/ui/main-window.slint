@@ -665,6 +665,8 @@ export component AppWindow inherits Window {
     in-out property <length> snapshot-list-width: 432px;
     private property <length> snapshot-room;
     private property <length> snapshot-list-shown: 432px;
+    // The preview takes what the list and the 16px divider leave.
+    private property <bool> snapshot-preview-narrow: root.snapshot-room - root.snapshot-list-shown - 16px < 460px;
     function fit-snapshot-list() {
         root.snapshot-list-shown = root.snapshot-room <= 0px ? root.snapshot-list-width : max(176px, min(root.snapshot-list-width, root.snapshot-room - 356px));
     }
@@ -1087,9 +1089,10 @@ export component AppWindow inherits Window {
                                                 HorizontalLayout {
                                                     padding-left: 18px; padding-right: 12px; spacing: 8px;
                                                     Text { text: root.snapshot-detail; color: #ffffffd9; font-size: 12px; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; }
-                                                    VerticalLayout { alignment: center; Action { text: "放大"; icon: @image-url("icons/search.svg"); enabled: root.snapshot-preview.width > 0; clicked => { root.snapshot-viewer-open = true; } } }
-                                                    VerticalLayout { alignment: center; Action { text: "导出"; icon: @image-url("icons/download.svg"); enabled: root.snapshot-deletable && !DataState.busy; clicked => { DataState.action(7); } } }
-                                                    VerticalLayout { alignment: center; Action { text: "删除…"; icon: @image-url("icons/trash.svg"); danger: true; enabled: root.snapshot-deletable; clicked => { root.delete-snapshot-confirm = true; } } }
+                                                    // Icons only while the preview is narrow, so the size still shows.
+                                                    VerticalLayout { alignment: center; Action { text: root.snapshot-preview-narrow ? "" : "放大"; accessible-label: "放大"; icon: @image-url("icons/search.svg"); enabled: root.snapshot-preview.width > 0; clicked => { root.snapshot-viewer-open = true; } } }
+                                                    VerticalLayout { alignment: center; Action { text: root.snapshot-preview-narrow ? "" : "导出"; accessible-label: "导出"; icon: @image-url("icons/download.svg"); enabled: root.snapshot-deletable && !DataState.busy; clicked => { DataState.action(7); } } }
+                                                    VerticalLayout { alignment: center; Action { text: root.snapshot-preview-narrow ? "" : "删除…"; accessible-label: "删除…"; icon: @image-url("icons/trash.svg"); danger: true; enabled: root.snapshot-deletable; clicked => { root.delete-snapshot-confirm = true; } } }
                                                 }
                                             }
                                         }
