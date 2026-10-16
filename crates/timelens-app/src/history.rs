@@ -537,6 +537,22 @@ fn flatten_days<'a>(
         // the time since.
         let mut previous_end: Option<i64> = None;
         for row in rows {
+            // A long break shows before the period header the next entry may
+            // open, so a break across noon is not lost.
+            if query.is_empty()
+                && let Row::Entry(item) = &row
+                && let Some(end) = previous_end
+                && item.entry.started_utc_ms - end >= BREAK_MS
+            {
+                items.push(HistoryItem {
+                    kind: KIND_PAUSE,
+                    key: format!("pause:{}:{end}", day.date).into(),
+                    height: PAUSE_HEIGHT,
+                    title: break_title(day, end, item.entry.started_utc_ms).into(),
+                    ..blank()
+                });
+                top += PAUSE_HEIGHT;
+            }
             let label = period(row.started());
             if label != current_period {
                 current_period = label;
@@ -548,7 +564,6 @@ fn flatten_days<'a>(
                     ..blank()
                 });
                 top += PERIOD_HEIGHT;
-                previous_end = None;
             }
             match row {
                 Row::Unrecorded(span) => {
@@ -565,19 +580,6 @@ fn flatten_days<'a>(
                 }
                 Row::Entry(item) => {
                     let entry = &item.entry;
-                    if query.is_empty()
-                        && let Some(previous_end) = previous_end
-                        && entry.started_utc_ms - previous_end >= BREAK_MS
-                    {
-                        items.push(HistoryItem {
-                            kind: KIND_PAUSE,
-                            key: format!("pause:{}:{previous_end}", day.date).into(),
-                            height: PAUSE_HEIGHT,
-                            title: break_title(day, previous_end, entry.started_utc_ms).into(),
-                            ..blank()
-                        });
-                        top += PAUSE_HEIGHT;
-                    }
                     let identity = entry.identity.as_deref().unwrap_or_default();
                     let visible =
                         render.is_some_and(|(from, to)| top + ENTRY_HEIGHT >= from && top <= to);

@@ -212,6 +212,14 @@ impl Storage {
         })?;
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     }
+    /// When the earliest retained system state or instant began.
+    pub fn earliest_system_utc_ms(&self) -> Result<Option<i64>> {
+        Ok(self.connection.query_row(
+            "SELECT MIN(started_utc_ms) FROM system_intervals",
+            [],
+            |row| row.get(0),
+        )?)
+    }
     /// How often each instant marker, such as a clean shutdown, was recorded
     /// within `start..end`. Markers take no time, so totals leave them out.
     pub fn system_marks(&self, start: i64, end: i64) -> Result<BTreeMap<String, u64>> {

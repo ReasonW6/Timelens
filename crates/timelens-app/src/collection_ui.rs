@@ -510,7 +510,12 @@ fn statistics(w: &AppWindow, s: &Storage, range: &UiState) -> Result<()> {
     // All records start with the first one, not at the query's lower bound.
     let now = crate::unix_time_ms();
     let (start, end) = if all {
-        (s.earliest_activity_utc_ms()?.unwrap_or(now), now)
+        // System states may start before the first application window.
+        let first = [s.earliest_activity_utc_ms()?, s.earliest_system_utc_ms()?]
+            .into_iter()
+            .flatten()
+            .min();
+        (first.unwrap_or(now), now)
     } else {
         (range.range_started_utc_ms, range.range_ended_utc_ms)
     };

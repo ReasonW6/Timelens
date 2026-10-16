@@ -79,7 +79,13 @@ pub fn adopt_initial(control: &Path, destination: &Path) -> Result<bool> {
     Ok(true)
 }
 pub fn delete_pointer(control: &Path) -> Result<()> {
-    for name in [LOCATION, "data-location.next", crate::appearance::FILE] {
+    for name in [
+        LOCATION,
+        "data-location.next",
+        crate::appearance::FILE,
+        crate::pause::FILE,
+        crate::tray::EXPLAINED_FILE,
+    ] {
         match fs::remove_file(control.join(name)) {
             Ok(()) => {}
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}

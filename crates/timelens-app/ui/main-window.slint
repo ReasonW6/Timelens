@@ -544,7 +544,8 @@ component RangePicker inherits HorizontalLayout {
                     VerticalLayout {
                         width: 156px; spacing: 2px; alignment: LayoutAlignment.start;
                         Eyebrow { text: "快速选择"; height: 26px; vertical-alignment: center; }
-                        if root.allow-all : QuickRange { text: "全部记录"; selected: root.all; clicked => { picker.close(); root.choose-all(); } }
+                        // Choose before closing: closing tears down this conditional row first.
+                        if root.allow-all : QuickRange { text: "全部记录"; selected: root.all; clicked => { root.choose-all(); picker.close(); } }
                         QuickRange { text: "今天"; selected: !root.all && root.is-today; clicked => { picker.close(); root.today(); } }
                         QuickRange { text: "昨天"; clicked => { picker.close(); root.days-ago(1); } }
                         QuickRange { text: "最近 7 天"; clicked => { picker.close(); root.horizon(168); } }

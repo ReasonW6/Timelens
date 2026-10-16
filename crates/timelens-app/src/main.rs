@@ -617,13 +617,14 @@ fn run_window(
             }
             let state = timer_state.borrow();
             let scope = apps_scope(&window, &state);
+            // Only a scope not shown yet reads as loading; the periodic refresh
+            // of the one on screen keeps it as it is instead of dimming it.
             window.set_apps_loading(
-                state.apps.pending.is_some()
-                    || state
-                        .apps
-                        .shown
-                        .as_ref()
-                        .is_none_or(|(shown, _)| *shown != scope),
+                state
+                    .apps
+                    .shown
+                    .as_ref()
+                    .is_none_or(|(shown, _)| *shown != scope),
             );
         }
         window.global::<AiState>().set_open(
@@ -665,7 +666,7 @@ fn run_window(
         if ai_ui::data_generation() != data_generation {
             data_generation = ai_ui::data_generation();
             *timer_snapshot_state.borrow_mut() = SnapshotUiState::default();
-            window.set_snapshot_preview(Image::default());
+            clear_snapshot_preview(&window);
             window.set_snapshot_selected_index(-1);
             window.set_snapshot_detail("数据已变更，请重新选择快照".into());
             window.set_report_apps(ModelRc::new(VecModel::<ReportAppRow>::default()));
@@ -1588,7 +1589,7 @@ fn install_snapshot_callbacks(
                         // The old image stays until the neighbour's decodes, so an
                         // open viewer moves on instead of closing.
                         if next.is_none() {
-                            window.set_snapshot_preview(Image::default());
+                            clear_snapshot_preview(&window);
                         }
                         window.set_action_status(match postponed {
                             Some(error) => {
@@ -1685,7 +1686,7 @@ fn install_snapshot_callbacks(
                 state.selected_slot_id = None;
                 window.set_snapshot_selected_index(-1);
                 window.set_snapshot_deletable(false);
-                window.set_snapshot_preview(Image::default());
+                clear_snapshot_preview(&window);
                 window.set_snapshot_detail("从左侧选择一张快照预览".into());
             }
             snapshot_grid::tick_all(&mut state, false);
@@ -2030,19 +2031,25 @@ fn refresh_snapshot_panel(
     };
     let truncated = listed.len() >= SNAPSHOTS_LISTED;
     // Omissions repeat every interval while locked or asleep; a run of the
-    // same reason on the same display is one tile.
+    // same reason on the same display is one tile. With several displays the
+    // rows interleave by time, so each display keeps its own open run.
     let mut slots = Vec::<SnapshotSlot>::new();
     let mut spans = Vec::<(i64, i64, usize)>::new();
+    let mut runs = std::collections::HashMap::<String, usize>::new();
     for slot in listed {
-        if let (Some(last), Some(span)) = (slots.last(), spans.last_mut())
-            && !slot.success
-            && !last.success
-            && last.missing_reason == slot.missing_reason
-            && last.display.key == slot.display.key
+        let key = slot.display.key.clone();
+        if !slot.success
+            && let Some(&index) = runs.get(&key)
+            && slots[index].missing_reason == slot.missing_reason
         {
-            span.0 = slot.slot_started_utc_ms;
-            span.2 += 1;
+            spans[index].0 = slot.slot_started_utc_ms;
+            spans[index].2 += 1;
             continue;
+        }
+        if slot.success {
+            runs.remove(&key);
+        } else {
+            runs.insert(key, slots.len());
         }
         spans.push((slot.slot_started_utc_ms, slot.slot_started_utc_ms, 1));
         slots.push(slot);
@@ -2188,7 +2195,7 @@ fn refresh_snapshot_panel(
     window.set_snapshot_selected_index(selected_index);
     snapshot_grid::show_neighbours(window, &snapshot_state.borrow(), selected_index);
     if selected_index < 0 {
-        window.set_snapshot_preview(Image::default());
+        clear_snapshot_preview(window);
         window.set_snapshot_detail("从左侧选择一张快照预览".into());
     } else if newly_selected {
         window.invoke_snapshot_row_selected(selected_index);
@@ -2221,6 +2228,13 @@ fn refresh_snapshot_panel(
 /// Bumped on every snapshot selection, so a slower preview never replaces a
 /// newer one.
 static PREVIEW_SEQUENCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Clears the preview and voids any decode still under way, so a deleted or
+/// no longer listed image cannot come back when it finishes.
+fn clear_snapshot_preview(window: &AppWindow) {
+    PREVIEW_SEQUENCE.fetch_add(1, Ordering::AcqRel);
+    window.set_snapshot_preview(Image::default());
+}
 
 /// Slots listed at most; the list says when a range holds more.
 const SNAPSHOTS_LISTED: usize = 500;
@@ -2357,10 +2371,11 @@ fn refresh_report(
 /// a report of the same length.
 fn report_matches(start: i64, end: i64, state: &UiState) -> bool {
     if state.follow_now && state.calendar_day.is_none() {
-        let length = state
-            .horizon_ended_utc_ms
-            .saturating_sub(state.horizon_started_utc_ms);
-        return (end.saturating_sub(start) - length).abs() <= 60_000;
+        // A sliding range moves on: the report stays current only while its
+        // ends are within a few minutes of the range's.
+        const SLACK_MS: i64 = 5 * 60_000;
+        return (start - state.range_started_utc_ms).abs() <= SLACK_MS
+            && (end - state.range_ended_utc_ms).abs() <= SLACK_MS;
     }
     start == state.range_started_utc_ms && (state.follow_now || end == state.range_ended_utc_ms)
 }

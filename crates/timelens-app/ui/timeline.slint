@@ -68,7 +68,11 @@ export component StickyDay inherits Rectangle {
 component AppStack inherits Rectangle {
     in property <image> icon;
     in property <color> tint;
+    in property <string> name;
     in property <[StackApp]> stack;
+    in property <int> more;
+    out property <bool> expanded: hover.has-hover && root.stack.length > 0;
+    callback clicked;
     width: 44px; height: 44px;
 
     // Cards beneath, drawn first so the main card covers them.
@@ -80,6 +84,8 @@ component AppStack inherits Rectangle {
         background: Theme.surface;
         border-width: 1px; border-color: Theme.line-strong;
         drop-shadow-blur: 3px; drop-shadow-color: Theme.shadow;
+        opacity: root.expanded ? 0 : 1;
+        animate opacity { duration: 160ms; easing: ease-in-out; }
         AppIcon { size: parent.width - 8px; icon: app.icon; tint: app.tint; }
     }
     Rectangle {
@@ -90,7 +96,51 @@ component AppStack inherits Rectangle {
         border-color: Theme.line;
         drop-shadow-blur: root.stack.length > 0 ? 4px : 0px;
         drop-shadow-color: Theme.shadow;
+        opacity: root.expanded ? 0 : 1;
+        animate opacity { duration: 160ms; easing: ease-in-out; }
         AppIcon { size: root.stack.length > 0 ? 28px : 32px; icon: root.icon; tint: root.tint; }
+    }
+
+    // The fanned-out stack grows from the collapsed one while pointed at, and
+    // folds back the same way.
+    Rectangle {
+        visible: root.stack.length > 0;
+        x: -4px; y: -3px;
+        width: root.expanded ? fan.preferred-width : 44px;
+        height: 50px;
+        border-radius: 14px;
+        background: Theme.surface;
+        border-width: 1px; border-color: Theme.line;
+        drop-shadow-blur: 18px; drop-shadow-offset-y: 6px; drop-shadow-color: Theme.shadow-strong;
+        opacity: root.expanded ? 1 : 0;
+        clip: true;
+        animate width { duration: 240ms; easing: ease-in-out; }
+        animate opacity { duration: 180ms; easing: ease-in-out; }
+        fan := HorizontalLayout {
+            x: 0px;
+            padding-left: 8px; padding-right: 12px; spacing: 12px;
+            HorizontalLayout {
+                spacing: 7px;
+                VerticalLayout { alignment: center; AppIcon { size: 28px; icon: root.icon; tint: root.tint; } }
+                VerticalLayout {
+                    alignment: center; spacing: 0px;
+                    Text { text: root.name; color: Theme.ink; font-size: 12px; font-weight: 600; }
+                    Text { text: "主应用"; color: Theme.ink-3; font-size: 10px; }
+                }
+            }
+            for app in root.stack : HorizontalLayout {
+                spacing: 7px;
+                VerticalLayout { alignment: center; AppIcon { size: 24px; icon: app.icon; tint: app.tint; } }
+                Text { text: app.name; color: Theme.ink-2; font-size: 12px; vertical-alignment: center; }
+            }
+            if root.more > 0 : Text { text: "+" + root.more; color: Theme.ink-3; font-size: 12px; font-weight: 600; vertical-alignment: center; }
+        }
+    }
+    // Covers the opened stack too, so moving along it keeps it open.
+    hover := TouchArea {
+        width: root.expanded ? max(44px, fan.preferred-width - 4px) : 44px;
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
     }
 }
 
@@ -261,11 +311,13 @@ export component HistoryRow inherits Rectangle {
                 color: Theme.ink-2; font-size: 13px; font-weight: 500;
                 horizontal-alignment: right; vertical-alignment: center;
             }
-            AppStack {
-                x: HistoryGrid.stack-x; y: (parent.height - self.height) / 2;
-                icon: item.icon; tint: item.tint;
-                stack: item.stack;
-            }
+        }
+        // After the row so the fanned-out stack draws over its text.
+        AppStack {
+            x: HistoryGrid.stack-x; y: (parent.height - self.height) / 2;
+            icon: item.icon; tint: item.tint; name: item.title;
+            stack: item.stack; more: item.more;
+            clicked => { root.clicked-focus = true; key.focus(); root.select(); }
         }
         key := FocusScope {
             width: 0px;
