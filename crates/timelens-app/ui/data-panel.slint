@@ -173,10 +173,11 @@ export component MoveDialog inherits Rectangle {
     private property <bool> failed: DataState.move-phase == 3;
     background: Theme.scrim;
     TouchArea { }
-    FocusScope {
+    move-keys := FocusScope {
         focus-on-tab-navigation: false;
         focus-on-click: false;
-        init => { self.focus(); }
+        // Not in `init`; see ConfirmationDialog in theme.slint.
+        Timer { interval: 1ms; triggered => { move-keys.focus(); self.running = false; } }
         key-pressed(event) => {
             if !root.moving && (event.text == Key.Escape || event.text == Key.Return) { root.closed(); }
             return accept;

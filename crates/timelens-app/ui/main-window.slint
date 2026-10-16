@@ -240,9 +240,16 @@ component PhotoViewer inherits Rectangle {
     accessible-role: groupbox;
     accessible-label: "快照大图";
 
+    // Clicks, drags and the wheel off the controls stay in the viewer rather
+    // than reaching the page beneath it.
+    TouchArea { scroll-event(event) => { return accept; } }
+
     keys := FocusScope {
-        init => { self.focus(); }
+        // Not in `init`; see ConfirmationDialog.
+        Timer { interval: 1ms; triggered => { keys.focus(); self.running = false; } }
         key-pressed(event) => {
+            // Tab would move focus to the page beneath the viewer.
+            if event.text == Key.Tab || event.text == Key.Backtab { return accept; }
             if event.text == Key.Escape { root.close(); return accept; }
             if event.text == Key.LeftArrow { if root.can-previous { root.step(-1); } return accept; }
             if event.text == Key.RightArrow { if root.can-next { root.step(1); } return accept; }
@@ -281,9 +288,9 @@ component PhotoViewer inherits Rectangle {
                 double-clicked => {
                     if root.fitted && root.fit < 0.999 { root.zoom-to(1, self.mouse-x, self.mouse-y); } else { root.fit-window(); }
                 }
+                // A wheel notch (60px) zooms by 1.2; a touchpad's small steps add up.
                 scroll-event(event) => {
-                    if event.delta-y > 0 { root.zoom-to(root.scale * 1.2, self.mouse-x, self.mouse-y); }
-                    if event.delta-y < 0 { root.zoom-to(root.scale / 1.2, self.mouse-x, self.mouse-y); }
+                    if event.delta-y != 0 { root.zoom-to(root.scale * Math.pow(1.2, event.delta-y / 60px), self.mouse-x, self.mouse-y); }
                     return accept;
                 }
             }
@@ -339,12 +346,16 @@ component QuickRange inherits Rectangle {
     height: 34px;
     border-radius: 8px;
     background: root.selected ? Theme.brand-soft : touch.has-hover ? Theme.hover-tint : transparent;
+    border-width: key.has-focus ? 2px : 0px;
+    border-color: Theme.focus;
+    forward-focus: key;
     accessible-role: button;
     accessible-label: root.text;
     accessible-action-default => { root.clicked(); }
     Text { x: 12px; text: root.text; color: root.selected ? Theme.brand-ink : Theme.ink; font-size: 13px; font-weight: root.selected ? 600 : 400; vertical-alignment: center; }
     if root.selected : Image { x: parent.width - 26px; width: 14px; height: 14px; source: @image-url("icons/check.svg"); colorize: Theme.brand-ink; }
     touch := TouchArea { mouse-cursor: pointer; clicked => { root.clicked(); } }
+    key := FocusScope { width: 0px; key-pressed(event) => { if event.text == " " || event.text == "\n" { root.clicked(); return accept; } return reject; } }
 }
 
 // The range a page looks at. The arrows step a day at a time; the button opens
@@ -465,14 +476,20 @@ component RangePicker inherits HorizontalLayout {
                                 x: Math.mod(cell, 7) * calendar.width / 7;
                                 y: floor(cell / 7) * 34px;
                                 width: calendar.width / 7; height: 34px;
-                                if day-cell.real : Rectangle {
+                                if day-cell.real : day-button := Rectangle {
+                                    function pick() {
+                                        picker.close();
+                                        root.day(root.view-y + "-" + root.two(root.view-m) + "-" + root.two(day-cell.date));
+                                    }
                                     width: 30px; height: 30px; border-radius: 15px;
                                     background: day-cell.chosen ? Theme.primary : day-touch.has-hover && !day-cell.future ? Theme.hover-tint : transparent;
-                                    border-width: day-cell.ymd == root.today-ymd && !day-cell.chosen ? 1.5px : 0px;
-                                    border-color: Theme.brand;
+                                    border-width: day-key.has-focus ? 2px : day-cell.ymd == root.today-ymd && !day-cell.chosen ? 1.5px : 0px;
+                                    border-color: day-key.has-focus ? Theme.focus : Theme.brand;
+                                    forward-focus: day-key;
                                     accessible-role: button;
                                     accessible-label: root.view-m + "月" + day-cell.date + "日";
                                     accessible-enabled: !day-cell.future;
+                                    accessible-action-default => { if !day-cell.future { day-button.pick(); } }
                                     Text {
                                         text: day-cell.date;
                                         color: day-cell.chosen ? Theme.on-primary : day-cell.future ? Theme.ink-4 : Theme.ink;
@@ -481,10 +498,12 @@ component RangePicker inherits HorizontalLayout {
                                     day-touch := TouchArea {
                                         enabled: !day-cell.future;
                                         mouse-cursor: pointer;
-                                        clicked => {
-                                            picker.close();
-                                            root.day(root.view-y + "-" + root.two(root.view-m) + "-" + root.two(day-cell.date));
-                                        }
+                                        clicked => { day-button.pick(); }
+                                    }
+                                    day-key := FocusScope {
+                                        width: 0px;
+                                        enabled: !day-cell.future;
+                                        key-pressed(event) => { if event.text == " " || event.text == "\n" { day-button.pick(); return accept; } return reject; }
                                     }
                                 }
                             }
@@ -676,8 +695,19 @@ export component AppWindow inherits Window {
     private property <int> pending-retention-days: -1;
     private property <bool> pending-retention-snapshots: false;
     private property <bool> retention-confirm-open: root.pending-retention-days >= 0;
-    private property <bool> any-modal-open: root.clear-confirm-open || root.delete-snapshot-confirm || root.delete-checked-confirm || root.retention-confirm-open || DataState.move-phase != 0 || root.snapshot-viewer-open || AiState.confirming;
+    private property <bool> any-modal-open: root.clear-confirm-open || root.delete-snapshot-confirm || root.delete-checked-confirm || root.retention-confirm-open || DataState.move-phase != 0 || root.snapshot-viewer-open || AiState.confirm-kind != 0;
     changed any-modal-open => { Theme.modal-open = root.any-modal-open; }
+    // Asks the settings to take the keyboard back once a dialog over them closes.
+    private property <bool> refocus-settings: false;
+    // The viewer shows only while there is an image; without one it closes
+    // rather than leaving an invisible modal behind.
+    changed snapshot-preview => {
+        if root.snapshot-viewer-open && root.snapshot-preview.width == 0 {
+            root.snapshot-viewer-open = false;
+            Theme.modal-open = root.any-modal-open;
+            if !Theme.modal-open { snapshots-nav.focus(); }
+        }
+    }
     private property <bool> recording-unavailable: !CollectionState.paused && root.collector-state == 2;
     private property <color> recording-tone: CollectionState.paused ? Theme.warn-line : root.collector-state == 2 ? Theme.danger : root.collector-state == 1 ? Theme.ink-4 : Theme.ok;
     in-out property <string> app-search;
@@ -774,15 +804,23 @@ export component AppWindow inherits Window {
         if action == 2 { root.open-settings(2); }
     }
     function open-settings(tab: int) {
-        root.settings-open = true;
-        root.show-settings(tab);
+        // The page already shown keeps what is being typed into it.
+        if !root.settings-open || root.settings-tab != tab {
+            root.settings-open = true;
+            root.show-settings(tab);
+        }
+    }
+    function pick-settings(tab: int) {
+        if root.settings-tab != tab { root.show-settings(tab); }
     }
     function close-settings() {
+        if root.settings-tab == 4 { AiState.flush-settings(); }
         root.settings-open = false;
         root.snapshot-open = root.page == 2;
         AiState.open = root.page == 4;
     }
     function show-settings(tab: int) {
+        if root.settings-open && root.settings-tab == 4 && tab != 4 { AiState.flush-settings(); }
         root.settings-tab = tab;
         root.snapshot-open = tab == 1;
         AiState.open = tab == 4;
@@ -839,7 +877,7 @@ export component AppWindow inherits Window {
                 NavItem { text: "时间线"; icon: @image-url("icons/clock.svg"); selected: root.page == 0; clicked => { root.app-detail-open = false; root.navigate(0); } }
                 NavItem { text: "统计与报告"; icon: @image-url("icons/chart-bar.svg"); selected: root.page == 3; clicked => { root.app-detail-open = false; root.navigate(3); } }
                 snapshots-nav := NavItem { text: "快照"; icon: @image-url("icons/photo.svg"); selected: root.page == 2; clicked => { root.navigate(2); } }
-                NavItem { text: "AI 总结"; icon: @image-url("icons/sparkles.svg"); selected: root.page == 4; clicked => { root.navigate(4); } }
+                ai-nav := NavItem { text: "AI 总结"; icon: @image-url("icons/sparkles.svg"); selected: root.page == 4; clicked => { root.navigate(4); } }
                 Rectangle { vertical-stretch: 1; }
                 Rectangle {
                     height: recording.preferred-height;
@@ -1462,8 +1500,10 @@ export component AppWindow inherits Window {
     if root.settings-open : Rectangle {
         background: Theme.scrim;
         TouchArea { clicked => { root.close-settings(); } }
-        FocusScope {
-            init => { self.focus(); }
+        settings-keys := FocusScope {
+            // Not in `init`; see ConfirmationDialog.
+            Timer { interval: 1ms; triggered => { settings-keys.focus(); self.running = false; } }
+            Timer { interval: 1ms; running: root.refocus-settings; triggered => { root.refocus-settings = false; settings-keys.focus(); } }
             capture-key-pressed(event) => {
                 if event.text == Key.Escape && !root.any-modal-open { root.close-settings(); return accept; }
                 return reject;
@@ -1499,13 +1539,13 @@ export component AppWindow inherits Window {
                     spacing: 28px;
                     VerticalLayout {
                         width: 200px; spacing: 3px; alignment: start;
-                        NavItem { text: "常规"; icon: @image-url("icons/settings.svg"); selected: root.settings-tab == 6; clicked => { root.show-settings(6); } }
-                        NavItem { text: "记录与隐私"; icon: @image-url("icons/shield.svg"); selected: root.settings-tab == 0; clicked => { root.show-settings(0); } }
-                        NavItem { text: "快照"; icon: @image-url("icons/camera.svg"); selected: root.settings-tab == 1; clicked => { root.show-settings(1); } }
-                        NavItem { text: "应用规则"; icon: @image-url("icons/ban.svg"); selected: root.settings-tab == 2; clicked => { root.show-settings(2); } }
-                        NavItem { text: "数据与存储"; icon: @image-url("icons/database.svg"); selected: root.settings-tab == 3; clicked => { root.show-settings(3); } }
-                        NavItem { text: "AI"; icon: @image-url("icons/sparkles.svg"); selected: root.settings-tab == 4; clicked => { root.show-settings(4); } }
-                        NavItem { text: "关于"; icon: @image-url("icons/info-circle.svg"); selected: root.settings-tab == 5; clicked => { root.show-settings(5); } }
+                        NavItem { text: "常规"; icon: @image-url("icons/settings.svg"); selected: root.settings-tab == 6; clicked => { root.pick-settings(6); } }
+                        NavItem { text: "记录与隐私"; icon: @image-url("icons/shield.svg"); selected: root.settings-tab == 0; clicked => { root.pick-settings(0); } }
+                        NavItem { text: "快照"; icon: @image-url("icons/camera.svg"); selected: root.settings-tab == 1; clicked => { root.pick-settings(1); } }
+                        NavItem { text: "应用规则"; icon: @image-url("icons/ban.svg"); selected: root.settings-tab == 2; clicked => { root.pick-settings(2); } }
+                        NavItem { text: "数据与存储"; icon: @image-url("icons/database.svg"); selected: root.settings-tab == 3; clicked => { root.pick-settings(3); } }
+                        NavItem { text: "AI"; icon: @image-url("icons/sparkles.svg"); selected: root.settings-tab == 4; clicked => { root.pick-settings(4); } }
+                        NavItem { text: "关于"; icon: @image-url("icons/info-circle.svg"); selected: root.settings-tab == 5; clicked => { root.pick-settings(5); } }
                     }
                     VerticalLayout {
                         horizontal-stretch: 1;
@@ -1777,15 +1817,17 @@ export component AppWindow inherits Window {
         title: "删除这张快照图片？";
         explanation: "删除后图片无法恢复。";
         accept-text: "删除图片";
-        dismissed => { root.delete-snapshot-confirm = false; Theme.modal-open = false; if !root.snapshot-viewer-open { snapshots-nav.focus(); } }
+        // The viewer may still be open behind the dialog, so the page stays
+        // disabled until it closes too.
+        dismissed => { root.delete-snapshot-confirm = false; Theme.modal-open = root.any-modal-open; if !root.snapshot-viewer-open { snapshots-nav.focus(); } }
         accepted => {
             root.delete-snapshot-confirm = false;
-            Theme.modal-open = false;
             let from = root.snapshot-selected-index;
             root.snapshot-delete-selected();
             // In the viewer, like Photos, go on to the next image.
             if root.snapshot-viewer-open && !root.snapshot-step(from, 1) { root.snapshot-step(from, -1); }
             if root.snapshot-preview.width == 0 { root.snapshot-viewer-open = false; }
+            Theme.modal-open = root.any-modal-open;
             if !root.snapshot-viewer-open { snapshots-nav.focus(); }
         }
     }
@@ -1797,6 +1839,34 @@ export component AppWindow inherits Window {
         dismissed => { root.delete-checked-confirm = false; Theme.modal-open = false; snapshots-nav.focus(); }
         accepted => { root.delete-checked-confirm = false; Theme.modal-open = false; root.snapshot-delete-checked(); snapshots-nav.focus(); }
     }
+    if AiState.confirm-kind != 0 : ConfirmationDialog {
+        z: 100;
+        title: AiState.confirm-kind == 1 ? "删除这个总结版本？"
+            : AiState.confirm-kind == 2 ? "清空这一版的追问？"
+            : AiState.confirm-kind == 3 ? "删除这个 AI 连接？"
+            : "删除这个总结模板？";
+        explanation: AiState.confirm-kind == 1 ? "会删除这一版的回答、追问和当时发送的数据快照。其他版本和原始活动记录不受影响。"
+            : AiState.confirm-kind == 2 ? "会删除这一版下的全部追问和回答，保留最初的总结。"
+            : AiState.confirm-kind == 3 ? "会同时删除保存在 Windows 凭据管理器中的密钥。用到它的自动总结会暂停，已有的总结仍然保留。"
+            : "用到它的自动总结会暂停，已有的总结仍然保留。";
+        detail: "此操作无法撤销。";
+        accept-text: AiState.confirm-kind == 2 ? "清空" : AiState.confirm-kind == 3 ? "删除连接" : AiState.confirm-kind == 4 ? "删除模板" : "删除";
+        dismissed => {
+            AiState.confirm-kind = 0;
+            Theme.modal-open = root.any-modal-open;
+            if root.settings-open { root.refocus-settings = true; } else { ai-nav.focus(); }
+        }
+        accepted => {
+            let kind = AiState.confirm-kind;
+            AiState.confirm-kind = 0;
+            Theme.modal-open = root.any-modal-open;
+            if kind == 1 { AiState.delete-version(); }
+            else if kind == 2 { AiState.clear-conversation(); }
+            else if kind == 3 { AiState.delete-provider(); }
+            else if kind == 4 { AiState.delete-prompt(); }
+            if root.settings-open { root.refocus-settings = true; } else { ai-nav.focus(); }
+        }
+    }
     if root.snapshot-viewer-open && root.snapshot-preview.width > 0 : PhotoViewer {
         z: 90;
         source: root.snapshot-preview;
@@ -1807,7 +1877,7 @@ export component AppWindow inherits Window {
         can-export: root.snapshot-deletable && !DataState.busy;
         can-delete: root.snapshot-deletable;
         active: !root.delete-snapshot-confirm;
-        close => { root.snapshot-viewer-open = false; snapshots-nav.focus(); }
+        close => { root.snapshot-viewer-open = false; Theme.modal-open = root.any-modal-open; snapshots-nav.focus(); }
         step(offset) => { root.snapshot-step(root.snapshot-selected-index, offset); }
         export => { DataState.action(7); }
         delete => { root.delete-snapshot-confirm = true; }

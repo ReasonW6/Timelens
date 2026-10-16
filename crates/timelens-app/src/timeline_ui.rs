@@ -270,10 +270,39 @@ fn ymd(timestamp: i64) -> i32 {
         })
 }
 
+/// Where the shared range ends as the user chose it: a range that runs with the
+/// clock ends where it was planned to, any other where it was set.
+pub(crate) fn chosen_end(state: &UiState) -> i64 {
+    if state.follow_now {
+        state.horizon_ended_utc_ms
+    } else {
+        state.range_ended_utc_ms
+    }
+}
+
+/// Whether the shared range is the whole of its calendar day.
+fn whole_day(state: &UiState) -> bool {
+    state.calendar_day.is_some_and(|day| {
+        state.range_started_utc_ms == day
+            && timeline_view::selected_day_bounds(day, 0).map(|(_, end)| end)
+                == Some(chosen_end(state))
+    })
+}
+
 /// The shared range in words: a day by its date, part of a day with its hours,
 /// or a recent stretch by its length.
 fn range_title(state: &UiState, now: i64) -> String {
     let Some(day) = state.calendar_day else {
+        if !state.follow_now {
+            // A fixed stretch over several days, such as a summary's.
+            return crate::ai_ui::range_text(
+                state.range_started_utc_ms,
+                state.range_ended_utc_ms,
+                now,
+                &Local,
+                true,
+            );
+        }
         let hours = state
             .horizon_ended_utc_ms
             .saturating_sub(state.horizon_started_utc_ms)
@@ -308,14 +337,14 @@ fn range_title(state: &UiState, now: i64) -> String {
         "%Y年%-m月%-d日"
     };
     let label = format!("{name}{} {weekday}", date.format(format));
-    let day_end = timeline_view::selected_day_bounds(day, 0).map(|(_, end)| end);
-    if state.range_started_utc_ms == day && day_end == Some(state.horizon_ended_utc_ms) {
+    if whole_day(state) {
         return label;
     }
-    let end = if day_end == Some(state.horizon_ended_utc_ms) {
+    let end_ms = chosen_end(state);
+    let end = if timeline_view::selected_day_bounds(day, 0).map(|(_, end)| end) == Some(end_ms) {
         "24:00".to_owned()
     } else {
-        local_label(state.horizon_ended_utc_ms, "%H:%M")
+        local_label(end_ms, "%H:%M")
     };
     format!(
         "{label} · {}–{end}",
@@ -340,8 +369,9 @@ pub fn render(window: &AppWindow, state: &Rc<RefCell<UiState>>, snapshot: &Timel
             .single()
             .is_some_and(|d| d.date_naive() < now_date),
     );
+    // Only the whole of today counts; part of it leaves "today" to choose.
     window.set_is_today(
-        state.calendar_day.is_some()
+        whole_day(&state)
             && Local
                 .timestamp_millis_opt(anchor)
                 .single()
@@ -492,6 +522,16 @@ mod tests {
         state.range_started_utc_ms = start;
         state.horizon_ended_utc_ms = end;
         assert_eq!(range_title(&state, now), "9月5日 周六 · 09:00–24:00");
+        // An entry picked on the timeline, or a summary's span, within the day.
+        state.range_started_utc_ms = at(5, 9);
+        state.range_ended_utc_ms = at(5, 10);
+        state.follow_now = false;
+        assert_eq!(range_title(&state, now), "9月5日 周六 · 09:00–10:00");
+        assert!(!whole_day(&state));
+        state = state_for_day(now, 0).unwrap();
+        assert!(whole_day(&state));
+        state.range_started_utc_ms = at(10, 8);
+        assert!(!whole_day(&state));
         assert_eq!(range_title(&UiState::recent_hours(168), now), "最近 7 天");
         assert_eq!(range_title(&UiState::recent_hours(24), now), "最近 24 小时");
     }

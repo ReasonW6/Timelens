@@ -83,6 +83,10 @@ struct UiData {
     /// What the preview checked: range, connection revision and template.
     prepared: Option<(i64, i64, String, String)>,
     preview_due: Option<Instant>,
+    /// The preview being worked out, by the change count it started at.
+    preview_job: Option<(u64, mpsc::Receiver<Result<Preview>>)>,
+    /// Counts changes to what a new summary would send.
+    preview_seq: u64,
     history: Vec<Target>,
     /// Each version's number within its range.
     numbers: BTreeMap<i64, usize>,
@@ -103,6 +107,8 @@ struct UiData {
     picked: Vec<(SnapshotConsent, i64)>,
     clear_key: bool,
     clear_headers: bool,
+    /// The version on screen when a delete or clear confirmation opened.
+    confirm_version: Option<i64>,
 }
 impl Default for UiData {
     fn default() -> Self {
@@ -116,6 +122,8 @@ impl Default for UiData {
             range: None,
             prepared: None,
             preview_due: None,
+            preview_job: None,
+            preview_seq: 0,
             history: vec![],
             numbers: BTreeMap::new(),
             followups: vec![],
@@ -130,6 +138,7 @@ impl Default for UiData {
             picked: vec![],
             clear_key: false,
             clear_headers: false,
+            confirm_version: None,
         }
     }
 }
@@ -204,7 +213,13 @@ fn date_text(day: NaiveDate, today: NaiveDate, weekday: bool) -> String {
 }
 /// A readable local span such as "10月15日 周四 00:00–14:32" or "10月14日 周三 全天".
 /// `brief` drops the weekday and names today and yesterday.
-fn range_text<Tz: TimeZone>(start: i64, end: i64, now: i64, zone: &Tz, brief: bool) -> String {
+pub(crate) fn range_text<Tz: TimeZone>(
+    start: i64,
+    end: i64,
+    now: i64,
+    zone: &Tz,
+    brief: bool,
+) -> String {
     let (Some(s), Some(e), Some(n)) = (at(zone, start), at(zone, end), at(zone, now)) else {
         return String::new();
     };
@@ -308,12 +323,26 @@ fn excerpt(text: &str) -> String {
     short
 }
 
+/// Keeps the AI page running; on exit, a connection never saved leaves no
+/// key behind.
+pub struct Installed {
+    _timer: Timer,
+    data: Rc<RefCell<UiData>>,
+}
+impl Drop for Installed {
+    fn drop(&mut self) {
+        if let Ok(d) = self.data.try_borrow() {
+            forget_unsaved_credentials(&d);
+        }
+    }
+}
+
 pub fn install(
     w: &AppWindow,
     storage: Store,
     timeline: Rc<RefCell<UiState>>,
     service: AiService,
-) -> Result<Timer> {
+) -> Result<Installed> {
     let data = Rc::new(RefCell::new(UiData::default()));
     let sender = service.sender;
     reset_dataset_ui(w, &mut data.borrow_mut(), &*lock(&storage)?)?;
@@ -445,8 +474,8 @@ pub fn install(
     );
     bind!(
         on_fetch_models,
-        |w: &AppWindow, d: &mut UiData, _: &Store, sender: &Commands| {
-            let result = fetch_models(w, d, sender);
+        |w: &AppWindow, d: &mut UiData, s: &Store, sender: &Commands| {
+            let result = fetch_models(w, d, &*lock(s)?, sender);
             if let Err(e) = &result {
                 w.global::<AiState>()
                     .set_model_note(format!("无法获取：{e}").into());
@@ -575,9 +604,10 @@ pub fn install(
     });
     bind!(on_prepare, |w: &AppWindow,
                        d: &mut UiData,
-                       s: &Store,
+                       _: &Store,
                        _: &Commands| {
-        refresh_preview(w, d, &*lock(s)?);
+        invalidate(w, d);
+        d.preview_due = Some(Instant::now());
         Ok(())
     });
     bind!(on_new_summary, |w: &AppWindow,
@@ -585,7 +615,7 @@ pub fn install(
                            _: &Store,
                            _: &Commands| {
         w.global::<AiState>().set_page(0);
-        if d.prepared.is_none() && d.preview_due.is_none() {
+        if d.prepared.is_none() && d.preview_due.is_none() && d.preview_job.is_none() {
             invalidate(w, d);
         }
         Ok(())
@@ -659,6 +689,7 @@ pub fn install(
             d.preview = None;
             let g = w.global::<AiState>();
             g.set_image_previewed(false);
+            g.set_image_detail("".into());
             let slot = d
                 .slots
                 .get(g.get_image_index() as usize)
@@ -865,7 +896,7 @@ pub fn install(
     bind!(
         on_delete_version,
         |w: &AppWindow, d: &mut UiData, s: &Store, _: &Commands| {
-            let id = d.version.ok_or_else(|| anyhow!("请先选择一份总结"))?;
+            let id = confirmed_version(d)?;
             let s = lock(s)?;
             s.delete_ai_version(id)?;
             d.version = None;
@@ -880,7 +911,7 @@ pub fn install(
     bind!(
         on_clear_conversation,
         |w: &AppWindow, d: &mut UiData, s: &Store, _: &Commands| {
-            let id = d.version.ok_or_else(|| anyhow!("请先选择一份总结"))?;
+            let id = confirmed_version(d)?;
             let s = lock(s)?;
             s.clear_ai_conversation(id)?;
             d.followup = None;
@@ -905,47 +936,60 @@ pub fn install(
         }
     );
 
+    bind!(
+        on_begin_confirm,
+        |_: &AppWindow, d: &mut UiData, _: &Store, _: &Commands| {
+            d.confirm_version = d.version;
+            Ok(())
+        }
+    );
+
     // ───── Automatic summaries, records and notifications ─────
     bind!(on_save_daily, |w: &AppWindow,
                           d: &mut UiData,
                           s: &Store,
                           sender: &Commands| {
-        let s = lock(s)?;
-        let result = save_schedule(w, d, &s, true);
-        if result.is_err() {
-            show_settings(w, d, &s)?;
-        }
-        result?;
-        sender.send(AiCommand::Wake)?;
-        Ok(())
+        save_schedule_or_revert(w, d, &*lock(s)?, sender, true, true)
     });
     bind!(
         on_save_interval,
         |w: &AppWindow, d: &mut UiData, s: &Store, sender: &Commands| {
-            let s = lock(s)?;
-            let result = save_schedule(w, d, &s, false);
-            if result.is_err() {
-                show_settings(w, d, &s)?;
-            }
-            result?;
-            sender.send(AiCommand::Wake)?;
-            Ok(())
+            save_schedule_or_revert(w, d, &*lock(s)?, sender, false, true)
+        }
+    );
+    bind!(
+        on_save_daily_timing,
+        |w: &AppWindow, d: &mut UiData, s: &Store, sender: &Commands| {
+            save_schedule_or_revert(w, d, &*lock(s)?, sender, true, false)
+        }
+    );
+    bind!(
+        on_save_interval_timing,
+        |w: &AppWindow, d: &mut UiData, s: &Store, sender: &Commands| {
+            save_schedule_or_revert(w, d, &*lock(s)?, sender, false, false)
         }
     );
     bind!(
         on_save_settings,
-        |w: &AppWindow, d: &mut UiData, s: &Store, _: &Commands| {
+        |w: &AppWindow, _: &mut UiData, s: &Store, _: &Commands| {
             let s = lock(s)?;
-            let result = save_settings(w, &s);
+            let result = read_settings(w).and_then(|p| Ok(s.set_ai_settings(&p)?));
             if result.is_err() {
-                show_settings(w, d, &s)?;
+                show_records(w, &s)?;
             }
             result?;
             w.global::<AiState>().set_status("已保存".into());
             Ok(())
         }
     );
+    bind!(
+        on_flush_settings,
+        |w: &AppWindow, d: &mut UiData, s: &Store, sender: &Commands| {
+            flush_settings(w, d, &*lock(s)?, sender)
+        }
+    );
 
+    let kept = Rc::clone(&data);
     let weak = w.as_weak();
     let timer = Timer::default();
     let mut lists = timelens_observer::PollInterval::new(Duration::from_secs(5));
@@ -998,8 +1042,15 @@ pub fn install(
         let reload_due =
             structural || (open && ((changed && lists.is_due(now)) || settled.is_due(now)));
         let reader_due = reading && changed;
-        let preview_due = open && g.get_page() == 0 && d.preview_due.is_some_and(|due| now >= due);
-        if !(reload_due || reader_due || preview_due) {
+        let preview_due = open
+            && g.get_page() == 0
+            && d.preview_job.is_none()
+            && d.preview_due.is_some_and(|due| now >= due);
+        if preview_due {
+            start_preview(&w, &mut d, &storage);
+        }
+        poll_preview(&w, &mut d);
+        if !(reload_due || reader_due) {
             return;
         }
         let Ok(s) = storage.try_lock() else {
@@ -1017,6 +1068,12 @@ pub fn install(
             if let Err(e) = reload(&w, &mut d, &s) {
                 g.set_status(e.to_string().into());
             }
+            if w.get_settings_open()
+                && w.get_settings_tab() == 4
+                && let Err(e) = show_schedule_lines(&w, &d, &s)
+            {
+                g.set_status(e.to_string().into());
+            }
             structural = false;
             lists.mark(now);
             settled.mark(now);
@@ -1030,22 +1087,24 @@ pub fn install(
         if reload_due || reader_due {
             changed = false;
         }
-        if preview_due {
-            refresh_preview(&w, &mut d, &s);
-        }
     });
-    Ok(timer)
+    Ok(Installed {
+        _timer: timer,
+        data: kept,
+    })
 }
 
 fn opened(w: &AppWindow, d: &mut UiData, s: &Storage, (start, end): (i64, i64)) -> Result<()> {
     reload(w, d, s)?;
+    // The AI thread runs and pauses schedules meanwhile.
+    show_schedules(w, d, s, None)?;
     if end > start && d.range != Some((start, end)) {
         set_range(w, d, start, end);
         if w.global::<AiState>().get_page() == 6 {
             list_images(w, d, s)?;
         }
     }
-    if d.prepared.is_none() && d.preview_due.is_none() {
+    if d.prepared.is_none() && d.preview_due.is_none() && d.preview_job.is_none() {
         invalidate(w, d);
     }
     show_reader(w, d, s)
@@ -1130,17 +1189,59 @@ fn regenerate(
 
 fn invalidate(w: &AppWindow, d: &mut UiData) {
     d.prepared = None;
+    d.preview_seq += 1;
     d.preview_due = Some(Instant::now() + PREVIEW_DELAY);
     let g = w.global::<AiState>();
     g.set_prepared(false);
     g.set_preview_state(0);
 }
-fn refresh_preview(w: &AppWindow, d: &mut UiData, s: &Storage) {
+/// Work out the preview in the background: a long range takes a while to
+/// total, and the window stays responsive meanwhile. One runs at a time; the
+/// next waits for it.
+fn start_preview(w: &AppWindow, d: &mut UiData, storage: &Store) {
     d.preview_due = None;
-    d.prepared = None;
+    let ask = PreviewAsk {
+        range: d.range,
+        profile: d.use_profile.clone(),
+        prompt: d.use_prompt.clone(),
+        images: d.picked.len(),
+    };
+    let (sender, receiver) = mpsc::channel();
+    d.preview_job = Some((d.preview_seq, receiver));
+    w.global::<AiState>().set_preview_state(0);
+    let storage = Arc::clone(storage);
+    std::thread::spawn(move || {
+        let result = storage
+            .lock()
+            .map_err(|_| anyhow!("存储锁损坏"))
+            .and_then(|s| prepare_preview(&s, &ask));
+        let _ = sender.send(result);
+    });
+}
+/// Show a finished preview, unless something changed since it started.
+fn poll_preview(w: &AppWindow, d: &mut UiData) {
+    let Some((seq, receiver)) = &d.preview_job else {
+        return;
+    };
+    let result = match receiver.try_recv() {
+        Ok(result) => result,
+        Err(mpsc::TryRecvError::Empty) => return,
+        Err(mpsc::TryRecvError::Disconnected) => Err(anyhow!("整理预览时出错")),
+    };
+    let current = *seq == d.preview_seq;
+    d.preview_job = None;
+    if !current {
+        return;
+    }
     let g = w.global::<AiState>();
-    match prepare_preview(w, d, s) {
-        Ok(()) => {
+    match result {
+        Ok(p) => {
+            g.set_preview_target(p.target.into());
+            g.set_preview_facts(p.facts.into());
+            g.set_preview_empty(p.empty);
+            g.set_preview_missing(p.missing.into());
+            g.set_preview_missing_count(p.missing_count);
+            d.prepared = Some(p.checked);
             g.set_preview_state(1);
             g.set_prepared(true);
         }
@@ -1153,11 +1254,30 @@ fn refresh_preview(w: &AppWindow, d: &mut UiData, s: &Storage) {
         }
     }
 }
+/// What a preview is worked out for.
+struct PreviewAsk {
+    range: Option<(i64, i64)>,
+    profile: Option<String>,
+    prompt: String,
+    images: usize,
+}
+/// What a new summary would send, as the preview shows it.
+struct Preview {
+    target: String,
+    facts: String,
+    empty: bool,
+    missing: String,
+    missing_count: i32,
+    /// What was checked: range, connection revision and template.
+    checked: (i64, i64, String, String),
+}
 /// Work out locally what a new summary would send. Nothing leaves the computer.
-fn prepare_preview(w: &AppWindow, d: &mut UiData, s: &Storage) -> Result<()> {
-    let (start, end) = d.range.ok_or_else(|| blocked("请先在右上角选择时段", 0))?;
-    let id = d
-        .use_profile
+fn prepare_preview(s: &Storage, ask: &PreviewAsk) -> Result<Preview> {
+    let (start, end) = ask
+        .range
+        .ok_or_else(|| blocked("请先在右上角选择时段", 0))?;
+    let id = ask
+        .profile
         .clone()
         .ok_or_else(|| blocked("还没有可用的 AI 连接", 1))?;
     let p = s.ai_profile(&id)?;
@@ -1170,16 +1290,16 @@ fn prepare_preview(w: &AppWindow, d: &mut UiData, s: &Storage) -> Result<()> {
     let prompt = s
         .ai_prompts()?
         .into_iter()
-        .find(|x| x.id == d.use_prompt)
+        .find(|x| x.id == ask.prompt)
         .ok_or_else(|| blocked("请选择一个总结模板", 2))?;
-    if !d.picked.is_empty() && p.model.vision != Capability::Supported {
+    if ask.images > 0 && p.model.vision != Capability::Supported {
         return Err(blocked("当前模型不能看图，请先移除已选的快照", 3));
     }
     let envelope = s.ai_envelope(start, end)?;
     let chunks = s
         .ai_request_chunks(&envelope, &p, &prompt)
         .map_err(|e| blocked(e.to_string(), 1))?;
-    let empty = !envelope.available && d.picked.is_empty();
+    let empty = !envelope.available && ask.images == 0;
     let share = envelope.covered_ms as f64 * 100.0 / (end - start) as f64;
     let requests = if empty {
         "不会调用 AI".to_owned()
@@ -1209,22 +1329,19 @@ fn prepare_preview(w: &AppWindow, d: &mut UiData, s: &Storage) -> Result<()> {
     if envelope.missing.len() > 20 {
         missing.push(format!("另有 {} 段未列出", envelope.missing.len() - 20));
     }
-    let g = w.global::<AiState>();
-    g.set_preview_target(format!("{} · {}", p.name, p.model.id).into());
-    g.set_preview_facts(
-        format!(
+    Ok(Preview {
+        target: format!("{} · {}", p.name, p.model.id),
+        facts: format!(
             "有记录 {share:.0}% · {} 个应用 · 缺失 {} 段 · {requests} · {} 张快照",
             envelope.applications.len(),
             envelope.missing.len(),
-            d.picked.len()
-        )
-        .into(),
-    );
-    g.set_preview_empty(empty);
-    g.set_preview_missing(missing.join("\n").into());
-    g.set_preview_missing_count(envelope.missing.len() as i32);
-    d.prepared = Some((start, end, p.revision(), serde_json::to_string(&prompt)?));
-    Ok(())
+            ask.images
+        ),
+        empty,
+        missing: missing.join("\n"),
+        missing_count: envelope.missing.len() as i32,
+        checked: (start, end, p.revision(), serde_json::to_string(&prompt)?),
+    })
 }
 
 fn list_images(w: &AppWindow, d: &mut UiData, s: &Storage) -> Result<()> {
@@ -1326,31 +1443,41 @@ fn merge_secrets(
     let mut secrets = saved.unwrap_or_default();
     if clear_key || !key.is_empty() {
         secrets.api_key.zeroize();
-        secrets.api_key.push_str(key);
+        if !clear_key {
+            secrets.api_key.push_str(key);
+        }
     }
     if clear_headers || headers.is_some() {
         for value in secrets.headers.values_mut() {
             value.zeroize();
         }
-        secrets.headers = headers.unwrap_or_default();
+        secrets.headers = if clear_headers {
+            BTreeMap::new()
+        } else {
+            headers.unwrap_or_default()
+        };
     }
     Some(secrets)
 }
 fn save_credentials(w: &AppWindow, p: &ProviderProfile, d: &mut UiData) -> Result<()> {
     let g = w.global::<AiState>();
-    let headers = parse_headers(&g.get_secret_headers())?;
+    // An explicit clear wins over whatever the field still holds.
+    let headers = if d.clear_headers {
+        None
+    } else {
+        parse_headers(&g.get_secret_headers())?
+    };
+    let key = if d.clear_key {
+        SharedString::default()
+    } else {
+        g.get_api_key()
+    };
     let saved = if p.credential_revision == 0 {
         None
     } else {
         credentials::load(&p.id).ok()
     };
-    let Some(secrets) = merge_secrets(
-        saved,
-        &g.get_api_key(),
-        headers,
-        d.clear_key,
-        d.clear_headers,
-    ) else {
+    let Some(secrets) = merge_secrets(saved, &key, headers, d.clear_key, d.clear_headers) else {
         return Ok(());
     };
     credentials::save(&p.id, &secrets).map_err(anyhow::Error::msg)?;
@@ -1392,7 +1519,7 @@ fn save_profile(w: &AppWindow, d: &mut UiData, s: &Storage) -> Result<()> {
     show_test(w, d);
     Ok(())
 }
-fn fetch_models(w: &AppWindow, d: &mut UiData, sender: &Commands) -> Result<()> {
+fn fetch_models(w: &AppWindow, d: &mut UiData, s: &Storage, sender: &Commands) -> Result<()> {
     let g = w.global::<AiState>();
     // Listing models needs no model; a placeholder passes validation.
     let empty = g.get_model_id().trim().is_empty();
@@ -1404,17 +1531,41 @@ fn fetch_models(w: &AppWindow, d: &mut UiData, sender: &Commands) -> Result<()> 
         g.set_model_id("".into());
     }
     let mut p = result?;
+    let revision = p.credential_revision;
     save_credentials(w, &p, d)?;
     p.credential_revision = d.profile.credential_revision;
+    // A saved connection with a new key needs testing again before summaries
+    // use it; the rest of the form stays unsaved.
+    let resaved = p.credential_revision != revision && d.profiles.iter().any(|x| x.id == p.id);
+    if resaved {
+        let mut saved = s.ai_profile(&p.id)?;
+        saved.credential_revision = p.credential_revision;
+        s.save_ai_profile(&saved)?;
+        reload(w, d, s)?;
+    }
     sender.send(AiCommand::Models(p.clone()))?;
     if empty {
         p.model.id.clear();
     }
     d.profile = p;
+    if resaved {
+        show_test(w, d);
+        if d.use_profile.as_deref() == Some(d.profile.id.as_str()) {
+            invalidate(w, d);
+        }
+    }
     g.set_model_note("正在获取可用模型…".into());
     Ok(())
 }
+/// A connection never saved leaves no key behind in the Credential Manager;
+/// listing its models is what writes one.
+fn forget_unsaved_credentials(d: &UiData) {
+    if d.profile.credential_revision > 0 && !d.profiles.iter().any(|x| x.id == d.profile.id) {
+        let _ = credentials::delete(&d.profile.id);
+    }
+}
 fn edit_profile(w: &AppWindow, d: &mut UiData, p: ProviderProfile, index: i32) {
+    forget_unsaved_credentials(d);
     d.profile = p;
     d.clear_key = false;
     d.clear_headers = false;
@@ -2140,8 +2291,9 @@ fn show_job(w: &AppWindow, d: &mut UiData, s: &Storage, id: i64) -> Result<()> {
         .into(),
     );
     g.set_reader_state(state);
+    // A queued job with an error is waiting to retry; say why.
     g.set_reader_error(
-        if state == 3 {
+        if state == 3 || (state == 1 && job.error.is_some()) {
             failure_text(job.error.as_ref())
         } else {
             String::new()
@@ -2265,8 +2417,22 @@ fn usage_label(u: &TokenUsage) -> String {
     }
 }
 
+/// The version a delete or clear confirmation was opened on, if the reader still
+/// shows it.
+fn confirmed_version(d: &mut UiData) -> Result<i64> {
+    let id = d
+        .confirm_version
+        .take()
+        .ok_or_else(|| anyhow!("请先选择一份总结"))?;
+    if d.version != Some(id) {
+        bail!("显示的总结已经切换，没有执行；请重新操作");
+    }
+    Ok(id)
+}
+
 fn reset_dataset_ui(w: &AppWindow, d: &mut UiData, s: &Storage) -> Result<()> {
     let range = d.range;
+    forget_unsaved_credentials(d);
     *d = UiData::default();
     let g = w.global::<AiState>();
     g.set_page(0);
@@ -2290,6 +2456,7 @@ fn reset_dataset_ui(w: &AppWindow, d: &mut UiData, s: &Storage) -> Result<()> {
     g.set_range_label("".into());
     g.set_test_state(0);
     g.set_test_message("".into());
+    g.set_confirm_kind(0);
     reload(w, d, s)?;
     let current = d
         .use_profile
@@ -2328,9 +2495,10 @@ fn reset_dataset_ui(w: &AppWindow, d: &mut UiData, s: &Storage) -> Result<()> {
     Ok(())
 }
 
-fn save_settings(w: &AppWindow, s: &Storage) -> Result<()> {
+/// The records and notification settings as the fields show them.
+fn read_settings(w: &AppWindow) -> Result<AiSettings> {
     let g = w.global::<AiState>();
-    let settings = AiSettings {
+    Ok(AiSettings {
         days: optional(&g.get_retention_days(), "保留天数")?,
         max_bytes: parse::<u64>(&g.get_retention_mib(), "空间上限")?
             .checked_mul(1024 * 1024)
@@ -2340,11 +2508,13 @@ fn save_settings(w: &AppWindow, s: &Storage) -> Result<()> {
         recent_messages: optional(&g.get_recent_messages(), "消息数")?,
         notify_success: g.get_notify_success(),
         notify_failure: g.get_notify_failure(),
-    };
-    s.set_ai_settings(&settings)?;
-    Ok(())
+    })
 }
 fn show_settings(w: &AppWindow, d: &UiData, s: &Storage) -> Result<()> {
+    show_records(w, s)?;
+    show_schedules(w, d, s, None)
+}
+fn show_records(w: &AppWindow, s: &Storage) -> Result<()> {
     let g = w.global::<AiState>();
     let p = s.ai_settings()?;
     g.set_compression(p.compression_enabled);
@@ -2358,18 +2528,28 @@ fn show_settings(w: &AppWindow, d: &UiData, s: &Storage) -> Result<()> {
     g.set_version_limit(p.versions_to_keep.to_string().into());
     g.set_notify_success(p.notify_success);
     g.set_notify_failure(p.notify_failure);
-
+    Ok(())
+}
+/// Show the schedules as saved; `only` limits this to the daily (`true`) or the
+/// interval (`false`) one, leaving what the other's fields hold.
+fn show_schedules(w: &AppWindow, d: &UiData, s: &Storage, only: Option<bool>) -> Result<()> {
+    let g = w.global::<AiState>();
+    let (daily, interval) = (only != Some(false), only != Some(true));
     // Until a schedule is saved, offer the choices of a new summary.
     let provider = g.get_use_provider_index();
     let prompt = g.get_use_prompt_index().max(0);
-    g.set_daily(false);
-    g.set_daily_provider_index(provider);
-    g.set_daily_prompt_index(prompt);
-    g.set_daily_line("已关闭".into());
-    g.set_interval(false);
-    g.set_interval_provider_index(provider);
-    g.set_interval_prompt_index(prompt);
-    g.set_interval_line("已关闭".into());
+    if daily {
+        g.set_daily(false);
+        g.set_daily_provider_index(provider);
+        g.set_daily_prompt_index(prompt);
+        g.set_daily_line("已关闭".into());
+    }
+    if interval {
+        g.set_interval(false);
+        g.set_interval_provider_index(provider);
+        g.set_interval_prompt_index(prompt);
+        g.set_interval_line("已关闭".into());
+    }
     let now = crate::unix_time_ms();
     for schedule in s.ai_schedules()? {
         let provider = d
@@ -2388,7 +2568,7 @@ fn show_settings(w: &AppWindow, d: &UiData, s: &Storage) -> Result<()> {
             .map_or(String::new(), |v| v.to_string())
             .into();
         match schedule.kind {
-            ScheduleKind::Daily { hour, minute } => {
+            ScheduleKind::Daily { hour, minute } if daily => {
                 g.set_daily(schedule.enabled);
                 g.set_daily_time(format!("{hour:02}:{minute:02}").into());
                 g.set_daily_retries(retries);
@@ -2396,7 +2576,7 @@ fn show_settings(w: &AppWindow, d: &UiData, s: &Storage) -> Result<()> {
                 g.set_daily_prompt_index(prompt);
                 g.set_daily_line(line.into());
             }
-            ScheduleKind::Interval { hours, .. } => {
+            ScheduleKind::Interval { hours, .. } if interval => {
                 g.set_interval(schedule.enabled);
                 g.set_interval_hours(hours.to_string().into());
                 g.set_interval_retries(retries);
@@ -2404,9 +2584,134 @@ fn show_settings(w: &AppWindow, d: &UiData, s: &Storage) -> Result<()> {
                 g.set_interval_prompt_index(prompt);
                 g.set_interval_line(line.into());
             }
+            _ => {}
+        }
+    }
+    if daily {
+        g.set_daily_saved_provider_index(g.get_daily_provider_index());
+        g.set_daily_saved_prompt_index(g.get_daily_prompt_index());
+        g.set_daily_dirty(false);
+    }
+    if interval {
+        g.set_interval_saved_provider_index(g.get_interval_provider_index());
+        g.set_interval_saved_prompt_index(g.get_interval_prompt_index());
+        g.set_interval_dirty(false);
+    }
+    Ok(())
+}
+/// Refresh only the switches and status lines, leaving fields being edited.
+fn show_schedule_lines(w: &AppWindow, d: &UiData, s: &Storage) -> Result<()> {
+    let g = w.global::<AiState>();
+    let now = crate::unix_time_ms();
+    for schedule in s.ai_schedules()? {
+        let line = schedule_line(&schedule, d, now).into();
+        match schedule.kind {
+            ScheduleKind::Daily { .. } => {
+                g.set_daily(schedule.enabled);
+                g.set_daily_line(line);
+            }
+            ScheduleKind::Interval { .. } => {
+                g.set_interval(schedule.enabled);
+                g.set_interval_line(line);
+            }
         }
     }
     Ok(())
+}
+/// Whether a schedule's timing fields still say what is saved.
+fn timing_saved(w: &AppWindow, saved: &Schedule) -> bool {
+    let g = w.global::<AiState>();
+    let (timing, retries) = match saved.kind {
+        ScheduleKind::Daily { .. } => (g.get_daily_time(), g.get_daily_retries()),
+        ScheduleKind::Interval { .. } => (g.get_interval_hours(), g.get_interval_retries()),
+    };
+    let same_timing = match saved.kind {
+        ScheduleKind::Daily { hour, minute } => {
+            timing
+                .split_once(':')
+                .and_then(|(h, m)| Some((h.trim().parse().ok()?, m.trim().parse().ok()?)))
+                == Some((hour, minute))
+        }
+        ScheduleKind::Interval { hours, .. } => timing.trim().parse().ok() == Some(hours),
+    };
+    same_timing && optional::<u8>(&retries, "").ok() == Some(saved.retries)
+}
+/// Save what the settings fields hold and nobody saved yet. A field that does
+/// not parse goes back to what is saved, and the status says why.
+fn flush_settings(w: &AppWindow, d: &UiData, s: &Storage, sender: &Commands) -> Result<()> {
+    let g = w.global::<AiState>();
+    match read_settings(w) {
+        Ok(settings) if settings != s.ai_settings()? => s.set_ai_settings(&settings)?,
+        Ok(_) => {}
+        Err(e) => {
+            show_records(w, s)?;
+            g.set_status(format!("{e}，已恢复为保存的值").into());
+        }
+    }
+    for saved in s.ai_schedules()? {
+        if timing_saved(w, &saved) {
+            continue;
+        }
+        let daily = matches!(saved.kind, ScheduleKind::Daily { .. });
+        if let Err(e) = save_schedule_or_revert(w, d, s, sender, daily, false) {
+            g.set_status(e.to_string().into());
+        }
+    }
+    Ok(())
+}
+/// Save a schedule; when that fails, its fields go back to what is saved and
+/// the status says why. `choice` saves the connection and template the
+/// pickers show, otherwise the saved ones stay.
+fn save_schedule_or_revert(
+    w: &AppWindow,
+    d: &UiData,
+    s: &Storage,
+    sender: &Commands,
+    daily: bool,
+    choice: bool,
+) -> Result<()> {
+    let shown = pickers(w, daily);
+    if let Err(e) = save_schedule(w, d, s, daily, choice) {
+        show_schedules(w, d, s, Some(daily))?;
+        // A pick that did not save stays on screen, still marked unsaved.
+        set_pickers(w, daily, shown);
+        return Err(e);
+    }
+    if !choice {
+        // A picker changed but not saved stays as the user left it.
+        set_pickers(w, daily, shown);
+    }
+    sender.send(AiCommand::Wake)?;
+    Ok(())
+}
+/// A schedule's connection and template pickers, and whether a pick is unsaved.
+fn pickers(w: &AppWindow, daily: bool) -> (i32, i32, bool) {
+    let g = w.global::<AiState>();
+    if daily {
+        (
+            g.get_daily_provider_index(),
+            g.get_daily_prompt_index(),
+            g.get_daily_dirty(),
+        )
+    } else {
+        (
+            g.get_interval_provider_index(),
+            g.get_interval_prompt_index(),
+            g.get_interval_dirty(),
+        )
+    }
+}
+fn set_pickers(w: &AppWindow, daily: bool, (provider, prompt, dirty): (i32, i32, bool)) {
+    let g = w.global::<AiState>();
+    if daily {
+        g.set_daily_provider_index(provider);
+        g.set_daily_prompt_index(prompt);
+        g.set_daily_dirty(dirty);
+    } else {
+        g.set_interval_provider_index(provider);
+        g.set_interval_prompt_index(prompt);
+        g.set_interval_dirty(dirty);
+    }
 }
 fn schedule_line(schedule: &Schedule, d: &UiData, now: i64) -> String {
     if let Some(reason) = &schedule.paused_reason {
@@ -2440,7 +2745,7 @@ fn schedule_line(schedule: &Schedule, d: &UiData, now: i64) -> String {
         schedule.model_id
     )
 }
-fn save_schedule(w: &AppWindow, d: &UiData, s: &Storage, daily: bool) -> Result<()> {
+fn save_schedule(w: &AppWindow, d: &UiData, s: &Storage, daily: bool, choice: bool) -> Result<()> {
     let g = w.global::<AiState>();
     let id = if daily { "daily" } else { "interval" };
     let (enabled, provider, prompt, retries) = if daily {
@@ -2474,8 +2779,16 @@ fn save_schedule(w: &AppWindow, d: &UiData, s: &Storage, daily: bool) -> Result<
         }
     };
     let old = s.ai_schedules()?.into_iter().find(|v| v.id == id);
-    let profile = d.profiles.get(provider as usize);
-    let template = d.prompts.get(prompt as usize);
+    let (profile, template) = match old.as_ref().filter(|_| !choice) {
+        Some(o) => (
+            d.profiles.iter().find(|p| p.id == o.provider_id),
+            d.prompts.iter().find(|p| p.id == o.prompt_id),
+        ),
+        None => (
+            d.profiles.get(provider as usize),
+            d.prompts.get(prompt as usize),
+        ),
+    };
     if enabled {
         let p = profile.ok_or_else(|| anyhow!("请先选择自动总结使用的 AI 连接"))?;
         if !p.is_tested() {
@@ -2537,16 +2850,17 @@ fn save_schedule(w: &AppWindow, d: &UiData, s: &Storage, daily: bool) -> Result<
         }
     }
     s.save_ai_schedule(&schedule)?;
-    show_settings(w, d, s)?;
+    show_schedules(w, d, s, Some(daily))?;
     let name = if daily {
         "每日自动总结"
     } else {
         "间隔自动总结"
     };
     g.set_status(
-        if enabled {
+        if let Some(p) = profile.filter(|_| enabled) {
             format!(
-                "{name}已开启，下次：{}",
+                "{name}已开启，使用「{}」，下次：{}",
+                p.name,
                 when_text(schedule.next_due_utc_ms, crate::unix_time_ms())
             )
         } else {
@@ -2688,6 +3002,16 @@ mod tests {
         let cleared = merge_secrets(Some(saved()), "", None, false, true).unwrap();
         assert_eq!(cleared.api_key, "old-key");
         assert!(cleared.headers.is_empty());
+        // A clear wins over what was typed beside it.
+        let cleared = merge_secrets(
+            Some(saved()),
+            "typed",
+            parse_headers("X-Org=b").unwrap(),
+            true,
+            true,
+        )
+        .unwrap();
+        assert!(cleared.api_key.is_empty() && cleared.headers.is_empty());
         // A first save writes even an empty entry, for services without keys.
         let first = merge_secrets(None, "", None, false, false).unwrap();
         assert!(first.api_key.is_empty() && first.headers.is_empty());

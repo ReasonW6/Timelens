@@ -65,6 +65,13 @@ fn emit(event: Event) {
                         return;
                     }
                     if let Event::Summary(id) = event {
+                        // The settings would cover the summary.
+                        if w.get_settings_open() {
+                            if w.get_settings_tab() == 4 {
+                                w.global::<AiState>().invoke_flush_settings();
+                            }
+                            w.set_settings_open(false);
+                        }
                         w.invoke_navigate(4);
                         w.global::<AiState>()
                             .invoke_open_job(i32::try_from(id).unwrap_or(-1));

@@ -262,12 +262,14 @@ struct UiState {
     apps: AppsState,
 }
 
-/// What the application totals cover: all records, or the shared range by its
-/// start and planned end.
+/// What the application totals cover: all records, the shared range by its
+/// start and planned end, or a recent stretch by its length, which moves with
+/// the clock.
 #[derive(Clone, Copy, PartialEq, Debug)]
 enum AppsScope {
     All,
     Range(i64, i64),
+    Recent(i64),
 }
 
 /// The application totals, gathered off the UI thread: all records can take a
@@ -768,8 +770,16 @@ const SETTLED_REFRESH: Duration = Duration::from_secs(30);
 fn apps_scope(window: &AppWindow, state: &UiState) -> AppsScope {
     if window.get_stats_all() {
         AppsScope::All
-    } else {
+    } else if state.follow_now && state.calendar_day.is_none() {
+        AppsScope::Recent(
+            state
+                .horizon_ended_utc_ms
+                .saturating_sub(state.range_started_utc_ms),
+        )
+    } else if state.follow_now {
         AppsScope::Range(state.range_started_utc_ms, state.horizon_ended_utc_ms)
+    } else {
+        AppsScope::Range(state.range_started_utc_ms, state.range_ended_utc_ms)
     }
 }
 
@@ -795,7 +805,8 @@ fn request_apps(
             ..AppsState::default()
         };
     }
-    let interval = if scope != AppsScope::All && live {
+    // A recent stretch is gathered afresh each time, so it refreshes rarely.
+    let interval = if matches!(scope, AppsScope::Range(..)) && live {
         LIVE_REFRESH
     } else {
         SETTLED_REFRESH
@@ -820,6 +831,9 @@ fn request_apps(
                     AppsScope::All => Arc::new(storage.timeline_snapshot(1, now)?),
                     AppsScope::Range(start, end) => {
                         storage.timeline_snapshot_cached(start, end.min(now).max(start + 1))?
+                    }
+                    AppsScope::Recent(length) => {
+                        Arc::new(storage.timeline_snapshot(now.saturating_sub(length).max(1), now)?)
                     }
                 })
             });

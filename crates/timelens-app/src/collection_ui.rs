@@ -311,7 +311,7 @@ fn range_dates(range: Option<&UiState>) -> (String, String, bool) {
     };
     // Whole days run from a midnight to a midnight; today counts while it runs.
     let whole = midnight(first) == Some(start)
-        && last.succ_opt().and_then(midnight) == Some(range.horizon_ended_utc_ms);
+        && last.succ_opt().and_then(midnight) == Some(crate::timeline_ui::chosen_end(range));
     (
         first.format("%Y-%m-%d").to_string(),
         last.format("%Y-%m-%d").to_string(),
@@ -555,6 +555,9 @@ mod tests {
             range_dates(Some(&range)),
             ("2026-09-05".into(), "2026-09-05".into(), true)
         );
+        // Part of a past day picked from the timeline or a summary.
+        range.follow_now = false;
+        assert!(!range_dates(Some(&range)).2);
         range.range_started_utc_ms = at(5, 9);
         range.horizon_ended_utc_ms = at(5, 18);
         range.range_ended_utc_ms = at(5, 18);

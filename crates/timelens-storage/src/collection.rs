@@ -199,9 +199,22 @@ impl Storage {
         Ok(self.connection.query_row("SELECT COALESCE(SUM(keyboard_count),0),COALESCE(SUM(left_click_count),0),COALESCE(SUM(middle_click_count),0),COALESCE(SUM(right_click_count),0) FROM anonymous_daily_input_ledger",[],|r|Ok([r.get::<_,i64>(0)?.max(0) as u64,r.get::<_,i64>(1)?.max(0) as u64,r.get::<_,i64>(2)?.max(0) as u64,r.get::<_,i64>(3)?.max(0) as u64]))?)
     }
     /// Keyboard, left, middle and right click counts of the local dates from
-    /// `first` to `last`, both included (YYYY-MM-DD).
+    /// `first` to `last`, both included (YYYY-MM-DD). Like the key
+    /// frequencies, they follow the retention period and leave out
+    /// applications excluded from input statistics.
     pub fn input_totals_between(&self, first: &str, last: &str) -> Result<[u64; 4]> {
-        Ok(self.connection.query_row("SELECT COALESCE(SUM(keyboard_count),0),COALESCE(SUM(left_click_count),0),COALESCE(SUM(middle_click_count),0),COALESCE(SUM(right_click_count),0) FROM anonymous_daily_input_ledger WHERE local_date BETWEEN ?1 AND ?2",[first, last],|r|Ok([r.get::<_,i64>(0)?.max(0) as u64,r.get::<_,i64>(1)?.max(0) as u64,r.get::<_,i64>(2)?.max(0) as u64,r.get::<_,i64>(3)?.max(0) as u64]))?)
+        // A local date lies within a day of the same UTC date, since offsets
+        // stay within ±1440 minutes; the bound lets the time index narrow the
+        // scan. Dates that do not parse leave it open.
+        let bound = |date: &str, days: i64| {
+            chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d")
+                .ok()
+                .and_then(|day| day.and_hms_opt(0, 0, 0))
+                .map(|t| t.and_utc().timestamp_millis() + days * 86_400_000)
+        };
+        let low = bound(first, -1).unwrap_or(i64::MIN);
+        let high = bound(last, 2).unwrap_or(i64::MAX);
+        Ok(self.connection.query_row("SELECT COALESCE(SUM(keyboard_count),0),COALESCE(SUM(left_click_count),0),COALESCE(SUM(middle_click_count),0),COALESCE(SUM(right_click_count),0) FROM input_minute_buckets WHERE minute_started_utc_ms >= ?3 AND minute_started_utc_ms < ?4 AND local_date BETWEEN ?1 AND ?2",params![first, last, low, high],|r|Ok([r.get::<_,i64>(0)?.max(0) as u64,r.get::<_,i64>(1)?.max(0) as u64,r.get::<_,i64>(2)?.max(0) as u64,r.get::<_,i64>(3)?.max(0) as u64]))?)
     }
     /// Presses per physical key over the local dates from `first` to `last`,
     /// both included (YYYY-MM-DD).
@@ -331,15 +344,7 @@ mod tests {
         s.ingest_event_batch(&batch).unwrap();
         assert_eq!(s.permanent_input_totals().unwrap(), [9, 2, 0, 0]);
         assert_eq!(
-            s.input_totals_between("2026-09-05", "2026-09-05").unwrap(),
-            [9, 2, 0, 0]
-        );
-        assert_eq!(
             s.input_totals_between("0000-00-00", "9999-99-99").unwrap(),
-            [9, 2, 0, 0]
-        );
-        assert_eq!(
-            s.input_totals_between("2026-09-06", "2026-09-30").unwrap(),
             [0; 4]
         );
         for table in ["input_minute_buckets", "daily_physical_key_frequency"] {
@@ -357,6 +362,43 @@ mod tests {
         }
         invalid.first_sequence = 4;
         assert!(s.ingest_event_batch(&invalid).is_err());
+    }
+    #[test]
+    fn input_totals_sum_minute_buckets_over_an_inclusive_date_range() {
+        let (_dir, s) = ai::tests::fixture();
+        // Minutes in UTC+8: local midnight is 16:00 UTC the day before.
+        let at = |day: u32, hour: u32| {
+            chrono::NaiveDate::from_ymd_opt(2026, 9, day)
+                .and_then(|d| d.and_hms_opt(hour, 0, 0))
+                .unwrap()
+                .and_utc()
+                .timestamp_millis()
+        };
+        for (minute, date, keys, left) in [
+            (at(4, 1), "2026-09-04", 5, 1),
+            (at(4, 16), "2026-09-05", 2, 3),
+            (at(5, 15), "2026-09-05", 7, 0),
+            (at(6, 16), "2026-09-07", 1, 1),
+        ] {
+            s.connection
+                .execute(
+                    "INSERT INTO input_minute_buckets(minute_started_utc_ms,timezone_offset_minutes,local_date,keyboard_count,left_click_count,middle_click_count,right_click_count) VALUES(?1,480,?2,?3,?4,0,1)",
+                    params![minute, date, keys, left],
+                )
+                .unwrap();
+        }
+        assert_eq!(
+            s.input_totals_between("2026-09-05", "2026-09-05").unwrap(),
+            [9, 3, 0, 2]
+        );
+        assert_eq!(
+            s.input_totals_between("0000-00-00", "9999-99-99").unwrap(),
+            [15, 5, 0, 4]
+        );
+        assert_eq!(
+            s.input_totals_between("2026-09-08", "2026-09-30").unwrap(),
+            [0; 4]
+        );
     }
     #[test]
     fn key_frequencies_sum_over_an_inclusive_date_range() {

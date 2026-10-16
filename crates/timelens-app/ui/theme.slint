@@ -551,7 +551,10 @@ export component ConfirmationDialog inherits Rectangle {
     callback dismissed;
     callback accepted;
     background: Theme.scrim;
-    init => { cancel-button.focus(); }
+    // Take focus on the next turn of the event loop rather than in `init`: the
+    // accessibility tree may create this dialog while it walks the window, and
+    // moving focus during that walk panics in Slint's winit backend.
+    Timer { interval: 1ms; triggered => { cancel-button.focus(); self.running = false; } }
     TouchArea { }
     FocusScope {
         focus-on-tab-navigation: false;
