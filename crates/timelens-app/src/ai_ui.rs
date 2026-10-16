@@ -105,8 +105,6 @@ struct UiData {
     preview: Option<SnapshotConsent>,
     /// Snapshots added to the next summary, each with its slot time.
     picked: Vec<(SnapshotConsent, i64)>,
-    clear_key: bool,
-    clear_headers: bool,
     /// The version on screen when a delete or clear confirmation opened.
     confirm_version: Option<i64>,
 }
@@ -136,8 +134,6 @@ impl Default for UiData {
             slots: vec![],
             preview: None,
             picked: vec![],
-            clear_key: false,
-            clear_headers: false,
             confirm_version: None,
         }
     }
@@ -345,6 +341,8 @@ pub fn install(
 ) -> Result<Installed> {
     let data = Rc::new(RefCell::new(UiData::default()));
     let sender = service.sender;
+    w.global::<AiState>()
+        .on_markdown(|text| crate::markdown::model(&text));
     reset_dataset_ui(w, &mut data.borrow_mut(), &*lock(&storage)?)?;
     macro_rules! bind {
         ($callback:ident,$body:expr) => {{
@@ -487,10 +485,7 @@ pub fn install(
                          d: &mut UiData,
                          s: &Store,
                          _: &Commands| {
-        d.clear_key = true;
-        let result = save_profile(w, d, &*lock(s)?);
-        d.clear_key = false;
-        result?;
+        clear_credential(w, d, &*lock(s)?, true)?;
         w.global::<AiState>()
             .set_status("已清除 API 密钥；需要重新测试连接".into());
         Ok(())
@@ -498,10 +493,7 @@ pub fn install(
     bind!(
         on_clear_headers,
         |w: &AppWindow, d: &mut UiData, s: &Store, _: &Commands| {
-            d.clear_headers = true;
-            let result = save_profile(w, d, &*lock(s)?);
-            d.clear_headers = false;
-            result?;
+            clear_credential(w, d, &*lock(s)?, false)?;
             w.global::<AiState>()
                 .set_status("已清除附加请求头；需要重新测试连接".into());
             Ok(())
@@ -1461,33 +1453,60 @@ fn merge_secrets(
 }
 fn save_credentials(w: &AppWindow, p: &ProviderProfile, d: &mut UiData) -> Result<()> {
     let g = w.global::<AiState>();
-    // An explicit clear wins over whatever the field still holds.
-    let headers = if d.clear_headers {
-        None
-    } else {
-        parse_headers(&g.get_secret_headers())?
-    };
-    let key = if d.clear_key {
-        SharedString::default()
-    } else {
-        g.get_api_key()
-    };
+    let headers = parse_headers(&g.get_secret_headers())?;
+    let key = g.get_api_key();
     let saved = if p.credential_revision == 0 {
         None
     } else {
         credentials::load(&p.id).ok()
     };
-    let Some(secrets) = merge_secrets(saved, &key, headers, d.clear_key, d.clear_headers) else {
+    let Some(secrets) = merge_secrets(saved, &key, headers, false, false) else {
         return Ok(());
     };
     credentials::save(&p.id, &secrets).map_err(anyhow::Error::msg)?;
     d.profile.credential_revision = p.credential_revision.saturating_add(1);
-    d.clear_key = false;
-    d.clear_headers = false;
     g.set_api_key("".into());
     g.set_secret_headers("".into());
     g.set_has_credentials(!secrets.api_key.is_empty());
     g.set_has_headers(!secrets.headers.is_empty());
+    Ok(())
+}
+/// Clears the saved API key, or the request headers, and nothing else: the
+/// rest of the form stays an unsaved draft, and a saved connection only takes
+/// the new credential revision, so it needs testing again.
+fn clear_credential(w: &AppWindow, d: &mut UiData, s: &Storage, key: bool) -> Result<()> {
+    let g = w.global::<AiState>();
+    let id = d.profile.id.clone();
+    let saved = if d.profile.credential_revision == 0 {
+        None
+    } else {
+        credentials::load(&id).ok()
+    };
+    if let Some(secrets) = merge_secrets(saved, "", None, key, !key) {
+        if secrets.api_key.is_empty() && secrets.headers.is_empty() {
+            credentials::delete(&id).map_err(anyhow::Error::msg)?;
+        } else {
+            credentials::save(&id, &secrets).map_err(anyhow::Error::msg)?;
+        }
+        g.set_has_credentials(!secrets.api_key.is_empty());
+        g.set_has_headers(!secrets.headers.is_empty());
+    }
+    if key {
+        g.set_api_key("".into());
+    } else {
+        g.set_secret_headers("".into());
+    }
+    d.profile.credential_revision = d.profile.credential_revision.saturating_add(1);
+    if d.profiles.iter().any(|x| x.id == id) {
+        let mut stored = s.ai_profile(&id)?;
+        stored.credential_revision = d.profile.credential_revision;
+        s.save_ai_profile(&stored)?;
+        reload(w, d, s)?;
+        show_test(w, d);
+        if d.use_profile.as_deref() == Some(id.as_str()) {
+            invalidate(w, d);
+        }
+    }
     Ok(())
 }
 fn save_profile(w: &AppWindow, d: &mut UiData, s: &Storage) -> Result<()> {
@@ -1567,8 +1586,6 @@ fn forget_unsaved_credentials(d: &UiData) {
 fn edit_profile(w: &AppWindow, d: &mut UiData, p: ProviderProfile, index: i32) {
     forget_unsaved_credentials(d);
     d.profile = p;
-    d.clear_key = false;
-    d.clear_headers = false;
     let g = w.global::<AiState>();
     g.set_editing(true);
     g.set_provider_index(index);

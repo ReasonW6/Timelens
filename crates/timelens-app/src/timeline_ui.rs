@@ -72,6 +72,10 @@ pub fn install(
             return;
         };
         window.set_action_status("".into());
+        if page != 2 && window.get_snapshot_selecting() {
+            window.invoke_snapshot_check_all(false);
+            window.set_snapshot_selecting(false);
+        }
         window.set_page(page.clamp(0, 4));
         window.set_snapshot_open(page == 2);
         window.set_report_open(page == 3);
@@ -91,6 +95,21 @@ pub fn install(
             _ => {}
         }
     });
+    {
+        // Leaving a page the timeline pointed at an activity puts its range back.
+        let weak = window.as_weak();
+        let state = state.clone();
+        let storage = storage.clone();
+        window.on_range_origin_restore(move || {
+            let Some(origin) = state.borrow_mut().origin.take() else {
+                return;
+            };
+            origin.restore(&mut state.borrow_mut());
+            if let Some(w) = weak.upgrade() {
+                refresh(&w, &storage, &state);
+            }
+        });
+    }
     {
         let weak = window.as_weak();
         let state = state.clone();
@@ -151,7 +170,9 @@ pub fn install(
             if busy.load(Ordering::Acquire) {
                 return;
             }
-            *state.borrow_mut() = today_state();
+            let mut next = today_state();
+            next.selected_identity = state.borrow().selected_identity.clone();
+            *state.borrow_mut() = next;
             if let Some(w) = weak.upgrade() {
                 refresh(&w, &storage, &state);
             }
@@ -197,6 +218,7 @@ pub fn install(
             match local_time_range(anchor, &start, &end, now) {
                 Ok((start, end)) => {
                     let mut s = state.borrow_mut();
+                    s.origin = None;
                     s.horizon_started_utc_ms = start;
                     s.horizon_ended_utc_ms = end;
                     s.range_started_utc_ms = start;
@@ -361,6 +383,12 @@ pub fn render(window: &AppWindow, state: &Rc<RefCell<UiState>>, snapshot: &Timel
     let now_date = Local::now().date_naive();
     window.set_calendar_date(local_label(anchor, "%Y-%m-%d").into());
     window.set_range_title(range_title(&state, now).into());
+    window.set_range_origin(
+        state
+            .origin
+            .as_ref()
+            .map_or_else(Default::default, |origin| origin.label.as_str().into()),
+    );
     window.set_today_ymd(ymd(now));
     window.set_selected_ymd(state.calendar_day.map_or(0, ymd));
     window.set_can_next_day(

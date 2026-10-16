@@ -993,6 +993,11 @@ impl Storage {
         Ok(())
     }
 
+    /// The bytes the space limit counts, as `apply_retention` measures them.
+    pub fn retained_bytes(&self) -> Result<u64> {
+        self.live_database_bytes()
+    }
+
     /// Bytes held by pages that still store data, excluding free pages and the WAL.
     fn live_database_bytes(&self) -> Result<u64> {
         // SQLCipher reports page_size as text, so every value is cast explicitly.

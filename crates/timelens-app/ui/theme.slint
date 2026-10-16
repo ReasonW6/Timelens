@@ -212,6 +212,9 @@ export component Action inherits Rectangle {
     in property <bool> quiet: false;
     in property <bool> modal-action: false;
     out property <bool> has-focus: keyboard.has-focus;
+    // Focus a click gave shows no ring; only keyboard focus does.
+    private property <bool> clicked-focus;
+    private property <bool> ring: keyboard.has-focus && !root.clicked-focus;
     private property <bool> available: root.enabled && (!Theme.modal-open || root.modal-action);
     private property <bool> filled: root.accent;
     private property <color> fill-color: root.danger ? Theme.danger : Theme.primary;
@@ -226,8 +229,8 @@ export component Action inherits Rectangle {
     min-width: root.text == "" ? 34px : max(64px, content.preferred-width);
     vertical-stretch: 0;
     border-radius: 8px;
-    border-width: keyboard.has-focus ? 2px : root.quiet || root.filled ? 0px : 1px;
-    border-color: keyboard.has-focus ? Theme.focus
+    border-width: root.ring ? 2px : root.quiet || root.filled ? 0px : 1px;
+    border-color: root.ring ? Theme.focus
         : root.selected ? Theme.brand.with-alpha(0.28)
         : root.danger ? Theme.danger.with-alpha(0.3)
         : Theme.line-strong;
@@ -265,10 +268,11 @@ export component Action inherits Rectangle {
             overflow: elide;
         }
     }
-    pointer := TouchArea { enabled: root.available; mouse-cursor: MouseCursor.pointer; clicked => { keyboard.focus(); root.clicked(); } }
+    pointer := TouchArea { enabled: root.available; mouse-cursor: MouseCursor.pointer; clicked => { root.clicked-focus = true; keyboard.focus(); root.clicked(); } }
     keyboard := FocusScope {
         enabled: root.available;
         width: 0px;
+        focus-lost(reason) => { if reason != FocusReason.window-activation { root.clicked-focus = false; } }
         key-pressed(event) => {
             if root.available && (event.text == " " || event.text == "\n") { root.clicked(); return accept; }
             return reject;
@@ -291,13 +295,14 @@ export component Segment inherits Rectangle {
     in property <bool> selected;
     in property <bool> enabled: true;
     private property <bool> available: root.enabled && !Theme.modal-open;
+    private property <bool> clicked-focus;
     callback clicked;
     min-width: label.preferred-width + (root.icon.width > 0 ? 36px : 18px);
     // Compact where the track hugs its items; even widths where it is stretched.
     horizontal-stretch: 1;
     border-radius: 7px;
     background: root.selected ? Theme.raised : touch.has-hover && root.available ? Theme.hover-tint : transparent;
-    border-width: key.has-focus ? 2px : 0px;
+    border-width: key.has-focus && !root.clicked-focus ? 2px : 0px;
     border-color: Theme.focus;
     drop-shadow-blur: root.selected ? 3px : 0px;
     drop-shadow-offset-y: 1px;
@@ -317,8 +322,12 @@ export component Segment inherits Rectangle {
         if root.icon.width > 0 : Rectangle { width: 15px; Image { width: 15px; height: 15px; source: root.icon; colorize: root.selected ? Theme.ink : Theme.ink-3; } }
         label := Text { text: root.text; color: root.selected ? Theme.ink : Theme.ink-2; font-size: 13px; font-weight: root.selected ? 600 : 400; vertical-alignment: center; }
     }
-    touch := TouchArea { enabled: root.available; mouse-cursor: pointer; clicked => { key.focus(); root.clicked(); } }
-    key := FocusScope { width: 0px; enabled: root.available; key-pressed(event) => { if root.available && (event.text == " " || event.text == "\n") { root.clicked(); return accept; } return reject; } }
+    touch := TouchArea { enabled: root.available; mouse-cursor: pointer; clicked => { root.clicked-focus = true; key.focus(); root.clicked(); } }
+    key := FocusScope {
+        width: 0px; enabled: root.available;
+        focus-lost(reason) => { if reason != FocusReason.window-activation { root.clicked-focus = false; } }
+        key-pressed(event) => { if root.available && (event.text == " " || event.text == "\n") { root.clicked(); return accept; } return reject; }
+    }
 }
 
 export component NavItem inherits Rectangle {
@@ -326,12 +335,15 @@ export component NavItem inherits Rectangle {
     in property <image> icon;
     in property <bool> selected;
     in property <string> hint;
+    // Only the icon, for a narrow sidebar.
+    in property <bool> compact;
+    private property <bool> clicked-focus;
     callback clicked;
     height: 38px;
     vertical-stretch: 0;
     background: root.selected ? Theme.raised : pointer.has-hover ? Theme.canvas-hover : transparent;
     border-radius: 9px;
-    border-width: keyboard.has-focus ? 2px : 0px;
+    border-width: keyboard.has-focus && !root.clicked-focus ? 2px : 0px;
     border-color: Theme.focus;
     drop-shadow-blur: root.selected ? 6px : 0px;
     drop-shadow-offset-y: 1px;
@@ -343,7 +355,8 @@ export component NavItem inherits Rectangle {
     accessible-enabled: !Theme.modal-open;
     accessible-action-default => { if !Theme.modal-open { root.clicked(); } }
     if root.selected : Rectangle { x: 0px; width: 3px; height: 16px; border-radius: 1.5px; background: Theme.brand; }
-    HorizontalLayout {
+    if root.compact : Image { width: 19px; height: 19px; source: root.icon; colorize: root.selected ? Theme.brand : Theme.ink-2; }
+    if !root.compact : HorizontalLayout {
         padding-left: 13px;
         padding-right: 12px;
         spacing: 12px;
@@ -351,8 +364,14 @@ export component NavItem inherits Rectangle {
         Text { text: root.text; color: root.selected ? Theme.ink : Theme.ink-2; font-size: 14px; font-weight: root.selected ? 600 : 400; vertical-alignment: center; horizontal-stretch: 1; }
         if root.hint != "" : Text { text: root.hint; color: Theme.ink-4; font-size: 12px; vertical-alignment: center; }
     }
-    pointer := TouchArea { enabled: !Theme.modal-open; mouse-cursor: MouseCursor.pointer; clicked => { keyboard.focus(); root.clicked(); } }
-    keyboard := FocusScope { width: 0px; enabled: !Theme.modal-open; key-pressed(event) => { if !Theme.modal-open && (event.text == " " || event.text == "\n") { root.clicked(); return accept; } return reject; } }
+    pointer := TouchArea { enabled: !Theme.modal-open; mouse-cursor: MouseCursor.pointer; clicked => { root.clicked-focus = true; keyboard.focus(); root.clicked(); } }
+    keyboard := FocusScope {
+        width: 0px; enabled: !Theme.modal-open;
+        // Focus the app hands back, as when a dialog closes, shows no ring either.
+        focus-gained(reason) => { if reason == FocusReason.programmatic { root.clicked-focus = true; } }
+        focus-lost(reason) => { if reason != FocusReason.window-activation { root.clicked-focus = false; } }
+        key-pressed(event) => { if !Theme.modal-open && (event.text == " " || event.text == "\n") { root.clicked(); return accept; } return reject; }
+    }
 }
 
 export component DetailRow inherits Rectangle {
@@ -374,6 +393,7 @@ export component CheckBox inherits Rectangle {
     in property <int> font-weight: 400;
     in-out property <bool> checked;
     out property <bool> has-focus: key.has-focus;
+    private property <bool> clicked-focus;
     callback toggled;
     height: max(32px, check-label.preferred-height + 6px);
     vertical-stretch: 0;
@@ -388,15 +408,19 @@ export component CheckBox inherits Rectangle {
     accessible-action-default => { if root.available { root.checked = !root.checked; root.toggled(); } }
     Rectangle {
         x: 0px; y: (parent.height - self.height) / 2; width: 18px; height: 18px;
-        border-radius: 5px; border-width: key.has-focus ? 2px : root.checked ? 0px : 1.5px;
-        border-color: key.has-focus ? Theme.focus : Theme.ink-4;
+        border-radius: 5px; border-width: key.has-focus && !root.clicked-focus ? 2px : root.checked ? 0px : 1.5px;
+        border-color: key.has-focus && !root.clicked-focus ? Theme.focus : Theme.ink-4;
         background: root.checked ? Theme.primary : touch.has-hover ? Theme.surface-2 : Theme.surface;
         animate background { duration: 110ms; }
         if root.checked : Image { x: 2px; y: 2px; width: 14px; height: 14px; source: @image-url("icons/check.svg"); colorize: Theme.on-primary; }
     }
     check-label := Text { x: 28px; width: max(0px, parent.width - self.x); height: parent.height; text: root.text; color: Theme.ink; font-size: root.font-size; font-weight: root.font-weight; wrap: word-wrap; vertical-alignment: center; }
-    touch := TouchArea { enabled: root.available; mouse-cursor: pointer; clicked => { if root.available { key.focus(); root.checked = !root.checked; root.toggled(); } } }
-    key := FocusScope { width: 0px; enabled: root.available; key-pressed(event) => { if root.available && (event.text == " " || event.text == "\n") { root.checked = !root.checked; root.toggled(); return accept; } return reject; } }
+    touch := TouchArea { enabled: root.available; mouse-cursor: pointer; clicked => { if root.available { root.clicked-focus = true; key.focus(); root.checked = !root.checked; root.toggled(); } } }
+    key := FocusScope {
+        width: 0px; enabled: root.available;
+        focus-lost(reason) => { if reason != FocusReason.window-activation { root.clicked-focus = false; } }
+        key-pressed(event) => { if root.available && (event.text == " " || event.text == "\n") { root.checked = !root.checked; root.toggled(); return accept; } return reject; }
+    }
 }
 
 // An on/off setting that applies at once. It is controlled: it shows `checked`
@@ -407,12 +431,13 @@ export component Switch inherits Rectangle {
     in property <string> label;
     in property <bool> checked;
     private property <bool> available: root.enabled && !Theme.modal-open;
+    private property <bool> clicked-focus;
     callback toggled(bool);
     width: 40px; height: 22px;
     vertical-stretch: 0; horizontal-stretch: 0;
     border-radius: 11px;
     background: root.checked ? Theme.primary : touch.has-hover ? Theme.track-hover : Theme.track;
-    border-width: key.has-focus ? 2px : 0px;
+    border-width: key.has-focus && !root.clicked-focus ? 2px : 0px;
     border-color: Theme.focus;
     opacity: root.enabled ? 1 : 0.45;
     animate background { duration: 140ms; }
@@ -430,8 +455,12 @@ export component Switch inherits Rectangle {
         drop-shadow-blur: 2px; drop-shadow-offset-y: 1px; drop-shadow-color: #10141e40;
         animate x { duration: 160ms; easing: ease-out; }
     }
-    touch := TouchArea { enabled: root.available; mouse-cursor: pointer; clicked => { key.focus(); root.toggled(!root.checked); } }
-    key := FocusScope { width: 0px; enabled: root.available; key-pressed(event) => { if root.available && (event.text == " " || event.text == "\n") { root.toggled(!root.checked); return accept; } return reject; } }
+    touch := TouchArea { enabled: root.available; mouse-cursor: pointer; clicked => { root.clicked-focus = true; key.focus(); root.toggled(!root.checked); } }
+    key := FocusScope {
+        width: 0px; enabled: root.available;
+        focus-lost(reason) => { if reason != FocusReason.window-activation { root.clicked-focus = false; } }
+        key-pressed(event) => { if root.available && (event.text == " " || event.text == "\n") { root.toggled(!root.checked); return accept; } return reject; }
+    }
 }
 
 // Settings follow one pattern throughout: a section header, then a group card of

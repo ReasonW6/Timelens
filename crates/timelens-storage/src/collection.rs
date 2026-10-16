@@ -195,6 +195,32 @@ impl Storage {
             .map(|(k, v)| (k, union_duration_ms(&v)))
             .collect())
     }
+    /// The system states overlapping `start..end`, clipped to it, earliest
+    /// first: kind, start and end.
+    pub fn system_intervals_between(
+        &self,
+        start: i64,
+        end: i64,
+    ) -> Result<Vec<(String, i64, i64)>> {
+        let mut s = self.connection.prepare("SELECT kind,started_utc_ms,ended_utc_ms FROM system_intervals WHERE started_utc_ms<?2 AND ended_utc_ms>?1 ORDER BY started_utc_ms")?;
+        let rows = s.query_map(params![start, end], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, i64>(1)?.max(start),
+                r.get::<_, i64>(2)?.min(end),
+            ))
+        })?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+    /// How often each instant marker, such as a clean shutdown, was recorded
+    /// within `start..end`. Markers take no time, so totals leave them out.
+    pub fn system_marks(&self, start: i64, end: i64) -> Result<BTreeMap<String, u64>> {
+        let mut s = self.connection.prepare("SELECT kind,COUNT(*) FROM system_intervals WHERE ended_utc_ms=started_utc_ms AND started_utc_ms>=?1 AND started_utc_ms<?2 GROUP BY kind")?;
+        let rows = s.query_map(params![start, end], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?.max(0) as u64))
+        })?;
+        Ok(rows.collect::<rusqlite::Result<BTreeMap<_, _>>>()?)
+    }
     pub fn permanent_input_totals(&self) -> Result<[u64; 4]> {
         Ok(self.connection.query_row("SELECT COALESCE(SUM(keyboard_count),0),COALESCE(SUM(left_click_count),0),COALESCE(SUM(middle_click_count),0),COALESCE(SUM(right_click_count),0) FROM anonymous_daily_input_ledger",[],|r|Ok([r.get::<_,i64>(0)?.max(0) as u64,r.get::<_,i64>(1)?.max(0) as u64,r.get::<_,i64>(2)?.max(0) as u64,r.get::<_,i64>(3)?.max(0) as u64]))?)
     }

@@ -12,6 +12,8 @@ mod general_ui;
 mod history;
 mod icon_cache;
 mod local_config;
+mod markdown;
+mod pause;
 #[cfg(debug_assertions)]
 mod qa;
 mod recovery;
@@ -41,15 +43,16 @@ use std::{
 };
 
 use anyhow::{Context, Result, bail};
-use slint::{Image, Model, ModelRc, Timer, TimerMode, VecModel};
+use chrono::TimeZone;
+use slint::{Image, Model, ModelRc, SharedString, Timer, TimerMode, VecModel};
 use timelens_ipc::{
     BatchRejection, COLLECTOR_RESET_PAUSED_FILE, COLLECTOR_RESET_REQUEST_FILE, PROTOCOL_VERSION,
     SingleInstanceGuard, current_pipe_name, run_server_collector_message, run_server_probe,
     trust_peer_directory,
 };
 use timelens_storage::{
-    LocalReport, RetentionPolicy, SnapshotMissingReason, SnapshotPolicy, SnapshotSlot, Storage,
-    TimelineApplication, TimelineSnapshot,
+    ExportFormat, LocalReport, RetentionPolicy, SnapshotMissingReason, SnapshotPolicy,
+    SnapshotSlot, Storage, TimelineApplication, TimelineSnapshot,
 };
 
 const COLLECTOR_NAMES: &[&str] = &["timelens-collector.exe", "Timelens.Collector.exe"];
@@ -57,9 +60,9 @@ const COLLECTOR_NAMES: &[&str] = &["timelens-collector.exe", "Timelens.Collector
 slint::slint! {
     export { AppWindow, AppRow, WindowRow, SegmentRow, SnapshotRow, ReportAppRow,
              HistoryItem, DayAnchor, Participant, ShareSlice, StackApp, AiState, DataState,
-             CollectionState, KeyCell, ButtonHeat, AppIcons, Theme }
+             CollectionState, KeyCell, ButtonHeat, SystemRow, AppIcons, Theme }
         from "ui/main-window.slint";
-    export { AiHistoryRow, AiConnectionRow } from "ui/ai-panel.slint";
+    export { AiHistoryRow, AiConnectionRow, MdBlock } from "ui/ai-panel.slint";
 }
 fn main() -> Result<()> {
     let options = Options::parse(env::args_os().skip(1))?;
@@ -195,7 +198,7 @@ fn main() -> Result<()> {
     let storage = Arc::new(Mutex::new(storage));
     if options.snapshot_once {
         let summary = snapshot::capture_now(&storage, &data_directory)?;
-        println!("snapshot capture complete: {}", summary.label());
+        println!("snapshot capture complete: {}", capture_message(&summary));
         return Ok(());
     }
     snapshot::spawn_scheduler(Arc::clone(&storage), data_directory.clone());
@@ -248,6 +251,13 @@ struct SnapshotUiState {
     anchor: Option<i64>,
     /// The first and last snapshot the grid shows.
     visible: Option<(usize, usize)>,
+    /// For each listed slot, the stretch of identical omissions it stands for:
+    /// first and last slot start, and how many.
+    spans: Vec<(i64, i64, usize)>,
+    /// The range listed, to leave selecting when it changes.
+    range: Option<(i64, i64)>,
+    /// A slot to select once listed, such as one just captured.
+    pending_select: Option<i64>,
 }
 
 struct UiState {
@@ -260,6 +270,50 @@ struct UiState {
     follow_now: bool,
     calendar_day: Option<i64>,
     apps: AppsState,
+    /// The range the pages had before the timeline pointed them at an
+    /// activity, and that activity in words.
+    origin: Option<RangeOrigin>,
+    /// The local report on screen: its id and range.
+    report: Option<(i64, i64, i64)>,
+    /// The range a stored report was last looked up for.
+    report_checked: Option<(i64, i64)>,
+}
+
+#[derive(Clone)]
+struct RangeOrigin {
+    label: String,
+    horizon_started_utc_ms: i64,
+    horizon_ended_utc_ms: i64,
+    range_started_utc_ms: i64,
+    range_ended_utc_ms: i64,
+    selected_identity: Option<String>,
+    follow_now: bool,
+    calendar_day: Option<i64>,
+}
+
+impl RangeOrigin {
+    fn of(state: &UiState) -> Self {
+        Self {
+            label: String::new(),
+            horizon_started_utc_ms: state.horizon_started_utc_ms,
+            horizon_ended_utc_ms: state.horizon_ended_utc_ms,
+            range_started_utc_ms: state.range_started_utc_ms,
+            range_ended_utc_ms: state.range_ended_utc_ms,
+            selected_identity: state.selected_identity.clone(),
+            follow_now: state.follow_now,
+            calendar_day: state.calendar_day,
+        }
+    }
+
+    fn restore(self, state: &mut UiState) {
+        state.horizon_started_utc_ms = self.horizon_started_utc_ms;
+        state.horizon_ended_utc_ms = self.horizon_ended_utc_ms;
+        state.range_started_utc_ms = self.range_started_utc_ms;
+        state.range_ended_utc_ms = self.range_ended_utc_ms;
+        state.selected_identity = self.selected_identity;
+        state.follow_now = self.follow_now;
+        state.calendar_day = self.calendar_day;
+    }
 }
 
 /// What the application totals cover: all records, the shared range by its
@@ -300,6 +354,9 @@ impl UiState {
             follow_now: true,
             calendar_day: None,
             apps: AppsState::default(),
+            origin: None,
+            report: None,
+            report_checked: None,
         }
     }
 }
@@ -320,8 +377,8 @@ fn run_window(
         && let Some((width, height)) = viewport
             .split_once('x')
             .and_then(|(w, h)| Some((w.parse::<u32>().ok()?, h.parse::<u32>().ok()?)))
-        && (1180..=3840).contains(&width)
-        && (680..=2160).contains(&height)
+        && (960..=3840).contains(&width)
+        && (600..=2160).contains(&height)
     {
         window
             .window()
@@ -344,6 +401,7 @@ fn run_window(
     };
     // Before the first frame, so the window opens in the chosen look.
     let _appearance_timer = appearance::install(&window, control_directory.clone());
+    let _pause_timer = pause::install(&window, control_directory.clone());
     window.set_storage_status(storage_status.into());
     window.set_collector_status("等待受信采集器事件…".into());
     window.set_data_path(data_directory.display().to_string().into());
@@ -401,6 +459,20 @@ fn run_window(
         Rc::clone(&ui_state),
         Arc::clone(&action_busy),
     );
+
+    window.on_status_kind(|message| status_kind(&message));
+    window.on_status_path(|message| {
+        status_path(&message)
+            .map(|path| path.to_string_lossy().into_owned())
+            .unwrap_or_default()
+            .into()
+    });
+    window.on_open_folder(|path| {
+        // Explorer opens the folder with the exported file selected.
+        let _ = std::process::Command::new("explorer.exe")
+            .arg(format!("/select,{path}"))
+            .spawn();
+    });
 
     {
         let weak = window.as_weak();
@@ -496,7 +568,7 @@ fn run_window(
         Rc::clone(&ui_state),
         Rc::clone(&snapshot_ui_state),
     );
-    let _tray_timer = tray::install(&window, Arc::clone(&storage))?;
+    let _tray_timer = tray::install(&window, Arc::clone(&storage), control_directory.clone())?;
     let _general_timer = general_ui::install(&window, collector_task);
     let _collection_timer =
         collection_ui::install(&window, Arc::clone(&storage), Rc::clone(&ui_state))?;
@@ -516,7 +588,6 @@ fn run_window(
     let mut collector_seen: Option<Instant> = None;
     // The native window exists only once shown, possibly later from the tray.
     let mut chrome_applied = false;
-    let mut last_data_status = window.global::<DataState>().get_status();
     timer.start(TimerMode::Repeated, Duration::from_millis(200), move || {
         let Some(window) = weak.upgrade() else {
             return;
@@ -525,15 +596,18 @@ fn run_window(
             chrome_applied =
                 window_chrome::apply(window.window(), window.global::<Theme>().get_dark());
         }
-        // Exporting a snapshot reports through the data status; show it where the
-        // export was started.
-        let data_status = window.global::<DataState>().get_status();
-        if data_status != last_data_status {
-            if window.get_page() == 2 {
-                window.set_action_status(data_status.clone());
+        // Data and collection actions report through their own status; show it
+        // in the toast wherever the action was started.
+        // Taking the message lets the same one show again next time.
+        let data = window.global::<DataState>();
+        let collection = window.global::<CollectionState>();
+        for status in [data.get_status(), collection.get_status()] {
+            if !status.is_empty() {
+                window.set_action_status(status);
             }
-            last_data_status = data_status;
         }
+        data.set_status("".into());
+        collection.set_status("".into());
         window.set_action_busy(timer_busy.load(Ordering::Acquire));
         let ui_active = window.window().is_visible() && !window.window().is_minimized();
         if ui_active {
@@ -541,6 +615,16 @@ fn run_window(
             if let Err(error) = poll_apps(&window, &timer_state) {
                 window.set_action_status(format!("读取应用统计失败：{error}").into());
             }
+            let state = timer_state.borrow();
+            let scope = apps_scope(&window, &state);
+            window.set_apps_loading(
+                state.apps.pending.is_some()
+                    || state
+                        .apps
+                        .shown
+                        .as_ref()
+                        .is_none_or(|(shown, _)| *shown != scope),
+            );
         }
         window.global::<AiState>().set_open(
             ui_active
@@ -587,6 +671,8 @@ fn run_window(
             window.set_report_apps(ModelRc::new(VecModel::<ReportAppRow>::default()));
             window.set_report_ready(false);
             window.set_report_summary("数据已变更，请重新生成本地报告".into());
+            timer_state.borrow_mut().report = None;
+            timer_state.borrow_mut().report_checked = None;
             window.global::<DataState>().set_clear_credentials(false);
             history::reset(&timer_history);
             timer_state.borrow_mut().apps = AppsState::default();
@@ -630,11 +716,15 @@ fn run_window(
                 if refreshed {
                     history::refresh(&window, &timer_storage, &timer_history)?;
                 }
+                if refreshed && window.get_page() == 3 && window.get_stats_tab() == 2 {
+                    find_report(&window, &timer_storage, &timer_state)?;
+                }
                 Ok(refreshed)
             }) {
                 Ok(true) => {
                     if let Some(report_id) = pending_report.take()
-                        && let Err(error) = refresh_report(&window, &timer_storage, report_id)
+                        && let Err(error) =
+                            refresh_report(&window, &timer_storage, &timer_state, report_id)
                     {
                         window.set_report_summary(format!("报告读取失败：{error}").into());
                     }
@@ -744,7 +834,7 @@ fn refresh_timeline(
             state.range_ended_utc_ms.min(unix_time_ms()),
         )
     };
-    let (snapshot, policy, paused, icon_sources) = {
+    let (snapshot, policy, paused, icon_sources, used, earliest) = {
         let Some(storage) = try_lock_storage(storage)? else {
             return Ok(false);
         };
@@ -753,9 +843,23 @@ fn refresh_timeline(
             storage.retention_policy()?,
             storage.collection_policy()?.paused,
             storage.application_icon_sources()?,
+            storage.retained_bytes()?,
+            storage.earliest_activity_utc_ms()?,
         )
     };
     app_icon::register_sources(icon_sources);
+    window.set_retention_used_mib(i32::try_from(used.div_ceil(1024 * 1024)).unwrap_or(i32::MAX));
+    window.set_retention_usage(
+        match earliest.and_then(|ms| chrono::Local.timestamp_millis_opt(ms).single()) {
+            Some(first) => format!(
+                "已用 {} · 最早可回看到 {}",
+                format_bytes(used),
+                first.format("%Y-%m-%d")
+            ),
+            None => format!("已用 {} · 还没有活动记录", format_bytes(used)),
+        }
+        .into(),
+    );
     window.global::<CollectionState>().set_paused(paused);
     render_snapshot(window, ui_state, snapshot, policy);
     Ok(true)
@@ -891,8 +995,10 @@ fn render_snapshot(
         format!("存在 {} 个明确缺口", snapshot.monitoring_gaps.len()).into()
     });
     window.set_retention_value(retention_label(policy).into());
+    window.set_retention_mib(i32::try_from(policy.max_bytes / (1024 * 1024)).unwrap_or(i32::MAX));
     window.set_retention_days(policy.days.unwrap_or(0) as i32);
     timeline_ui::render(window, ui_state, &snapshot);
+    report_freshness(window, &ui_state.borrow());
 }
 
 /// The application totals: everything recorded, or the chosen range.
@@ -1001,6 +1107,21 @@ fn render_apps(
     render_application(window, selected, snapshot, range_start);
 }
 
+/// A moment in words: the time alone today, with the date otherwise.
+fn moment_label(timestamp: i64) -> String {
+    let Some(value) = chrono::Local.timestamp_millis_opt(timestamp).single() else {
+        return "时间不可用".to_owned();
+    };
+    if value.date_naive() == chrono::Local::now().date_naive() {
+        value.format("%H:%M").to_string()
+    } else {
+        snapshot_time_label(timestamp)
+    }
+}
+
+/// Windows shown before the list is expanded.
+const WINDOWS_SHOWN: usize = 8;
+
 /// Show one application's totals; its activity bar spans `range_start` to the
 /// end of the snapshot.
 fn render_application(
@@ -1020,6 +1141,7 @@ fn render_application(
         window.set_keyboard_value("0 次".into());
         window.set_mouse_value("0 次".into());
         window.set_windows(ModelRc::new(VecModel::<WindowRow>::default()));
+        window.set_windows_total(0);
         window.set_segments(ModelRc::new(VecModel::<SegmentRow>::default()));
         return;
     };
@@ -1038,22 +1160,54 @@ fn render_application(
     window.set_displayed_value(format_duration(application.displayed_ms).into());
     window.set_focused_value(format_duration(application.focused_ms).into());
     window.set_background_value(format_duration(application.background_ms).into());
-    window.set_input_value(format!("键盘 {} · 鼠标 {clicks}", application.keyboard_count).into());
-    let windows = application
-        .windows
-        .iter()
-        .map(|item| WindowRow {
-            identity: format!("{}:{}", application.identity, item.number).into(),
-            label: format!("窗口 {}", item.number).into(),
-            focused: format_duration(item.focused_ms).into(),
-            summary: format!(
-                "打开 {} · 显示 {} · 聚焦 {} · 后台 {}",
-                format_duration(item.opened_ms),
-                format_duration(item.displayed_ms),
-                format_duration(item.focused_ms),
-                format_duration(item.background_ms)
-            )
-            .into(),
+    window.set_input_value(
+        format!(
+            "键盘 {} · 鼠标 {}",
+            grouped_count(application.keyboard_count),
+            grouped_count(clicks)
+        )
+        .into(),
+    );
+    // Windows are told apart by when they were open; the range clips both ends.
+    let now = unix_time_ms();
+    let range_end = snapshot.range_ended_utc_ms;
+    let mut windows = application.windows.iter().collect::<Vec<_>>();
+    windows.sort_by(|a, b| {
+        b.focused_ms
+            .cmp(&a.focused_ms)
+            .then(a.number.cmp(&b.number))
+    });
+    window.set_windows_total(windows.len() as i32);
+    if !window.get_windows_expanded() {
+        windows.truncate(WINDOWS_SHOWN);
+    }
+    let windows = windows
+        .into_iter()
+        .map(|item| {
+            let opened = if item.opened_utc_ms <= snapshot.range_started_utc_ms {
+                "更早".to_owned()
+            } else {
+                moment_label(item.opened_utc_ms)
+            };
+            let ended = if item.ended_utc_ms < range_end {
+                moment_label(item.ended_utc_ms)
+            } else if range_end >= now - 60_000 {
+                "仍打开".to_owned()
+            } else {
+                "之后".to_owned()
+            };
+            WindowRow {
+                identity: format!("{}:{}", application.identity, item.number).into(),
+                label: format!("{opened} – {ended}").into(),
+                focused: format_duration(item.focused_ms).into(),
+                summary: format!(
+                    "打开 {} · 显示 {} · 后台 {}",
+                    format_duration(item.opened_ms),
+                    format_duration(item.displayed_ms),
+                    format_duration(item.background_ms)
+                )
+                .into(),
+            }
         })
         .collect::<Vec<_>>();
     window.set_windows(ui_model::sync(window.get_windows(), windows, |a, b| {
@@ -1064,6 +1218,15 @@ fn render_application(
         .range_ended_utc_ms
         .saturating_sub(range_start)
         .max(1) as f64;
+    window.set_segments_start(moment_label(range_start).into());
+    window.set_segments_end(
+        if range_end >= now - 60_000 {
+            "现在".to_owned()
+        } else {
+            moment_label(range_end)
+        }
+        .into(),
+    );
     let segments = application
         .segments
         .iter()
@@ -1091,6 +1254,53 @@ fn install_retention_callback(
     busy: Arc<AtomicBool>,
     sender: mpsc::Sender<ActionStatus>,
 ) {
+    window.on_retention_cutoff(|days| {
+        let cutoff = chrono::Local::now() - chrono::Duration::days(i64::from(days.max(0)));
+        cutoff.format("%Y年%-m月%-d日").to_string().into()
+    });
+    {
+        let storage = Arc::clone(&storage);
+        let busy = Arc::clone(&busy);
+        let sender = sender.clone();
+        window.on_retention_space_selected(move |mib| {
+            if mib <= 0 || busy.swap(true, Ordering::AcqRel) {
+                return;
+            }
+            let storage = Arc::clone(&storage);
+            let busy = Arc::clone(&busy);
+            let sender = sender.clone();
+            thread::spawn(move || {
+                let result = snapshot::run_heavy_task(|| -> Result<String> {
+                    let storage = storage
+                        .lock()
+                        .map_err(|_| anyhow::anyhow!("storage lock poisoned"))?;
+                    let mut policy = storage.retention_policy()?;
+                    policy.max_bytes = u64::try_from(mib)? * 1024 * 1024;
+                    storage.set_retention_policy(policy)?;
+                    let report = storage.apply_retention(unix_time_ms())?;
+                    Ok(
+                        if report.activity_items + report.input_items + report.report_items == 0 {
+                            format!("空间上限已改为 {}", format_bytes(policy.max_bytes))
+                        } else {
+                            format!(
+                                "空间上限已改为 {}；清理活动 {} 项、输入 {} 项、报告 {} 项",
+                                format_bytes(policy.max_bytes),
+                                report.activity_items,
+                                report.input_items,
+                                report.report_items
+                            )
+                        },
+                    )
+                });
+                busy.store(false, Ordering::Release);
+                let _ = sender.send(ActionStatus {
+                    message: result.unwrap_or_else(|error| format!("空间上限保存失败：{error}")),
+                    refresh: true,
+                    report: None,
+                });
+            });
+        });
+    }
     window.on_retention_selected(move |days| {
         if busy.swap(true, Ordering::AcqRel) {
             return;
@@ -1257,10 +1467,11 @@ fn install_snapshot_callbacks(
         });
     }
     {
-        let weak = window.as_weak();
         let storage = Arc::clone(&storage);
         let snapshot_state = Rc::clone(&snapshot_state);
+        let weak_preview = window.as_weak();
         window.on_snapshot_row_selected(move |index| {
+            let weak = weak_preview.clone();
             if index < 0 {
                 return;
             }
@@ -1275,46 +1486,68 @@ fn install_snapshot_callbacks(
             window.set_snapshot_selected_index(index);
             snapshot_grid::show_neighbours(&window, &snapshot_state.borrow(), index);
             window.set_snapshot_deletable(slot.success);
+            window.set_snapshot_selected_time(
+                snapshot_time_label(slot.captured_at_utc_ms.unwrap_or(slot.slot_started_utc_ms))
+                    .into(),
+            );
+            let sequence = PREVIEW_SEQUENCE.fetch_add(1, Ordering::AcqRel) + 1;
             if !slot.success {
+                let reason = slot
+                    .missing_reason
+                    .map_or("原因未知", snapshot_reason_label);
+                let span = snapshot_state.borrow().spans.get(index as usize).copied();
                 window.set_snapshot_preview(Image::default());
                 window.set_snapshot_detail(
-                    format!(
-                        "该槽没有图片：{}",
-                        slot.missing_reason
-                            .map(snapshot_reason_label)
-                            .unwrap_or("未知原因")
-                    )
+                    match span {
+                        Some((first, last, count)) if count > 1 => format!(
+                            "{} 期间的 {count} 个时段没有拍摄：{reason}",
+                            span_label(first, last)
+                        ),
+                        _ => format!("这个时段没有拍摄：{reason}"),
+                    }
                     .into(),
                 );
                 return;
             }
-            let result = snapshot::run_heavy_task(|| -> Result<(Image, String)> {
-                let image = storage
+            window.set_snapshot_detail("正在打开…".into());
+            // The image is read and decoded off the UI thread; a later
+            // selection makes this one moot.
+            let storage = Arc::clone(&storage);
+            thread::spawn(move || {
+                let pixels = storage
                     .lock()
-                    .map_err(|_| anyhow::anyhow!("storage lock poisoned"))?
-                    .load_snapshot_image(slot.id)?;
-                let preview =
-                    snapshot::decode_preview(image.webp, slot.pixel_width, slot.pixel_height)?;
-                Ok((
-                    preview,
-                    format!(
-                        "{} × {} · {}",
-                        slot.pixel_width,
-                        slot.pixel_height,
-                        format_bytes(slot.plaintext_bytes)
-                    ),
-                ))
+                    .map_err(|_| anyhow::anyhow!("storage lock poisoned"))
+                    .and_then(|storage| Ok(storage.load_snapshot_image(slot.id)?))
+                    .and_then(|image| {
+                        snapshot::decode_preview_pixels(
+                            image.webp,
+                            slot.pixel_width,
+                            slot.pixel_height,
+                        )
+                    })
+                    .map_err(|error| error.to_string());
+                let detail = format!(
+                    "{} × {} · {}",
+                    slot.pixel_width,
+                    slot.pixel_height,
+                    format_bytes(slot.plaintext_bytes)
+                );
+                let _ = weak.upgrade_in_event_loop(move |window| {
+                    if PREVIEW_SEQUENCE.load(Ordering::Acquire) != sequence {
+                        return;
+                    }
+                    match pixels {
+                        Ok(pixels) => {
+                            window.set_snapshot_preview(Image::from_rgba8(pixels));
+                            window.set_snapshot_detail(detail.into());
+                        }
+                        Err(error) => {
+                            window.set_snapshot_preview(Image::default());
+                            window.set_snapshot_detail(format!("预览失败：{error}").into());
+                        }
+                    }
+                });
             });
-            match result {
-                Ok((image, detail)) => {
-                    window.set_snapshot_preview(image);
-                    window.set_snapshot_detail(detail.into());
-                }
-                Err(error) => {
-                    window.set_snapshot_preview(Image::default());
-                    window.set_snapshot_detail(format!("预览失败：{error}").into());
-                }
-            }
         });
     }
     {
@@ -1341,10 +1574,22 @@ fn install_snapshot_callbacks(
             if let Some(window) = weak.upgrade() {
                 match result {
                     Ok(true) => {
-                        snapshot_state.borrow_mut().selected_slot_id = None;
-                        window.set_snapshot_preview(Image::default());
-                        window
-                            .set_snapshot_detail("图片已删除；该槽保留为明确的用户删除记录".into());
+                        let next = {
+                            let state = snapshot_state.borrow();
+                            let from = state.slots.iter().position(|slot| slot.id == slot_id);
+                            from.and_then(|from| {
+                                let from = from as i32;
+                                snapshot_grid::neighbour(&state, from, 1)
+                                    .or_else(|| snapshot_grid::neighbour(&state, from, -1))
+                            })
+                            .map(|index| state.slots[index].id)
+                        };
+                        snapshot_state.borrow_mut().selected_slot_id = next;
+                        // The old image stays until the neighbour's decodes, so an
+                        // open viewer moves on instead of closing.
+                        if next.is_none() {
+                            window.set_snapshot_preview(Image::default());
+                        }
                         window.set_action_status(match postponed {
                             Some(error) => {
                                 format!("已删除所选快照；旧加密数据稍后清理：{error}").into()
@@ -1355,6 +1600,10 @@ fn install_snapshot_callbacks(
                             refresh_snapshot_panel(&window, &storage, &ui_state, &snapshot_state)
                         {
                             window.set_action_status(format!("列表刷新失败：{error}").into());
+                        }
+                        let index = window.get_snapshot_selected_index();
+                        if index >= 0 {
+                            window.invoke_snapshot_row_selected(index);
                         }
                     }
                     Ok(false) => window.set_action_status("所选记录没有可删除的图片".into()),
@@ -1437,7 +1686,7 @@ fn install_snapshot_callbacks(
                 window.set_snapshot_selected_index(-1);
                 window.set_snapshot_deletable(false);
                 window.set_snapshot_preview(Image::default());
-                window.set_snapshot_detail("请选择一条成功快照进行解密预览".into());
+                window.set_snapshot_detail("从左侧选择一张快照预览".into());
             }
             snapshot_grid::tick_all(&mut state, false);
             snapshot_grid::show_ticks(&window, &state);
@@ -1476,30 +1725,87 @@ fn install_snapshot_callbacks(
         });
     }
     {
-        let storage = Arc::clone(&storage);
+        let weak = window.as_weak();
+        let capture_storage = Arc::clone(&storage);
         let data_directory = data_directory.clone();
         let busy = Arc::clone(&busy);
-        let sender = sender.clone();
+        let restore = Rc::new(std::cell::Cell::new(false));
+        let restore_after = Rc::clone(&restore);
         window.on_snapshot_capture_now(move || {
+            let Some(window) = weak.upgrade() else {
+                return;
+            };
             if busy.swap(true, Ordering::AcqRel) {
                 return;
             }
-            let storage = Arc::clone(&storage);
+            // Timelens would otherwise photograph itself: step aside, let the
+            // minimize animation finish, then capture.
+            let shown = window.window().is_visible() && !window.window().is_minimized();
+            restore.set(shown);
+            if shown {
+                window.window().set_minimized(true);
+            }
+            let storage = Arc::clone(&capture_storage);
             let data_directory = data_directory.clone();
             let busy = Arc::clone(&busy);
-            let sender = sender.clone();
-            thread::spawn(move || {
-                let result = snapshot::capture_now(&storage, &data_directory);
-                busy.store(false, Ordering::Release);
-                let message = result
-                    .map(|summary| format!("手动快照完成：{}", summary.label()))
-                    .unwrap_or_else(|error| format!("手动快照失败：{error}"));
-                let _ = sender.send(ActionStatus {
-                    message,
-                    refresh: true,
-                    report: None,
-                });
-            });
+            let weak = window.as_weak();
+            Timer::single_shot(
+                Duration::from_millis(if shown { 450 } else { 0 }),
+                move || {
+                    thread::spawn(move || {
+                        let result = snapshot::capture_now(&storage, &data_directory);
+                        busy.store(false, Ordering::Release);
+                        let (message, slot) = match result {
+                            Ok(summary) => (capture_message(&summary), summary.slot_utc_ms),
+                            Err(error) => (format!("拍摄失败：{error}"), 0),
+                        };
+                        let _ = weak.upgrade_in_event_loop(move |window| {
+                            window
+                                .invoke_snapshot_captured(message.into(), slot.to_string().into());
+                        });
+                    });
+                },
+            );
+        });
+        let weak = window.as_weak();
+        let storage = Arc::clone(&storage);
+        let ui_state = Rc::clone(&ui_state);
+        let snapshot_state = Rc::clone(&snapshot_state);
+        window.on_snapshot_captured(move |message, slot| {
+            let Some(window) = weak.upgrade() else {
+                return;
+            };
+            if restore_after.take() {
+                let _ = window_chrome::show_and_activate(&window);
+            } else if !window.window().is_visible() {
+                // Taken from the tray: the hidden window cannot show the result.
+                tray::show_message("Timelens 快照", message.to_string(), slot.as_str() != "0");
+            }
+            window.set_action_status(message);
+            let Ok(slot) = slot.parse::<i64>() else {
+                return;
+            };
+            if slot > 0 {
+                // Show the new snapshot, in today's list if the range is elsewhere.
+                let outside = {
+                    let state = ui_state.borrow();
+                    slot < state.range_started_utc_ms || slot >= chosen_range_end(&state)
+                };
+                if outside {
+                    let mut next = timeline_ui::today_state();
+                    next.selected_identity = ui_state.borrow().selected_identity.clone();
+                    *ui_state.borrow_mut() = next;
+                    if let Err(error) = refresh_timeline(&window, &storage, &ui_state) {
+                        window.set_action_status(format!("刷新失败：{error}").into());
+                    }
+                }
+                snapshot_state.borrow_mut().pending_select = Some(slot);
+            }
+            if let Err(error) =
+                refresh_snapshot_panel(&window, &storage, &ui_state, &snapshot_state)
+            {
+                window.set_action_status(format!("快照列表刷新失败：{error}").into());
+            }
         });
     }
     install_snapshot_policy_callbacks(
@@ -1546,6 +1852,51 @@ fn install_snapshot_callbacks(
                 }
             }
         });
+    }
+}
+
+/// What a capture did, in words.
+/// How the toast treats a status: 0 a result that fades, 1 work still going,
+/// 2 a failure that stays until dismissed.
+fn status_kind(message: &str) -> i32 {
+    const FAILURE: [&str; 6] = ["失败", "错误", "无法", "未能", "未完成", "请输入"];
+    if FAILURE.iter().any(|word| message.contains(word)) {
+        2
+    } else if message.ends_with('…') {
+        1
+    } else {
+        0
+    }
+}
+
+/// The file an export status names, when it still exists.
+fn status_path(message: &str) -> Option<PathBuf> {
+    let (_, path) = message
+        .split_once("导出到 ")
+        .or_else(|| message.split_once("个文件到 "))?;
+    let path = PathBuf::from(path.trim());
+    path.exists().then_some(path)
+}
+
+fn capture_message(summary: &snapshot::CaptureSummary) -> String {
+    let when = clock_label(summary.slot_utc_ms);
+    let reason = summary.reason.map_or("原因未知", snapshot_reason_label);
+    match (summary.stored, summary.missing) {
+        (0, _) => format!("没有拍摄：{reason}"),
+        (1, 0) => format!("已拍摄 {when} 的快照"),
+        (stored, 0) => format!("已拍摄 {when} 的快照，共 {stored} 张"),
+        (stored, missing) => {
+            format!("已拍摄 {when} 的快照 {stored} 张；{missing} 块屏幕没有拍摄：{reason}")
+        }
+    }
+}
+
+/// Where the shared range ends for listing: its planned end while it runs.
+fn chosen_range_end(state: &UiState) -> i64 {
+    if state.follow_now {
+        state.horizon_ended_utc_ms
+    } else {
+        state.range_ended_utc_ms
     }
 }
 
@@ -1666,16 +2017,60 @@ fn refresh_snapshot_panel(
             state.selected_identity.clone(),
         )
     };
-    let (policy, exclusions, slots) = {
+    let (policy, exclusions, listed, (saved, unsaved)) = {
         let Some(storage) = try_lock_storage(storage)? else {
             return Ok(false);
         };
         (
             storage.snapshot_policy()?,
             storage.snapshot_exclusions()?,
-            storage.list_snapshot_slots(range_started, range_ended, 500)?,
+            storage.list_snapshot_slots(range_started, range_ended, SNAPSHOTS_LISTED)?,
+            storage.count_snapshot_slots(range_started, range_ended)?,
         )
     };
+    let truncated = listed.len() >= SNAPSHOTS_LISTED;
+    // Omissions repeat every interval while locked or asleep; a run of the
+    // same reason on the same display is one tile.
+    let mut slots = Vec::<SnapshotSlot>::new();
+    let mut spans = Vec::<(i64, i64, usize)>::new();
+    for slot in listed {
+        if let (Some(last), Some(span)) = (slots.last(), spans.last_mut())
+            && !slot.success
+            && !last.success
+            && last.missing_reason == slot.missing_reason
+            && last.display.key == slot.display.key
+        {
+            span.0 = slot.slot_started_utc_ms;
+            span.2 += 1;
+            continue;
+        }
+        spans.push((slot.slot_started_utc_ms, slot.slot_started_utc_ms, 1));
+        slots.push(slot);
+    }
+    let displays = slots
+        .iter()
+        .filter(|slot| slot.success)
+        .map(|slot| slot.display.key.as_str())
+        .collect::<std::collections::BTreeSet<_>>();
+    let display_numbers = displays
+        .iter()
+        .enumerate()
+        .map(|(index, key)| (key.to_string(), index + 1))
+        .collect::<std::collections::HashMap<_, _>>();
+    let several_displays = display_numbers.len() > 1;
+    {
+        // A different range ends selecting; its ticks would no longer show.
+        let mut state = snapshot_state.borrow_mut();
+        if state
+            .range
+            .is_some_and(|range| range != (range_started, range_ended))
+        {
+            state.checked.clear();
+            state.anchor = None;
+            window.set_snapshot_selecting(false);
+        }
+        state.range = Some((range_started, range_ended));
+    }
     snapshot_state
         .borrow_mut()
         .checked
@@ -1691,7 +2086,8 @@ fn refresh_snapshot_panel(
     // still explains why nothing was saved.
     let rows = slots
         .iter()
-        .map(|slot| SnapshotRow {
+        .zip(&spans)
+        .map(|(slot, &(first, last, count))| SnapshotRow {
             identity: slot.id.to_string().into(),
             success: slot.success,
             thumb: thumbs
@@ -1699,7 +2095,28 @@ fn refresh_snapshot_panel(
                 .cloned()
                 .unwrap_or_default(),
             checked: snapshot_state.borrow().checked.contains(&slot.id),
-            time: snapshot_time_label(slot.slot_started_utc_ms).into(),
+            time: if count > 1 {
+                format!("{}–{}", moment_label(first), clock_label(last))
+            } else {
+                snapshot_time_label(slot.slot_started_utc_ms)
+            }
+            .into(),
+            note: if slot.success {
+                SharedString::new()
+            } else {
+                let reason = slot
+                    .missing_reason
+                    .map_or("原因未知", snapshot_reason_label);
+                if count > 1 {
+                    format!("{reason} · {count} 次").into()
+                } else {
+                    reason.into()
+                }
+            },
+            badge: display_numbers
+                .get(&slot.display.key)
+                .filter(|_| several_displays)
+                .map_or_else(SharedString::new, |number| format!("屏 {number}").into()),
             display: slot
                 .display
                 .key
@@ -1719,18 +2136,47 @@ fn refresh_snapshot_panel(
             },
         })
         .collect::<Vec<_>>();
+    // A slot just captured is selected once it is listed.
+    let pending = snapshot_state.borrow_mut().pending_select.take();
+    if let Some(slot_ms) = pending {
+        match slots
+            .iter()
+            .find(|slot| slot.slot_started_utc_ms == slot_ms)
+        {
+            Some(slot) => snapshot_state.borrow_mut().selected_slot_id = Some(slot.id),
+            None => snapshot_state.borrow_mut().pending_select = Some(slot_ms),
+        }
+    }
     let selected_index = snapshot_state
         .borrow()
         .selected_slot_id
         .and_then(|id| slots.iter().position(|slot| slot.id == id))
         .map_or(-1, |index| index as i32);
+    let newly_selected = pending.is_some() && selected_index >= 0;
     {
         let mut state = snapshot_state.borrow_mut();
         state.slots = slots;
+        state.spans = spans;
         if selected_index < 0 {
             state.selected_slot_id = None;
         }
     }
+    window.set_snapshot_summary(
+        if saved == 0 && unsaved == 0 {
+            "这段时间没有快照".to_owned()
+        } else {
+            let mut summary = format!("{} 张快照", grouped_count(saved));
+            if unsaved > 0 {
+                summary.push_str(&format!(" · {} 个时段没有拍摄", grouped_count(unsaved)));
+            }
+            if truncated {
+                summary.push_str(&format!(" · 显示最近 {SNAPSHOTS_LISTED} 条"));
+            }
+            summary
+        }
+        .into(),
+    );
+    window.set_snapshot_truncated(truncated);
     window.set_snapshots(ui_model::sync(window.get_snapshots(), rows, |a, b| {
         a.identity == b.identity
     }));
@@ -1743,7 +2189,9 @@ fn refresh_snapshot_panel(
     snapshot_grid::show_neighbours(window, &snapshot_state.borrow(), selected_index);
     if selected_index < 0 {
         window.set_snapshot_preview(Image::default());
-        window.set_snapshot_detail("请选择一条成功快照进行解密预览".into());
+        window.set_snapshot_detail("从左侧选择一张快照预览".into());
+    } else if newly_selected {
+        window.invoke_snapshot_row_selected(selected_index);
     }
     window.set_snapshot_policy_label(snapshot_policy_label(policy).into());
     window.set_snapshot_enabled(policy.enabled);
@@ -1770,6 +2218,13 @@ fn refresh_snapshot_panel(
     Ok(true)
 }
 
+/// Bumped on every snapshot selection, so a slower preview never replaces a
+/// newer one.
+static PREVIEW_SEQUENCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Slots listed at most; the list says when a range holds more.
+const SNAPSHOTS_LISTED: usize = 500;
+
 fn install_report_callback(
     window: &AppWindow,
     storage: Arc<Mutex<Storage>>,
@@ -1777,6 +2232,64 @@ fn install_report_callback(
     busy: Arc<AtomicBool>,
     sender: mpsc::Sender<ActionStatus>,
 ) {
+    {
+        let weak = window.as_weak();
+        let storage = Arc::clone(&storage);
+        let ui_state = Rc::clone(&ui_state);
+        let busy = Arc::clone(&busy);
+        let sender = sender.clone();
+        window.on_report_export(move |format| {
+            let Some((report_id, ..)) = ui_state.borrow().report else {
+                return;
+            };
+            let extension = if format == 0 { "json" } else { "csv" };
+            let path = match data_ui::choose_file(true, extension) {
+                Ok(Some(path)) => path,
+                Ok(None) => return,
+                Err(error) => {
+                    if let Some(window) = weak.upgrade() {
+                        window.set_action_status(format!("无法选择位置：{error}").into());
+                    }
+                    return;
+                }
+            };
+            if busy.swap(true, Ordering::AcqRel) {
+                return;
+            }
+            let storage = Arc::clone(&storage);
+            let busy = Arc::clone(&busy);
+            let sender = sender.clone();
+            thread::spawn(move || {
+                let result = storage
+                    .lock()
+                    .map_err(|_| anyhow::anyhow!("storage lock poisoned"))
+                    .and_then(|storage| {
+                        storage
+                            .export_report(
+                                report_id,
+                                &path,
+                                if format == 0 {
+                                    ExportFormat::Json
+                                } else {
+                                    ExportFormat::Csv
+                                },
+                                false,
+                            )
+                            .map_err(Into::into)
+                    });
+                busy.store(false, Ordering::Release);
+                let message = match result {
+                    Ok(()) => format!("报告已导出到 {}", path.display()),
+                    Err(error) => format!("导出失败：{error}"),
+                };
+                let _ = sender.send(ActionStatus {
+                    message,
+                    refresh: false,
+                    report: None,
+                });
+            });
+        });
+    }
     let weak = window.as_weak();
     window.on_report_generate(move || {
         if busy.swap(true, Ordering::AcqRel) {
@@ -1825,16 +2338,159 @@ fn install_report_callback(
     });
 }
 
-fn refresh_report(window: &AppWindow, storage: &Arc<Mutex<Storage>>, report_id: i64) -> Result<()> {
+fn refresh_report(
+    window: &AppWindow,
+    storage: &Arc<Mutex<Storage>>,
+    ui_state: &Rc<RefCell<UiState>>,
+    report_id: i64,
+) -> Result<()> {
     let report = storage
         .lock()
         .map_err(|_| anyhow::anyhow!("storage lock poisoned"))?
         .load_local_report(report_id)?;
-    render_report(window, &report);
+    render_report(window, ui_state, &report);
     Ok(())
 }
 
-fn render_report(window: &AppWindow, report: &LocalReport) {
+/// Whether a report's range is the one chosen: the same start and end, or for
+/// a range that grows with the clock the same start; a recent stretch matches
+/// a report of the same length.
+fn report_matches(start: i64, end: i64, state: &UiState) -> bool {
+    if state.follow_now && state.calendar_day.is_none() {
+        let length = state
+            .horizon_ended_utc_ms
+            .saturating_sub(state.horizon_started_utc_ms);
+        return (end.saturating_sub(start) - length).abs() <= 60_000;
+    }
+    start == state.range_started_utc_ms && (state.follow_now || end == state.range_ended_utc_ms)
+}
+
+/// Shows the latest stored report of the chosen range, when the one on
+/// screen covers another; looked up once per range.
+fn find_report(
+    window: &AppWindow,
+    storage: &Arc<Mutex<Storage>>,
+    ui_state: &Rc<RefCell<UiState>>,
+) -> Result<()> {
+    let key = {
+        let state = ui_state.borrow();
+        if state.follow_now && state.calendar_day.is_none()
+            || state
+                .report
+                .is_some_and(|(_, start, end)| report_matches(start, end, &state))
+            || state.report_checked
+                == Some((state.range_started_utc_ms, timeline_ui::chosen_end(&state)))
+        {
+            return Ok(());
+        }
+        (state.range_started_utc_ms, timeline_ui::chosen_end(&state))
+    };
+    let found = {
+        let Some(storage) = try_lock_storage(storage)? else {
+            return Ok(());
+        };
+        storage.latest_local_report_starting(key.0)?
+    };
+    ui_state.borrow_mut().report_checked = Some(key);
+    if let Some(report) = found.filter(|report| {
+        report_matches(
+            report.range_started_utc_ms,
+            report.range_ended_utc_ms,
+            &ui_state.borrow(),
+        )
+    }) {
+        render_report(window, ui_state, &report);
+    }
+    Ok(())
+}
+
+/// Says when the report on screen covers another range than the chosen one.
+fn report_freshness(window: &AppWindow, state: &UiState) {
+    let stale = state
+        .report
+        .filter(|(_, start, end)| !report_matches(*start, *end, state));
+    window.set_report_stale(stale.is_some());
+    if let Some((_, start, end)) = stale {
+        window.set_report_stale_text(
+            format!(
+                "这份报告是 {} 的，当前选择的是 {}。",
+                ai_ui::range_text(start, end, unix_time_ms(), &chrono::Local, true),
+                window.get_range_title()
+            )
+            .into(),
+        );
+    }
+}
+
+/// What a gap in a report stands for.
+fn gap_reason_label(reason: &str) -> &str {
+    match reason {
+        "unobserved" => "采集器没有运行记录",
+        "collector_restart" => "采集器重启",
+        "buffer_overflow" => "记录过多，部分丢失",
+        "input_overflow" => "输入计数溢出",
+        "clock_discontinuity" => "系统时间跳变",
+        "retention_time" => "超过保留期，已清理",
+        "retention_space" => "超过空间上限，已清理",
+        "user_deleted" => "已手动删除",
+        "recovery_corruption" => "损坏恢复时丢失",
+        "global_pause" => "已暂停记录",
+        "privacy_exclusion" => "不记录的应用",
+        "session_disconnected" => "会话断开",
+        "secure_desktop" => "安全桌面",
+        _ => reason,
+    }
+}
+
+const SNAPSHOT_REASONS: [SnapshotMissingReason; 14] = [
+    SnapshotMissingReason::DesktopIdle,
+    SnapshotMissingReason::GlobalPause,
+    SnapshotMissingReason::Locked,
+    SnapshotMissingReason::Sleep,
+    SnapshotMissingReason::SecureDesktop,
+    SnapshotMissingReason::SessionDisconnected,
+    SnapshotMissingReason::RemoteSession,
+    SnapshotMissingReason::PrivacyExclusion,
+    SnapshotMissingReason::CaptureFailed,
+    SnapshotMissingReason::LowDisk,
+    SnapshotMissingReason::RetentionCleaned,
+    SnapshotMissingReason::UserDeleted,
+    SnapshotMissingReason::BackupOmitted,
+    SnapshotMissingReason::RecoveryCorruption,
+];
+
+/// A stored snapshot omission reason in words.
+fn snapshot_reason_text(code: &str) -> &str {
+    SNAPSHOT_REASONS
+        .iter()
+        .find(|reason| reason.as_str() == code)
+        .map_or(code, |reason| snapshot_reason_label(*reason))
+}
+
+/// A stretch in words, with the date where it is not today.
+fn span_label(start: i64, end: i64) -> String {
+    let date = |timestamp: i64| {
+        chrono::Local
+            .timestamp_millis_opt(timestamp)
+            .single()
+            .map(|value| value.date_naive())
+    };
+    let end_text = if date(start) == date(end - 1) {
+        clock_label(end)
+    } else {
+        moment_label(end)
+    };
+    format!("{} – {end_text}", moment_label(start))
+}
+
+fn clock_label(timestamp: i64) -> String {
+    chrono::Local
+        .timestamp_millis_opt(timestamp)
+        .single()
+        .map_or_else(String::new, |value| value.format("%H:%M").to_string())
+}
+
+fn render_report(window: &AppWindow, ui_state: &Rc<RefCell<UiState>>, report: &LocalReport) {
     let range_ms = report
         .range_ended_utc_ms
         .saturating_sub(report.range_started_utc_ms)
@@ -1844,42 +2500,121 @@ fn render_report(window: &AppWindow, report: &LocalReport) {
         .left_click_count
         .saturating_add(report.middle_click_count)
         .saturating_add(report.right_click_count);
-    let reasons = if report.snapshot_reasons.is_empty() {
-        "无".to_owned()
-    } else {
-        report
-            .snapshot_reasons
-            .iter()
-            .map(|reason| format!("{} {}", reason.reason, reason.slot_count))
-            .collect::<Vec<_>>()
-            .join("、")
-    };
-    window.set_report_ready(true);
-    window.set_report_range(
-        format!(
-            "已生成范围  {} — {}",
-            snapshot_time_label(report.range_started_utc_ms),
-            snapshot_time_label(report.range_ended_utc_ms)
+    // The same stretch is often recorded for activity and input alike.
+    let mut gaps = report
+        .gaps
+        .iter()
+        .map(|gap| (gap.started_utc_ms, gap.ended_utc_ms, gap.reason.as_str()))
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    gaps.retain(|(start, end, _)| end > start);
+    let unobserved = gaps
+        .iter()
+        .filter(|(.., reason)| *reason == "unobserved")
+        .map(|(start, end, _)| end.saturating_sub(*start) as u64)
+        .sum::<u64>();
+    let cleaned = |reason: &str| {
+        matches!(
+            reason,
+            "retention_time" | "retention_space" | "user_deleted"
         )
+    };
+    let cleaned_count = gaps.iter().filter(|(.., reason)| cleaned(reason)).count();
+    let gap_count = gaps
+        .iter()
+        .filter(|(.., reason)| *reason != "unobserved" && !cleaned(reason))
+        .count();
+    let mut coverage_note = Vec::new();
+    if unobserved > 0 {
+        coverage_note.push(format!("未观察 {}", format_duration(unobserved)));
+    }
+    if gap_count > 0 {
+        coverage_note.push(format!("明确缺口 {gap_count} 段"));
+    }
+    if cleaned_count > 0 {
+        coverage_note.push(format!("已清理 {cleaned_count} 段"));
+    }
+    const GAPS_LISTED: usize = 50;
+    let mut gap_rows = gaps
+        .iter()
+        .take(GAPS_LISTED)
+        .map(|(start, end, reason)| {
+            SharedString::from(format!(
+                "{}  {}",
+                span_label(*start, *end),
+                gap_reason_label(reason)
+            ))
+        })
+        .collect::<Vec<_>>();
+    if gaps.len() > GAPS_LISTED {
+        gap_rows.push(format!("另有 {} 段未列出", gaps.len() - GAPS_LISTED).into());
+    }
+    let reasons = report
+        .snapshot_reasons
+        .iter()
+        .map(|reason| {
+            format!(
+                "{} {}",
+                snapshot_reason_text(&reason.reason),
+                grouped_count(reason.slot_count)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(" · ");
+    let focus = report
+        .applications
+        .iter()
+        .map(|application| application.focused_ms)
+        .fold(0_u64, u64::saturating_add);
+    window.set_report_ready(true);
+    window.set_report_focus(format_duration(focus).into());
+    window.set_report_coverage(format!("{coverage:.1}%").into());
+    window.set_report_coverage_note(
+        if coverage_note.is_empty() {
+            "没有缺口记录".to_owned()
+        } else {
+            coverage_note.join(" · ")
+        }
         .into(),
     );
-    window.set_report_coverage(format!("{coverage:.1}%").into());
-    window.set_report_keyboard(grouped_count(report.keyboard_count).into());
-    window.set_report_snapshot_count(report.snapshot_success_count.to_string().into());
-    window.set_report_summary(
+    window.set_report_gaps(ModelRc::new(VecModel::from(gap_rows)));
+    window.set_report_input(grouped_count(report.keyboard_count).into());
+    window.set_report_input_note(format!("鼠标点击 {}", grouped_count(mouse)).into());
+    window.set_report_snapshots(
+        format!("{} 张", grouped_count(report.snapshot_success_count)).into(),
+    );
+    window.set_report_snapshot_note(
+        if report.snapshot_missing_count == 0 {
+            "没有缺失".to_owned()
+        } else {
+            format!(
+                "缺失 {}：{reasons}",
+                grouped_count(report.snapshot_missing_count)
+            )
+        }
+        .into(),
+    );
+    // Which rules computed it is part of the report, but small print.
+    window.set_report_footer(
         format!(
-            "报告 #{} · 规则 v{} · 时长 {} · {} 个应用 · {} 条缺口记录\n鼠标 {} 次 · 快照缺失 {}（{}）",
+            "范围 {} · 生成于 {} · 报告 #{} · 计算版本 v{}",
+            span_label(report.range_started_utc_ms, report.range_ended_utc_ms),
+            snapshot_time_label(report.generated_utc_ms),
             report.id,
             report.rules_version,
-            format_duration(range_ms),
-            report.applications.len(),
-            report.gaps.len(),
-            mouse,
-            report.snapshot_missing_count,
-            reasons,
         )
         .into(),
     );
+    {
+        let mut state = ui_state.borrow_mut();
+        state.report = Some((
+            report.id,
+            report.range_started_utc_ms,
+            report.range_ended_utc_ms,
+        ));
+        report_freshness(window, &state);
+    }
     let focus_sum = report
         .applications
         .iter()
@@ -1931,7 +2666,7 @@ fn snapshot_policy_label(policy: SnapshotPolicy) -> String {
 fn snapshot_reason_label(reason: SnapshotMissingReason) -> &'static str {
     match reason {
         SnapshotMissingReason::DesktopIdle => "桌面空闲",
-        SnapshotMissingReason::GlobalPause => "全局暂停",
+        SnapshotMissingReason::GlobalPause => "已暂停记录",
         SnapshotMissingReason::Locked => "锁屏",
         SnapshotMissingReason::Sleep => "睡眠/恢复",
         SnapshotMissingReason::SecureDesktop => "安全桌面/UAC",
@@ -2005,12 +2740,17 @@ fn format_duration(milliseconds: u64) -> String {
 fn retention_label(policy: RetentionPolicy) -> String {
     let time = policy
         .days
-        .map_or_else(|| "永久".to_owned(), |days| format!("{days} 天"));
-    format!("{time} · {}", format_bytes(policy.max_bytes))
+        .map_or_else(|| "永久保留".to_owned(), |days| format!("保留 {days} 天"));
+    format!(
+        "{time}。数据库超过 {} 时，从最早的一天开始清理。",
+        format_bytes(policy.max_bytes)
+    )
 }
 
 fn format_bytes(bytes: u64) -> String {
-    if bytes >= 1024 * 1024 {
+    if bytes >= 1024 * 1024 * 1024 {
+        format!("{:.1} GiB", bytes as f64 / (1024.0 * 1024.0 * 1024.0))
+    } else if bytes >= 1024 * 1024 {
         format!("{:.1} MiB", bytes as f64 / (1024.0 * 1024.0))
     } else if bytes >= 1024 {
         format!("{:.1} KiB", bytes as f64 / 1024.0)

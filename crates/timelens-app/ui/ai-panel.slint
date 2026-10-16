@@ -1,6 +1,10 @@
 import { ComboBox, LineEdit, TextEdit, ScrollView, ListView } from "std-widgets.slint";
 import { Theme, Action, Label, Note, SectionTitle, Eyebrow, Rule, CheckBox, StatusLine, Segmented, Segment, Switch, SettingRow, SettingsHeader, SettingsGroup, SettingExpander, Card, Badge, Dot } from "theme.slint";
 
+// One block of a Markdown answer. `kind`: 0 paragraph, 1 title, 2 heading,
+// 3 list item, 4 quote, 5 code, 6 rule; `marker` is the bullet or number.
+export struct MdBlock { kind: int, text: string, marker: string, indent: int }
+
 // One row of the summary history: a summary version, or a first summary attempt
 // that has not succeeded. `state`: 0 done, 1 queued or running, 2 failed,
 // 3 no data, missed or canceled.
@@ -114,6 +118,10 @@ export global AiState {
     in-out property <int> branch-index: 0;
     in-out property <string> branch-label: "最新回答";
     in-out property <string> conversation;
+    // The conversation as Markdown blocks, and whether to show the raw text,
+    // which can be selected, instead.
+    pure callback markdown(string) -> [MdBlock];
+    in-out property <bool> raw-view: false;
     in-out property <string> exposed-reasoning;
     in-out property <string> token-label;
     in-out property <string> source-label;
@@ -605,6 +613,13 @@ export component AiPanel inherits Rectangle {
                                 AiState.status = "已复制全文";
                             }
                         }
+                        Action {
+                            quiet: true;
+                            text: AiState.raw-view ? "按排版阅读" : "查看原文";
+                            accessible-label: AiState.raw-view ? "按排版阅读" : "查看可选择的原文";
+                            enabled: AiState.conversation != "";
+                            clicked => { AiState.raw-view = !AiState.raw-view; }
+                        }
                         if AiState.reader-state == 0 : Action { text: "重新生成"; icon: @image-url("icons/refresh.svg"); enabled: AiState.reader-busy == ""; clicked => { AiState.regenerate(); } }
                         if AiState.reader-state == 0 : Action { text: AiState.pinned ? "取消保留" : "始终保留"; selected: AiState.pinned; accessible-label: AiState.pinned ? "取消保留，允许自动清理这一版" : "始终保留，不被自动清理"; clicked => { AiState.pin-version(); } }
                         Rectangle { horizontal-stretch: 1; }
@@ -635,11 +650,47 @@ export component AiPanel inherits Rectangle {
                         HorizontalLayout { alignment: LayoutAlignment.start; Action { text: "重新生成"; clicked => { AiState.regenerate(); } } }
                     }
 
+                    // Formatted reading; the raw text stays below for selecting and copying.
+                    if root.reader-body && !AiState.raw-view && AiState.conversation != "" : Rectangle {
+                        vertical-stretch: 1;
+                        min-height: 200px;
+                        border-radius: 8px;
+                        border-width: 1px; border-color: Theme.line;
+                        ScrollView {
+                            horizontal-scrollbar-policy: always-off;
+                            VerticalLayout {
+                                alignment: start;
+                                padding: 16px; padding-right: 22px; spacing: 10px;
+                                for block in AiState.markdown(AiState.conversation) : HorizontalLayout {
+                                    padding-left: block.indent * 18px + (block.kind == 4 ? 12px : 0px);
+                                    spacing: 8px;
+                                    if block.kind == 4 : Rectangle { width: 3px; border-radius: 1.5px; background: Theme.line-strong; }
+                                    if block.kind == 3 : Text { min-width: 14px; text: block.marker; color: Theme.ink-3; font-size: 15px; vertical-alignment: top; }
+                                    if block.kind == 6 : Rectangle { height: 9px; horizontal-stretch: 1; Rectangle { height: 1px; background: Theme.line; } }
+                                    if block.kind == 5 : Rectangle {
+                                        horizontal-stretch: 1;
+                                        height: code.preferred-height + 20px;
+                                        border-radius: 8px;
+                                        background: Theme.raised;
+                                        code := Text { x: 12px; width: parent.width - 24px; text: block.text; color: Theme.ink; font-family: "Consolas"; font-size: 13px; wrap: word-wrap; }
+                                    }
+                                    if block.kind != 5 && block.kind != 6 : Text {
+                                        horizontal-stretch: 1;
+                                        text: block.text;
+                                        wrap: word-wrap;
+                                        color: block.kind == 4 ? Theme.ink-2 : Theme.ink;
+                                        font-size: block.kind == 1 ? 19px : block.kind == 2 ? 16px : 15px;
+                                        font-weight: block.kind == 1 || block.kind == 2 ? 600 : 400;
+                                    }
+                                }
+                            }
+                        }
+                    }
                     reader := TextEdit {
-                        visible: root.reader-body;
-                        vertical-stretch: root.reader-body ? 1 : 0;
-                        min-height: root.reader-body ? 200px : 0px;
-                        max-height: root.reader-body ? 100000px : 0px;
+                        visible: root.reader-body && (AiState.raw-view || AiState.conversation == "");
+                        vertical-stretch: self.visible ? 1 : 0;
+                        min-height: self.visible ? 200px : 0px;
+                        max-height: self.visible ? 100000px : 0px;
                         text: AiState.conversation;
                         read-only: true;
                         wrap: word-wrap;

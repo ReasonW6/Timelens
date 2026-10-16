@@ -15,7 +15,11 @@ fn settings(window: &AppWindow, tab: i32) {
     window.global::<AiState>().set_open(tab == 4);
     match tab {
         1 => window.invoke_snapshot_opened(),
-        2 => window.global::<CollectionState>().invoke_opened(),
+        2 => {
+            // As the settings do: the rules page, not the key statistics.
+            window.global::<CollectionState>().set_page(0);
+            window.global::<CollectionState>().invoke_opened();
+        }
         4 => window.global::<AiState>().invoke_opened(),
         _ => {}
     }

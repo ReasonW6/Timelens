@@ -8,7 +8,9 @@ use std::{
     sync::{
         Arc, Mutex,
         atomic::{AtomicU64, Ordering},
+        mpsc,
     },
+    thread,
     time::{Duration, Instant},
 };
 
@@ -17,10 +19,10 @@ use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 use timelens_storage::{Storage, TimelineSnapshot};
 
 use crate::{
-    AiState, AppWindow, DayAnchor, HistoryItem, Participant, SegmentRow, ShareSlice, StackApp,
-    UiState, app_icon, format_duration, grouped_count, refresh_timeline,
+    AiState, AppWindow, DayAnchor, HistoryItem, Participant, RangeOrigin, SegmentRow, ShareSlice,
+    StackApp, UiState, app_icon, format_duration, grouped_count, refresh_timeline,
     timeline_view::{self, ActivityEntry, ParticipantRole, Unrecorded},
-    try_lock_storage, unix_time_ms,
+    unix_time_ms,
 };
 #[path = "history_cache.rs"]
 mod paging;
@@ -32,6 +34,7 @@ const PERIOD_HEIGHT: f32 = 34.0;
 const ENTRY_HEIGHT: f32 = 58.0;
 const PAUSE_HEIGHT: f32 = 32.0;
 const END_HEIGHT: f32 = 56.0;
+const EMPTY_HEIGHT: f32 = 150.0;
 
 const KIND_DAY: i32 = 0;
 const KIND_PERIOD: i32 = 1;
@@ -39,6 +42,8 @@ const KIND_ENTRY: i32 = 2;
 const KIND_PAUSE: i32 = 3;
 const KIND_GAP: i32 = 4;
 const KIND_END: i32 = 5;
+/// Today with nothing recorded yet, and why.
+const KIND_EMPTY: i32 = 6;
 
 /// Days fetched per scroll to the end.
 const DAYS_PER_LOAD: i32 = 3;
@@ -69,7 +74,13 @@ struct Day {
     totals: Vec<(String, u64)>,
     focus_ms: u64,
     source: Option<Arc<TimelineSnapshot>>,
+    /// The day's system states, such as locked or asleep, by kind, start and
+    /// end; they name the breaks between activities.
+    system: Vec<(String, i64, i64)>,
 }
+
+/// The selected activity's own times, read off the UI thread.
+type DetailJob = (String, mpsc::Receiver<anyhow::Result<TimelineSnapshot>>);
 
 pub struct HistoryState {
     days: BTreeMap<i32, Arc<Day>>,
@@ -81,6 +92,7 @@ pub struct HistoryState {
     past_refreshed: Instant,
     generation: u64,
     paging: paging::Paging,
+    detail_job: Option<DetailJob>,
 }
 
 impl HistoryState {
@@ -94,6 +106,7 @@ impl HistoryState {
             past_refreshed: Instant::now(),
             generation: GENERATION.load(Ordering::Acquire),
             paging: paging::Paging::default(),
+            detail_job: None,
         }
     }
 }
@@ -119,6 +132,7 @@ fn load_day(storage: &Storage, offset: i32, previous: Option<&Day>) -> anyhow::R
         .unwrap_or_default();
     let mut day = build_day(offset, date, &snapshot, previous);
     day.source = (offset == 0).then_some(snapshot);
+    day.system = storage.system_intervals_between(start, end)?;
     Ok(Some(day))
 }
 
@@ -229,6 +243,7 @@ fn build_day(
         totals,
         focus_ms: timeline_view::total_focus_ms(snapshot),
         source: (offset == 0).then(|| Arc::new(snapshot.clone())),
+        system: Vec::new(),
     }
 }
 
@@ -302,18 +317,57 @@ fn entry_note(participants: &[timeline_view::Participant]) -> String {
         .iter()
         .filter(|p| p.role == ParticipantRole::SameScreen)
         .collect::<Vec<_>>();
+    let list = |apps: &[&timeline_view::Participant]| match apps {
+        [] => None,
+        [one] => Some(named(one)),
+        [one, two] => Some(format!("{}、{}", named(one), named(two))),
+        [one, two, ..] => Some(format!(
+            "{}、{} 等 {} 个",
+            named(one),
+            named(two),
+            apps.len()
+        )),
+    };
     let mut parts = Vec::new();
-    match same_screen.as_slice() {
-        [] => {}
-        [one] => parts.push(format!("同时使用 {}", named(one))),
-        many => parts.push(format!("同时使用 {} 个应用", many.len())),
+    if let Some(names) = list(&same_screen) {
+        parts.push(format!("同屏 {names}"));
     }
-    match interleaved.as_slice() {
-        [] => {}
-        [one] => parts.push(format!("穿插 {}", named(one))),
-        many => parts.push(format!("穿插 {} 个应用", many.len())),
+    if let Some(names) = list(&interleaved) {
+        parts.push(format!("穿插 {names}"));
     }
     parts.join(" · ")
+}
+
+/// A break between activities, named after the system state that covers most
+/// of it; otherwise only what is known: nothing had focus.
+fn break_title(day: &Day, from: i64, to: i64) -> String {
+    let length = to.saturating_sub(from);
+    let mut covered = BTreeMap::<&str, i64>::new();
+    for (kind, start, end) in &day.system {
+        let overlap = (*end).min(to) - (*start).max(from);
+        if overlap > 0 {
+            *covered.entry(kind.as_str()).or_default() += overlap;
+        }
+    }
+    let label = covered
+        .into_iter()
+        .filter_map(|(kind, ms)| {
+            let label = match kind {
+                "global_pause" => "已暂停记录",
+                "locked" => "锁屏",
+                "sleep" => "睡眠",
+                "desktop_idle" => "空闲",
+                "session_disconnected" => "会话断开",
+                "secure_desktop" => "安全桌面",
+                "privacy_exclusion" => "不记录的应用",
+                _ => return None,
+            };
+            Some((label, ms))
+        })
+        .max_by_key(|(_, ms)| *ms)
+        .filter(|(_, ms)| ms * 2 >= length)
+        .map_or("无聚焦记录", |(label, _)| label);
+    format!("{label} {}", format_duration(length.unsigned_abs()))
 }
 
 fn matches_query(entry: &DayEntry, query: &str) -> bool {
@@ -399,8 +453,8 @@ fn flatten_days<'a>(
         kind: KIND_END,
         key: "end".into(),
         height: END_HEIGHT,
-        title: if !query.is_empty() {
-            "搜索只覆盖最近一个月的记录"
+        title: if !query.is_empty() || (!can_load && horizon == 0) {
+            ""
         } else if can_load {
             "载入更早的记录"
         } else {
@@ -439,8 +493,19 @@ fn flatten_days<'a>(
         }
         rows.sort_by_key(Row::started);
         let (title, subtitle) = day_title(day);
-        let apps = format!("{} 个应用", day.totals.len());
-        let duration = format!("聚焦 {}", format_duration(day.focus_ms));
+        // A search counts the day's hits instead.
+        let (apps, duration) = if query.is_empty() {
+            (
+                format!("{} 个应用", day.totals.len()),
+                format!("聚焦 {}", format_duration(day.focus_ms)),
+            )
+        } else {
+            let hits = entries.iter().map(|e| e.entry.duration_ms).sum::<u64>();
+            (
+                format!("{} 段", entries.len()),
+                format!("命中 {}", format_duration(hits)),
+            )
+        };
         let day_top = top;
         items.push(HistoryItem {
             kind: KIND_DAY,
@@ -460,13 +525,12 @@ fn flatten_days<'a>(
         top += DAY_HEIGHT;
         if rows.is_empty() {
             items.push(HistoryItem {
-                kind: KIND_PAUSE,
+                kind: KIND_EMPTY,
                 key: format!("empty:{}", day.date).into(),
-                height: PAUSE_HEIGHT,
-                title: "今天还没有记录。使用电脑时，应用活动会按时间出现在这里。".into(),
+                height: EMPTY_HEIGHT,
                 ..blank()
             });
-            top += PAUSE_HEIGHT;
+            top += EMPTY_HEIGHT;
         }
         let mut current_period = "";
         // The end of the previous entry, unless an interruption already explains
@@ -509,11 +573,7 @@ fn flatten_days<'a>(
                             kind: KIND_PAUSE,
                             key: format!("pause:{}:{previous_end}", day.date).into(),
                             height: PAUSE_HEIGHT,
-                            title: format!(
-                                "休息 {}",
-                                format_duration(entry.started_utc_ms.abs_diff(previous_end))
-                            )
-                            .into(),
+                            title: break_title(day, previous_end, entry.started_utc_ms).into(),
                             ..blank()
                         });
                         top += PAUSE_HEIGHT;
@@ -526,17 +586,42 @@ fn flatten_days<'a>(
                         .iter()
                         .filter(|p| p.role != ParticipantRole::Main)
                         .collect::<Vec<_>>();
+                    let name = if visible {
+                        app_icon::display_name(identity, &entry.name)
+                    } else {
+                        String::new()
+                    };
+                    let mut note = if visible {
+                        entry_note(&item.participants)
+                    } else {
+                        String::new()
+                    };
+                    // A hit on another application says which.
+                    if visible
+                        && !query.is_empty()
+                        && !name.to_lowercase().contains(&query)
+                        && let Some(hit) = others
+                            .iter()
+                            .map(|p| app_icon::display_name(&p.identity, &p.name))
+                            .find(|n| n.to_lowercase().contains(&query))
+                    {
+                        note = if note.is_empty() {
+                            format!("含 {hit}")
+                        } else {
+                            format!("含 {hit} · {note}")
+                        };
+                    }
                     items.push(HistoryItem {
                         kind: KIND_ENTRY,
                         key: item.key.clone().into(),
                         height: ENTRY_HEIGHT,
                         title: if visible {
-                            app_icon::display_name(identity, &entry.name).into()
+                            name.into()
                         } else {
                             SharedString::new()
                         },
                         subtitle: if visible {
-                            entry_note(&item.participants).into()
+                            note.into()
                         } else {
                             SharedString::new()
                         },
@@ -683,95 +768,31 @@ pub fn reset(state: &Rc<RefCell<HistoryState>>) {
     state.selected = None;
 }
 
-fn find<'a>(state: &'a HistoryState, key: &str) -> Option<&'a DayEntry> {
+fn find(state: &HistoryState, key: &str) -> Option<Arc<DayEntry>> {
     state
         .days
         .values()
         .flat_map(|day| &day.entries)
         .find(|entry| entry.key == key)
-        .map(Arc::as_ref)
+        .cloned()
 }
 
-fn show_detail(
+/// Selects an activity: the pane shows what the row knows at once and its
+/// times once read, so a busy database never holds up the click.
+fn select(
     window: &AppWindow,
     storage: &Arc<Mutex<Storage>>,
-    entry: &DayEntry,
-) -> anyhow::Result<()> {
-    let (start, end) = (entry.entry.started_utc_ms, entry.entry.ended_utc_ms);
-    let span = {
-        let Some(storage) = try_lock_storage(storage)? else {
-            return Ok(());
-        };
-        storage.timeline_snapshot(start, end.max(start + 1))?
+    state: &Rc<RefCell<HistoryState>>,
+    key: &str,
+) {
+    let mut s = state.borrow_mut();
+    let Some(entry) = find(&s, key) else {
+        return;
     };
+    s.selected = Some(key.to_owned());
+    window.set_history_selected(key.into());
+    let (start, end) = (entry.entry.started_utc_ms, entry.entry.ended_utc_ms);
     let identity = entry.entry.identity.as_deref().unwrap_or_default();
-    let length = end.saturating_sub(start).max(1) as f64;
-    let start_minute = Local.timestamp_millis_opt(start).single().map_or(0.0, |t| {
-        (t.hour() * 60 + t.minute()) as f32 + t.second() as f32 / 60.0
-    });
-    let span_minutes = (length / 60_000.0) as f32;
-    let participants = entry
-        .participants
-        .iter()
-        .map(|participant| {
-            let application = span
-                .applications
-                .iter()
-                .find(|application| application.identity == participant.identity);
-            // Displayed time includes focused time, as on every other page.
-            let (focused, displayed, background) = application.map_or((0, 0, 0), |a| {
-                (a.focused_ms, a.displayed_ms, a.background_ms)
-            });
-            let tint = app_icon::tint(&participant.identity);
-            let segments = application
-                .map(|a| {
-                    a.segments
-                        .iter()
-                        .map(|segment| SegmentRow {
-                            offset: ((segment.started_utc_ms - start) as f64 / length)
-                                .clamp(0.0, 1.0) as f32,
-                            width: ((segment.ended_utc_ms - segment.started_utc_ms) as f64 / length)
-                                .clamp(0.0, 1.0) as f32,
-                            kind: if segment.focused {
-                                2
-                            } else if segment.displayed {
-                                1
-                            } else {
-                                0
-                            },
-                            tint,
-                        })
-                        .collect::<Vec<_>>()
-                })
-                .unwrap_or_default();
-            let lookup = segment_lookup(&segments);
-            Participant {
-                name: app_icon::display_name(&participant.identity, &participant.name).into(),
-                icon: app_icon::for_identity(&participant.identity),
-                tint,
-                role: match participant.role {
-                    ParticipantRole::Main => "主应用",
-                    ParticipantRole::Interleaved => "穿插",
-                    ParticipantRole::SameScreen => "同屏",
-                }
-                .into(),
-                focused: format_duration(focused).into(),
-                visible: format_duration(displayed).into(),
-                background: format_duration(background).into(),
-                segments: ModelRc::new(VecModel::from(segments)),
-                lookup: ModelRc::new(VecModel::from(lookup)),
-                start_minute,
-                span_minutes,
-            }
-        })
-        .collect::<Vec<_>>();
-    // The row's own application leads the pane; the list holds the others.
-    let (main, others): (Vec<_>, Vec<_>) = entry
-        .participants
-        .iter()
-        .zip(participants)
-        .partition(|(participant, _)| participant.role == ParticipantRole::Main);
-    let others = others.into_iter().map(|(_, row)| row).collect::<Vec<_>>();
     let date = Local
         .timestamp_millis_opt(start)
         .single()
@@ -782,21 +803,152 @@ fn show_detail(
     window.set_detail_tint(app_icon::tint(identity));
     window.set_detail_when(format!("{date} · {}–{}", clock(start), clock(end)).into());
     window.set_detail_duration(format_duration(entry.entry.duration_ms).into());
-    window.set_detail_note(
-        if others.is_empty() {
-            "一直保持聚焦，没有切换到其他应用".to_owned()
-        } else {
-            format!("期间还用了 {} 个应用", others.len())
+    window.set_detail_loading(true);
+    window.set_detail_main(Participant::default());
+    window.set_detail_interleaved(ModelRc::default());
+    window.set_detail_same_screen(ModelRc::default());
+    window.set_detail_keyboard("—".into());
+    window.set_detail_mouse("—".into());
+    window.set_detail_open(true);
+    let (sender, receiver) = mpsc::channel();
+    s.detail_job = Some((key.to_owned(), receiver));
+    let storage = Arc::clone(storage);
+    let weak = window.as_weak();
+    thread::spawn(move || {
+        let result = storage
+            .lock()
+            .map_err(|_| anyhow::anyhow!("storage lock poisoned"))
+            .and_then(|storage| Ok(storage.timeline_snapshot(start, end.max(start + 1))?));
+        if sender.send(result).is_ok() {
+            let _ = weak.upgrade_in_event_loop(|window| window.invoke_history_detail_ready());
         }
-        .into(),
-    );
-    window.set_detail_main(
-        main.into_iter()
-            .next()
-            .map(|(_, row)| row)
-            .unwrap_or_default(),
-    );
-    window.set_detail_participants(ModelRc::new(VecModel::from(others)));
+    });
+}
+
+/// The local offset from UTC in minutes at a moment.
+fn local_offset_minutes(timestamp: i64) -> Option<i32> {
+    Local
+        .timestamp_millis_opt(timestamp)
+        .single()
+        .map(|t| t.offset().local_minus_utc() / 60)
+}
+
+/// When the local clock jumps between `start` and `end`, and by how many
+/// minutes; found to the millisecond by halving the span.
+fn offset_change(start: i64, end: i64) -> Option<(i64, i32)> {
+    let before = local_offset_minutes(start)?;
+    let after = local_offset_minutes(end)?;
+    if before == after {
+        return None;
+    }
+    let (mut low, mut high) = (start, end);
+    while high - low > 1 {
+        let middle = low + (high - low) / 2;
+        if local_offset_minutes(middle) == Some(before) {
+            low = middle;
+        } else {
+            high = middle;
+        }
+    }
+    Some((high, after - before))
+}
+
+fn show_detail(window: &AppWindow, entry: &DayEntry, span: &TimelineSnapshot) {
+    let (start, end) = (entry.entry.started_utc_ms, entry.entry.ended_utc_ms);
+    let length = end.saturating_sub(start).max(1) as f64;
+    let start_minute = Local.timestamp_millis_opt(start).single().map_or(0.0, |t| {
+        (t.hour() * 60 + t.minute()) as f32 + t.second() as f32 / 60.0
+    });
+    let span_minutes = (length / 60_000.0) as f32;
+    let (shift_at, shift_minutes) = offset_change(start, end)
+        .map_or((2.0, 0.0), |(at, minutes)| {
+            (((at - start) as f64 / length) as f32, minutes as f32)
+        });
+    let mut main_focused = 0;
+    let mut interleaved = Vec::new();
+    let mut same_screen = Vec::new();
+    let mut main = Participant::default();
+    for participant in &entry.participants {
+        let application = span
+            .applications
+            .iter()
+            .find(|application| application.identity == participant.identity);
+        // Displayed time includes focused time, as on every other page.
+        let (focused, displayed, background) = application.map_or((0, 0, 0), |a| {
+            (a.focused_ms, a.displayed_ms, a.background_ms)
+        });
+        let tint = app_icon::tint(&participant.identity);
+        let segments = application
+            .map(|a| {
+                a.segments
+                    .iter()
+                    .map(|segment| SegmentRow {
+                        offset: ((segment.started_utc_ms - start) as f64 / length).clamp(0.0, 1.0)
+                            as f32,
+                        width: ((segment.ended_utc_ms - segment.started_utc_ms) as f64 / length)
+                            .clamp(0.0, 1.0) as f32,
+                        kind: if segment.focused {
+                            2
+                        } else if segment.displayed {
+                            1
+                        } else {
+                            0
+                        },
+                        tint,
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        let lookup = segment_lookup(&segments);
+        let row = Participant {
+            name: app_icon::display_name(&participant.identity, &participant.name).into(),
+            icon: app_icon::for_identity(&participant.identity),
+            tint,
+            role: match participant.role {
+                ParticipantRole::Main => "主应用",
+                ParticipantRole::Interleaved => "穿插",
+                ParticipantRole::SameScreen => "同屏",
+            }
+            .into(),
+            focused: format_duration(focused).into(),
+            visible: format_duration(displayed).into(),
+            background: format_duration(background).into(),
+            segments: ModelRc::new(VecModel::from(segments)),
+            lookup: ModelRc::new(VecModel::from(lookup)),
+            start_minute,
+            span_minutes,
+            shift_at,
+            shift_minutes,
+        };
+        // The row's own application leads the pane; the lists hold the others.
+        match participant.role {
+            ParticipantRole::Main => {
+                main_focused = focused;
+                main = row;
+            }
+            ParticipantRole::Interleaved => interleaved.push(row),
+            ParticipantRole::SameScreen => same_screen.push(row),
+        }
+    }
+    let others = interleaved.len() + same_screen.len();
+    let mut note = if others == 0 {
+        "期间没有切换到其他应用".to_owned()
+    } else {
+        format!("期间还用到 {others} 个应用")
+    };
+    // Short absences join neighbouring stretches into one activity; say how
+    // much of it had no focus rather than counting it as used.
+    let unfocused = entry.entry.duration_ms.saturating_sub(main_focused);
+    if unfocused >= 60_000 {
+        note.push_str(&format!(
+            "，其中 {} 没有聚焦记录",
+            format_duration(unfocused)
+        ));
+    }
+    window.set_detail_note(note.into());
+    window.set_detail_main(main);
+    window.set_detail_interleaved(ModelRc::new(VecModel::from(interleaved)));
+    window.set_detail_same_screen(ModelRc::new(VecModel::from(same_screen)));
     window.set_detail_keyboard(grouped_count(span.keyboard_count).into());
     window.set_detail_mouse(
         grouped_count(
@@ -806,8 +958,7 @@ fn show_detail(
         )
         .into(),
     );
-    window.set_detail_open(true);
-    Ok(())
+    window.set_detail_loading(false);
 }
 
 /// Steps along an activity's bar for finding the segment under the pointer.
@@ -840,6 +991,18 @@ fn focus_range(
     let (start, end) = (entry.entry.started_utc_ms, entry.entry.ended_utc_ms);
     if let Some((day_start, day_end)) = timeline_view::selected_day_bounds(start, 0) {
         let mut state = ui_state.borrow_mut();
+        let identity = entry.entry.identity.as_deref().unwrap_or_default();
+        let label = format!(
+            "{} {}–{}",
+            app_icon::display_name(identity, &entry.entry.name),
+            clock(start),
+            clock(end)
+        );
+        let saved = state
+            .origin
+            .take()
+            .unwrap_or_else(|| RangeOrigin::of(&state));
+        state.origin = Some(RangeOrigin { label, ..saved });
         state.horizon_started_utc_ms = day_start;
         state.horizon_ended_utc_ms = day_end;
         state.calendar_day = Some(day_start);
@@ -906,26 +1069,79 @@ pub fn install(
         let storage = Arc::clone(&storage);
         let state = Rc::clone(&state);
         window.on_history_select(move |key| {
+            if let Some(window) = weak.upgrade() {
+                select(&window, &storage, &state, &key);
+            }
+        });
+    }
+    {
+        let weak = window.as_weak();
+        let state = Rc::clone(&state);
+        window.on_history_detail_ready(move || {
             let Some(window) = weak.upgrade() else {
                 return;
             };
             let mut s = state.borrow_mut();
+            let Some((key, receiver)) = s.detail_job.take() else {
+                return;
+            };
+            let result = match receiver.try_recv() {
+                Ok(result) => result,
+                Err(mpsc::TryRecvError::Empty) => {
+                    s.detail_job = Some((key, receiver));
+                    return;
+                }
+                Err(mpsc::TryRecvError::Disconnected) => return,
+            };
+            if s.selected.as_deref() != Some(key.as_str()) {
+                return;
+            }
             let Some(entry) = find(&s, &key) else {
                 return;
             };
-            if let Err(error) = show_detail(&window, &storage, entry) {
-                window.set_action_status(format!("读取详情失败：{error}").into());
-                return;
+            match result {
+                Ok(span) => show_detail(&window, &entry, &span),
+                Err(error) => {
+                    window.set_detail_loading(false);
+                    window.set_detail_note(format!("读取各应用的时间失败：{error}").into());
+                }
             }
-            s.selected = Some(key.to_string());
-            window.set_history_selected(key);
+        });
+    }
+    {
+        let weak = window.as_weak();
+        let storage = Arc::clone(&storage);
+        let state = Rc::clone(&state);
+        window.on_history_step(move |delta| {
+            let Some(window) = weak.upgrade() else {
+                return;
+            };
+            let Some((key, top, height)) = paging::step(&state.borrow(), delta) else {
+                return;
+            };
+            select(&window, &storage, &state, &key);
+            // Keep the row in view, below the pinned day header.
+            let scroll = -window.get_history_scroll();
+            let visible = window.get_history_visible_height();
+            let next = if top - DAY_HEIGHT < scroll {
+                top - DAY_HEIGHT
+            } else if top + height > scroll + visible {
+                top + height - visible + 8.0
+            } else {
+                scroll
+            };
+            if next != scroll {
+                window.set_history_scroll(-next.max(0.0));
+            }
         });
     }
     {
         let weak = window.as_weak();
         let state = Rc::clone(&state);
         window.on_history_close(move || {
-            state.borrow_mut().selected = None;
+            let mut s = state.borrow_mut();
+            s.selected = None;
+            s.detail_job = None;
             if let Some(window) = weak.upgrade() {
                 window.set_detail_open(false);
                 window.set_history_selected(SharedString::new());
@@ -958,18 +1174,17 @@ pub fn install(
             paging::jump(&window, &storage, &state, offset as i32);
         });
     }
-    // Actions from the detail pane act on the selected entry's span.
+    // Actions on an activity, from its row or the detail pane, act on its span.
     {
         let weak = window.as_weak();
         let storage = Arc::clone(&storage);
         let state = Rc::clone(&state);
         let ui_state = Rc::clone(&ui_state);
-        window.on_detail_action(move |action| {
+        window.on_detail_action(move |key, action| {
             let Some(window) = weak.upgrade() else {
                 return;
             };
-            let s = state.borrow();
-            let Some(entry) = s.selected.as_deref().and_then(|key| find(&s, key)) else {
+            let Some(entry) = find(&state.borrow(), &key) else {
                 return;
             };
             if action == 2 {
@@ -977,7 +1192,7 @@ pub fn install(
                 ui_state.borrow_mut().selected_identity = entry.entry.identity.clone();
                 return;
             }
-            focus_range(&window, &storage, &ui_state, entry);
+            focus_range(&window, &storage, &ui_state, &entry);
             match action {
                 0 => window.invoke_navigate(2),
                 1 => {
