@@ -73,7 +73,10 @@ component AppStack inherits Rectangle {
     in property <int> more;
     out property <bool> expanded: hover.has-hover && root.stack.length > 0;
     callback clicked;
-    width: 44px; height: 44px;
+    // Widens with the opened stack: pointer input stays within this bounds,
+    // so moving along the stack keeps it open.
+    width: root.expanded ? max(44px, fan.preferred-width - 4px) : 44px;
+    height: 44px;
 
     // Cards beneath, drawn first so the main card covers them.
     for app[index] in root.stack : Rectangle {
@@ -136,12 +139,7 @@ component AppStack inherits Rectangle {
             if root.more > 0 : Text { text: "+" + root.more; color: Theme.ink-3; font-size: 12px; font-weight: 600; vertical-alignment: center; }
         }
     }
-    // Covers the opened stack too, so moving along it keeps it open.
-    hover := TouchArea {
-        width: root.expanded ? max(44px, fan.preferred-width - 4px) : 44px;
-        mouse-cursor: pointer;
-        clicked => { root.clicked(); }
-    }
+    hover := TouchArea { mouse-cursor: pointer; clicked => { root.clicked(); } }
 }
 
 // Today without any activity yet: what recording is doing, and what to do.

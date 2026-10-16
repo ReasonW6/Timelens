@@ -18,6 +18,8 @@ pub const FILE: &str = "pause-until.txt";
 /// Minutes passed to `pause-for` that mean "until tomorrow" and "until resumed".
 const UNTIL_TOMORROW: i32 = -2;
 const UNTIL_RESUMED: i32 = -1;
+/// How long to wait before trying an automatic resume again after it failed.
+const RETRY_MS: i64 = 30_000;
 
 fn load(control: &Path) -> Option<i64> {
     fs::read_to_string(control.join(FILE))
@@ -113,9 +115,10 @@ pub fn install(window: &AppWindow, control: PathBuf) -> Timer {
                 save(&control, None);
                 String::new()
             }
-            Some(end) if end <= now && !state.get_busy() => {
-                until.set(None);
-                save(&control, None);
+            // The deadline is kept until the resume is seen to succeed: a
+            // failed update is rolled back to paused and retried a little later.
+            Some(end) if end <= now && state.get_paused() && !state.get_busy() => {
+                until.set(Some(now + RETRY_MS));
                 state.set_paused(false);
                 state.invoke_action(0);
                 String::new()

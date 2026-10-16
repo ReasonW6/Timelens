@@ -51,8 +51,8 @@ use timelens_ipc::{
     trust_peer_directory,
 };
 use timelens_storage::{
-    ExportFormat, LocalReport, RetentionPolicy, SnapshotMissingReason, SnapshotPolicy,
-    SnapshotSlot, Storage, TimelineApplication, TimelineSnapshot,
+    ExportFormat, LocalReport, RetentionPolicy, SnapshotDisplay, SnapshotMissingReason,
+    SnapshotPolicy, SnapshotSlot, Storage, TimelineApplication, TimelineSnapshot,
 };
 
 const COLLECTOR_NAMES: &[&str] = &["timelens-collector.exe", "Timelens.Collector.exe"];
@@ -2054,9 +2054,12 @@ fn refresh_snapshot_panel(
         spans.push((slot.slot_started_utc_ms, slot.slot_started_utc_ms, 1));
         slots.push(slot);
     }
+    // A display that only has omissions still gets a number; an omission for
+    // the whole session belongs to none.
+    let session = SnapshotDisplay::session().key;
     let displays = slots
         .iter()
-        .filter(|slot| slot.success)
+        .filter(|slot| slot.display.key != session)
         .map(|slot| slot.display.key.as_str())
         .collect::<std::collections::BTreeSet<_>>();
     let display_numbers = displays
@@ -2143,12 +2146,17 @@ fn refresh_snapshot_panel(
             },
         })
         .collect::<Vec<_>>();
-    // A slot just captured is selected once it is listed.
+    // A slot just captured is selected once it is listed, preferring a display
+    // that was saved over one omitted at the same time.
     let pending = snapshot_state.borrow_mut().pending_select.take();
     if let Some(slot_ms) = pending {
-        match slots
+        let captured = slots
             .iter()
-            .find(|slot| slot.slot_started_utc_ms == slot_ms)
+            .filter(|slot| slot.slot_started_utc_ms == slot_ms);
+        match captured
+            .clone()
+            .find(|slot| slot.success)
+            .or_else(|| captured.clone().next())
         {
             Some(slot) => snapshot_state.borrow_mut().selected_slot_id = Some(slot.id),
             None => snapshot_state.borrow_mut().pending_select = Some(slot_ms),
