@@ -1,5 +1,6 @@
-use crate::{AppWindow, ButtonHeat, CollectionState, KeyCell, UiState};
+use crate::{AppWindow, ButtonHeat, CollectionState, KeyCell, SystemRow, UiState};
 use anyhow::{Context, Result, anyhow};
+use chrono::TimeZone;
 use slint::{ComponentHandle, ModelRc, Timer, TimerMode, VecModel};
 use std::{
     cell::RefCell,
@@ -22,16 +23,50 @@ fn strings(values: impl IntoIterator<Item = String>) -> ModelRc<slint::SharedStr
     ))
     .into()
 }
+/// Where an application lives, to tell apart two with the same name.
+fn origin(identity: &str) -> String {
+    let Some(path) = identity.strip_prefix("path:") else {
+        return identity
+            .split_once(':')
+            .map_or(identity, |(_, rest)| rest)
+            .to_owned();
+    };
+    std::path::Path::new(path)
+        .parent()
+        .and_then(|folder| folder.file_name())
+        .map_or_else(
+            || path.to_owned(),
+            |folder| folder.to_string_lossy().into_owned(),
+        )
+}
 fn refresh(w: &AppWindow, d: &mut Data, s: &Storage) -> Result<()> {
     let g = w.global::<CollectionState>();
-    d.apps = s
+    let apps = s
         .known_applications()?
         .into_iter()
         .map(|(identity, name)| {
             let name = crate::app_icon::display_name(&identity, &name);
             (identity, name)
         })
+        .collect::<Vec<_>>();
+    // Listed by name; a name shared by several gets their folders added.
+    d.apps = apps
+        .iter()
+        .map(|(identity, name)| {
+            let shared = apps.iter().filter(|(_, other)| other == name).count() > 1;
+            let shown = if shared {
+                format!("{name}（{}）", origin(identity))
+            } else {
+                name.clone()
+            };
+            (identity.clone(), shown)
+        })
         .collect();
+    d.apps.sort_by(|a, b| {
+        a.1.to_lowercase()
+            .cmp(&b.1.to_lowercase())
+            .then_with(|| a.0.cmp(&b.0))
+    });
     d.links = s.merge_links()?;
     g.set_apps(strings(d.apps.iter().map(|(_, name)| name.clone())));
     g.set_links(strings(d.links.iter().map(|(a, b)| {
@@ -55,7 +90,7 @@ fn refresh(w: &AppWindow, d: &mut Data, s: &Storage) -> Result<()> {
     };
     g.set_rules(
         format!(
-            "活动名单：{}\n输入名单：{}\n截图名单：{}",
+            "活动名单：{}\n输入名单：{}\n快照名单：{}",
             names(&p.activity),
             names(&p.input),
             names(&s.snapshot_exclusions()?.into_iter().collect())
@@ -65,18 +100,43 @@ fn refresh(w: &AppWindow, d: &mut Data, s: &Storage) -> Result<()> {
     Ok(())
 }
 fn select(w: &AppWindow, d: &Data, s: &Storage, index: i32) -> Result<()> {
-    let (id, _) = d.apps.get(index as usize).context("请选择应用")?;
+    let (id, name) = d.apps.get(index as usize).context("请选择应用")?;
     let p = s.collection_policy()?;
     let g = w.global::<CollectionState>();
     g.set_app_index(index);
+    g.set_app_name(name.into());
     g.set_activity(p.activity.contains(id));
     g.set_input(p.input.contains(id));
     g.set_snapshots(s.snapshot_exclusions()?.contains(id));
     let (windows, reports, ai) = s.application_deletion_impact(id)?;
-    g.set_impact(format!("此组有 {windows} 个窗口实例、{reports} 份本地报告和 {ai} 个引用它的 AI 任务。删除后不可撤销。" ).into());
+    g.set_impact(
+        format!("将删除「{name}」的 {windows} 个窗口实例、{reports} 份本地报告和 {ai} 个引用它的 AI 任务。")
+            .into(),
+    );
     g.set_delete_confirmed(false);
     g.set_merge_confirmed(false);
+    g.set_merge_index(-1);
+    g.set_merge_preview("".into());
     Ok(())
+}
+/// The rules two applications share once merged: each list takes both.
+fn merge_preview(d: &Data, s: &Storage, first: i32, second: i32) -> Result<String> {
+    let (a, a_name) = d.apps.get(first as usize).context("请选择应用")?;
+    let (b, b_name) = d.apps.get(second as usize).context("请选择另一个应用")?;
+    let p = s.collection_policy()?;
+    let shots = s.snapshot_exclusions()?;
+    let rule = |label: &str, has: &dyn Fn(&str) -> bool| match (has(a), has(b)) {
+        (false, false) => format!("{label} ✗"),
+        (true, true) => format!("{label} ✓"),
+        (true, false) => format!("{label} ✓（来自「{a_name}」）"),
+        (false, true) => format!("{label} ✓（来自「{b_name}」）"),
+    };
+    Ok(format!(
+        "合并后共用规则：{} · {} · {}。",
+        rule("不记录活动", &|id| p.activity.contains(id)),
+        rule("不记录输入", &|id| p.input.contains(id)),
+        rule("不拍摄快照", &|id| shots.iter().any(|shot| shot == id)),
+    ))
 }
 pub fn install(
     w: &AppWindow,
@@ -84,10 +144,28 @@ pub fn install(
     timeline: Rc<RefCell<UiState>>,
 ) -> Result<Timer> {
     let data = Rc::new(RefCell::new(Data::default()));
-    let (sender, receiver) = mpsc::channel::<Result<Option<String>, String>>();
-    w.global::<CollectionState>()
-        .set_date(chrono::Local::now().format("%Y-%m-%d").to_string().into());
+    let (sender, receiver) = mpsc::channel::<(i32, String, Result<Option<String>, String>)>();
     refresh(w, &mut data.borrow_mut(), &*lock(&storage)?)?;
+    {
+        let weak = w.as_weak();
+        let data = data.clone();
+        let storage = storage.clone();
+        w.global::<CollectionState>().on_merge_chosen(move |other| {
+            let Some(w) = weak.upgrade() else {
+                return;
+            };
+            let g = w.global::<CollectionState>();
+            let first = g.get_app_index();
+            let preview = if other == first {
+                "不能和自己合并，请选择另一个应用。".to_owned()
+            } else {
+                lock(&storage)
+                    .and_then(|s| merge_preview(&data.borrow(), &s, first, other))
+                    .unwrap_or_else(|e| format!("读取规则失败：{e}"))
+            };
+            g.set_merge_preview(preview.into());
+        });
+    }
     {
         let weak = w.as_weak();
         let data = data.clone();
@@ -112,7 +190,7 @@ pub fn install(
                 })();
                 if let Err(e) = result {
                     w.global::<CollectionState>()
-                        .set_status(e.to_string().into());
+                        .set_status(format!("读取统计失败：{e}").into());
                 }
             }
         });
@@ -126,7 +204,7 @@ pub fn install(
                 && let Err(e) = lock(&storage).and_then(|s| select(&w, &data.borrow(), &s, index))
             {
                 w.global::<CollectionState>()
-                    .set_status(e.to_string().into());
+                    .set_status(format!("读取统计失败：{e}").into());
             }
         });
     }
@@ -144,7 +222,7 @@ pub fn install(
         if action == 7 {
             let result = lock(&worker_storage).and_then(|s| statistics(&w, &s, &timeline.borrow()));
             if let Err(e) = result {
-                g.set_status(e.to_string().into());
+                g.set_status(format!("读取统计失败：{e}").into());
             }
             return;
         }
@@ -158,6 +236,7 @@ pub fn install(
             .get(g.get_merge_index() as usize)
             .map(|(id, _)| id.clone());
         let link = d.links.get(g.get_link_index() as usize).cloned();
+        let name = g.get_app_name().to_string();
         drop(d);
         let flags = (
             g.get_paused(),
@@ -245,7 +324,7 @@ pub fn install(
                     Ok(None)
                 })
             })();
-            let _ = sender.send(result.map_err(|e| e.to_string()));
+            let _ = sender.send((action, name, result.map_err(|e| e.to_string())));
         });
     });
     let weak = w.as_weak();
@@ -255,10 +334,48 @@ pub fn install(
             return;
         };
         let g = w.global::<CollectionState>();
-        while let Ok(result) = receiver.try_recv() {
+        while let Ok((action, name, result)) = receiver.try_recv() {
             g.set_busy(false);
+            if action != 1
+                && let Ok(s) = storage.try_lock()
+            {
+                // Switches show what is saved, not what was asked for, and a
+                // deleted application gives its place to the next one.
+                let mut d = data.borrow_mut();
+                if refresh(&w, &mut d, &s).is_ok() && !d.apps.is_empty() {
+                    let index = g.get_app_index().clamp(0, d.apps.len() as i32 - 1);
+                    if g.get_app_index() >= 0 || action == 5 {
+                        let _ = select(&w, &d, &s, index);
+                    }
+                }
+            }
             match result {
-                Err(e) => g.set_status(e.into()),
+                Err(e) => {
+                    let what = if action == 0 {
+                        "切换记录状态失败"
+                    } else {
+                        "保存失败"
+                    };
+                    g.set_status(format!("{what}：{e}").into());
+                }
+                Ok(None) if action == 2 => {
+                    g.set_status(
+                        format!("已更新「{name}」的规则，立即生效，不影响已有记录").into(),
+                    );
+                }
+                Ok(None) if action == 3 => {
+                    g.set_status(format!("已合并「{name}」，原始记录不改写").into())
+                }
+                Ok(None) if action == 4 => g.set_status("已解除合并，恢复合并前的规则".into()),
+                Ok(None) if action == 5 => g.set_status(format!("已删除「{name}」的历史").into()),
+                Ok(None) if action == 0 => g.set_status(
+                    if g.get_paused() {
+                        "已暂停记录"
+                    } else {
+                        "已继续记录，从现在开始记录"
+                    }
+                    .into(),
+                ),
                 Ok(added) => {
                     if let Ok(s) = storage.try_lock() {
                         let mut d = data.borrow_mut();
@@ -274,12 +391,6 @@ pub fn install(
                             }
                             let index = d.apps.iter().position(|(i, _)| i == &id).unwrap_or(0);
                             let _ = select(&w, &d, &s, index as i32);
-                        } else {
-                            g.set_status(
-                                "已保存，采集规则在下一次检查时生效（通常不超过 1 秒）".into(),
-                            );
-                            g.set_delete_confirmed(false);
-                            g.set_merge_confirmed(false);
                         }
                     }
                 }
@@ -288,12 +399,66 @@ pub fn install(
     });
     Ok(timer)
 }
+/// The local dates a range touches, both included, and whether it covers them
+/// whole; `None` stands for all records.
+fn range_dates(range: Option<&UiState>) -> (String, String, bool) {
+    let Some(range) = range else {
+        return ("0000-01-01".into(), "9999-12-31".into(), true);
+    };
+    let date = |timestamp: i64| {
+        chrono::Local
+            .timestamp_millis_opt(timestamp)
+            .single()
+            .map(|t| t.date_naive())
+    };
+    let start = range.range_started_utc_ms;
+    let end = range.range_ended_utc_ms.max(start + 1);
+    let (Some(first), Some(last)) = (date(start), date(end - 1)) else {
+        return (String::new(), String::new(), false);
+    };
+    let midnight = |day: chrono::NaiveDate| {
+        day.and_hms_opt(0, 0, 0)
+            .and_then(|t| chrono::Local.from_local_datetime(&t).earliest())
+            .map(|t| t.timestamp_millis())
+    };
+    // Whole days run from a midnight to a midnight; today counts while it runs.
+    let whole = midnight(first) == Some(start)
+        && last.succ_opt().and_then(midnight) == Some(crate::timeline_ui::chosen_end(range));
+    (
+        first.format("%Y-%m-%d").to_string(),
+        last.format("%Y-%m-%d").to_string(),
+        whole,
+    )
+}
+
+fn date_label(date: &str) -> String {
+    chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d")
+        .map(|d| d.format("%-m月%-d日").to_string())
+        .unwrap_or_else(|_| date.to_owned())
+}
+
 fn statistics(w: &AppWindow, s: &Storage, range: &UiState) -> Result<()> {
     let g = w.global::<CollectionState>();
-    let date = g.get_date();
-    chrono::NaiveDate::parse_from_str(&date, "%Y-%m-%d")?;
-    let frequencies: std::collections::BTreeMap<_, _> =
-        s.physical_key_frequencies(&date)?.into_iter().collect();
+    let all = w.get_stats_all();
+    let (first, last, whole) = range_dates((!all).then_some(range));
+    if first.is_empty() {
+        anyhow::bail!("所选时段不可用");
+    }
+    g.set_scope(
+        if all {
+            "全部记录".to_owned()
+        } else if first == last {
+            date_label(&first)
+        } else {
+            format!("{}–{}", date_label(&first), date_label(&last))
+        }
+        .into(),
+    );
+    g.set_partial_day(!whole);
+    let frequencies: std::collections::BTreeMap<_, _> = s
+        .physical_key_frequencies_between(&first, &last)?
+        .into_iter()
+        .collect();
     let max = KEYBOARD
         .iter()
         .filter_map(|(code, ..)| frequencies.get(code).copied())
@@ -306,7 +471,7 @@ fn statistics(w: &AppWindow, s: &Storage, range: &UiState) -> Result<()> {
             let count = frequencies.get(&code).copied().unwrap_or(0);
             KeyCell {
                 label: label.into(),
-                count: count.to_string().into(),
+                count: crate::grouped_count(count).into(),
                 strength: (count as f32 / max).sqrt(),
                 x,
                 y,
@@ -324,14 +489,15 @@ fn statistics(w: &AppWindow, s: &Storage, range: &UiState) -> Result<()> {
         "".into()
     } else {
         format!(
-            "另有 {unplaced} 次按键不在这张键盘图上，例如 Home、Delete 等编辑键或输入法切换键。"
+            "另有 {} 次按键不在这张键盘图上，例如 Home、Delete 等编辑键或输入法切换键。",
+            crate::grouped_count(unplaced)
         )
         .into()
     });
-    let [_, left, middle, right] = s.daily_input_totals(&date)?;
+    let [_, left, middle, right] = s.input_totals_between(&first, &last)?;
     let most = left.max(middle).max(right).max(1) as f32;
     let heat = |count: u64| ButtonHeat {
-        count: count.to_string().into(),
+        count: crate::grouped_count(count).into(),
         strength: (count as f32 / most).sqrt(),
     };
     g.set_mouse_left(heat(left));
@@ -339,24 +505,55 @@ fn statistics(w: &AppWindow, s: &Storage, range: &UiState) -> Result<()> {
     g.set_mouse_right(heat(right));
     g.set_keys(Rc::new(VecModel::from(keys)).into());
     let totals = s.permanent_input_totals()?;
-    g.set_totals(
-        format!(
-            "永久累计 · 键盘 {} · 左键 {} · 中键 {} · 右键 {}",
-            totals[0], totals[1], totals[2], totals[3]
-        )
-        .into(),
-    );
-    let totals = s.system_totals(range.range_started_utc_ms, range.range_ended_utc_ms)?;
-    g.set_system(if totals.is_empty() {
-        "此范围没有系统区间记录".into()
-    } else {
-        totals
+    let [keyboard, left, middle, right] = totals.map(crate::grouped_count);
+    g.set_totals(format!("键盘 {keyboard} · 左键 {left} · 中键 {middle} · 右键 {right}").into());
+    // All records start with the first one, not at the query's lower bound.
+    let now = crate::unix_time_ms();
+    let (start, end) = if all {
+        // System states may start before the first application window.
+        let first = [s.earliest_activity_utc_ms()?, s.earliest_system_utc_ms()?]
             .into_iter()
-            .map(|(kind, n)| format!("{}：{}", system_label(&kind), crate::format_duration(n)))
+            .flatten()
+            .min();
+        (first.unwrap_or(now), now)
+    } else {
+        (range.range_started_utc_ms, range.range_ended_utc_ms)
+    };
+    let length = end.saturating_sub(start).max(1) as f64;
+    let mut totals = s
+        .system_totals(start, end)?
+        .into_iter()
+        .filter(|(_, ms)| *ms > 0)
+        .collect::<Vec<_>>();
+    totals.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    let rows = totals
+        .into_iter()
+        .map(|(kind, ms)| {
+            let ratio = (ms as f64 / length).clamp(0.0, 1.0);
+            SystemRow {
+                label: system_label(&kind).into(),
+                duration: crate::format_duration(ms).into(),
+                share: if ratio > 0.0 && ratio < 0.001 {
+                    "<0.1%".into()
+                } else {
+                    format!("{:.1}%", ratio * 100.0).into()
+                },
+                ratio: ratio as f32,
+            }
+        })
+        .collect::<Vec<_>>();
+    g.set_system(Rc::new(VecModel::from(rows)).into());
+    // Instants take no time; they are counted instead.
+    g.set_system_marks(
+        s.system_marks(start, end)?
+            .into_iter()
+            .map(|(kind, count)| {
+                format!("{} {} 次", system_label(&kind), crate::grouped_count(count))
+            })
             .collect::<Vec<_>>()
-            .join("\n")
-            .into()
-    });
+            .join(" · ")
+            .into(),
+    );
     Ok(())
 }
 fn system_label(kind: &str) -> &str {
@@ -368,7 +565,7 @@ fn system_label(kind: &str) -> &str {
         "privacy_exclusion" => "活动排除",
         "session_disconnected" => "会话断开",
         "secure_desktop" => "安全桌面",
-        "clock_discontinuity" => "时钟不连续",
+        "clock_discontinuity" => "系统时间跳变",
         "system_end" => "系统正常结束",
         _ => kind,
     }
@@ -475,7 +672,45 @@ const KEYBOARD: &[(u32, &str, f32, f32, f32, f32)] = &[
 
 #[cfg(test)]
 mod tests {
-    use super::KEYBOARD;
+    use super::{KEYBOARD, range_dates};
+    use crate::UiState;
+    use chrono::TimeZone;
+
+    #[test]
+    fn range_dates_cover_whole_days_and_flag_parts_of_days() {
+        let at = |day: u32, hour: u32| {
+            chrono::Local
+                .with_ymd_and_hms(2026, 9, day, hour, 0, 0)
+                .earliest()
+                .unwrap()
+                .timestamp_millis()
+        };
+        let mut range = UiState::recent_hours(24);
+        range.horizon_started_utc_ms = at(5, 0);
+        range.horizon_ended_utc_ms = at(6, 0);
+        range.range_started_utc_ms = at(5, 0);
+        // A day still running ends at the clock, yet counts whole.
+        range.range_ended_utc_ms = at(5, 10);
+        assert_eq!(
+            range_dates(Some(&range)),
+            ("2026-09-05".into(), "2026-09-05".into(), true)
+        );
+        // Part of a past day picked from the timeline or a summary.
+        range.follow_now = false;
+        assert!(!range_dates(Some(&range)).2);
+        range.range_started_utc_ms = at(5, 9);
+        range.horizon_ended_utc_ms = at(5, 18);
+        range.range_ended_utc_ms = at(5, 18);
+        assert!(!range_dates(Some(&range)).2);
+        range.range_started_utc_ms = at(1, 12);
+        range.horizon_ended_utc_ms = at(8, 12);
+        range.range_ended_utc_ms = at(8, 12);
+        assert_eq!(
+            range_dates(Some(&range)),
+            ("2026-09-01".into(), "2026-09-08".into(), false)
+        );
+        assert!(range_dates(None).2);
+    }
 
     #[test]
     fn keyboard_has_93_distinct_keys_that_do_not_overlap() {

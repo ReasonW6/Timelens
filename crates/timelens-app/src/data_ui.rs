@@ -1,5 +1,6 @@
 use crate::{AppWindow, DataState, SnapshotUiState, UiState};
 use anyhow::{Context, Result, anyhow, bail};
+use chrono::TimeZone;
 use slint::{ComponentHandle, Timer, TimerMode};
 use std::{
     cell::RefCell,
@@ -19,35 +20,53 @@ fn lock(s: &Arc<Mutex<Storage>>) -> Result<std::sync::MutexGuard<'_, Storage>> {
     s.lock().map_err(|_| anyhow!("存储锁不可用"))
 }
 pub fn choose_file(save: bool, extension: &str) -> Result<Option<PathBuf>> {
+    choose_named(save, extension, None)
+}
+
+/// Like `choose_file`, offering `name` as the file name when saving.
+pub fn choose_named(save: bool, extension: &str, name: Option<&str>) -> Result<Option<PathBuf>> {
     use windows_sys::Win32::UI::Controls::Dialogs::*;
     let mut path = vec![0_u16; 32768];
+    let (kind, open_title, save_title, default_name) = match extension {
+        "exe" => ("应用程序", "选择要设置规则的应用程序", "", ""),
+        "zip" => (
+            "Timelens 备份",
+            "选择 Timelens 备份",
+            "保存备份",
+            "Timelens 备份",
+        ),
+        "webp" => ("WebP 图片", "选择图片", "导出快照", "Timelens 快照"),
+        "json" => ("JSON 文件", "选择文件", "导出报告", "Timelens 报告"),
+        "csv" => ("CSV 表格", "选择文件", "导出报告", "Timelens 报告"),
+        _ => (
+            "Timelens 文件",
+            "选择文件",
+            "导出 Timelens 文件",
+            "Timelens",
+        ),
+    };
     if save {
-        let name = format!(
-            "Timelens-{}.{}",
-            chrono::Local::now().format("%Y%m%d-%H%M%S"),
-            extension
+        let name = name.map_or_else(
+            || {
+                format!(
+                    "{default_name} {}",
+                    chrono::Local::now().format("%Y-%m-%d %H-%M")
+                )
+            },
+            str::to_owned,
         );
-        for (index, c) in name.encode_utf16().enumerate() {
+        for (index, c) in format!("{name}.{extension}").encode_utf16().enumerate() {
             path[index] = c;
         }
     }
-    let (kind, open_title) = if extension == "exe" {
-        ("应用程序", "选择要设置规则的应用程序")
-    } else {
-        ("Timelens 文件", "选择 Timelens 备份")
-    };
     let filter: Vec<u16> = format!("{kind} (*.{extension})\0*.{extension}\0\0")
         .encode_utf16()
         .collect();
     let ext: Vec<u16> = extension.encode_utf16().chain(Some(0)).collect();
-    let title: Vec<u16> = if save {
-        "导出 Timelens 文件"
-    } else {
-        open_title
-    }
-    .encode_utf16()
-    .chain(Some(0))
-    .collect();
+    let title: Vec<u16> = if save { save_title } else { open_title }
+        .encode_utf16()
+        .chain(Some(0))
+        .collect();
     let mut dialog = OPENFILENAMEW {
         lStructSize: std::mem::size_of::<OPENFILENAMEW>() as u32,
         lpstrFile: path.as_mut_ptr(),
@@ -78,9 +97,17 @@ pub fn choose_file(save: bool, extension: &str) -> Result<Option<PathBuf>> {
     let chosen = PathBuf::from(String::from_utf16(
         &path[..path.iter().position(|c| *c == 0).unwrap_or(path.len())],
     )?);
-    // Exports never overwrite; say so before any work instead of failing after it.
+    // Exports never overwrite: a name already taken gets a number instead.
     if save && chosen.exists() {
-        bail!("目标文件已存在。Timelens 不会覆盖已有文件，请换一个文件名");
+        let stem = chosen
+            .file_stem()
+            .map(|stem| stem.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let free = (2..1000)
+            .map(|number| chosen.with_file_name(format!("{stem} ({number}).{extension}")))
+            .find(|candidate| !candidate.exists())
+            .context("同名文件太多，请换一个文件名")?;
+        return Ok(Some(free));
     }
     Ok(Some(chosen))
 }
@@ -203,6 +230,7 @@ enum Update {
     Folder(PathBuf),
     Ready(String),
     Done(String),
+    Checked(String),
     Failed(String),
     Canceled,
     Progress(f32, String),
@@ -233,7 +261,17 @@ pub fn install(
         }
         let path = PathBuf::from(g.get_archive().as_str());
         let destination = g.get_destination().to_string();
-        let password = g.get_password().to_string();
+        // Backups and restores each have their own password field.
+        let password = if action == 2 {
+            if g.get_password() != g.get_password_again() {
+                g.set_status("两次输入的备份密码不一致".into());
+                return;
+            }
+            g.get_password()
+        } else {
+            g.get_restore_password()
+        }
+        .to_string();
         let images = g.get_snapshots();
         let confirm = g.get_replace_confirmed();
         let paths = g.get_export_paths();
@@ -242,6 +280,22 @@ pub fn install(
             (t.range_started_utc_ms, t.range_ended_utc_ms)
         };
         let slot = snapshots.borrow().selected_slot_id;
+        // An exported snapshot is named after when it was taken.
+        let slot_name = snapshots
+            .borrow()
+            .slots
+            .iter()
+            .find(|candidate| Some(candidate.id) == slot)
+            .and_then(|candidate| {
+                chrono::Local
+                    .timestamp_millis_opt(
+                        candidate
+                            .captured_at_utc_ms
+                            .unwrap_or(candidate.slot_started_utc_ms),
+                    )
+                    .single()
+            })
+            .map(|time| format!("Timelens 快照 {}", time.format("%Y-%m-%d %H-%M")));
         if action == 10 {
             let result: Result<()> = (|| {
                 use std::os::windows::process::CommandExt;
@@ -271,10 +325,8 @@ pub fn install(
         }
         std::thread::spawn(move || {
             let result: Result<Update> = (|| {
-                if action == 0 || action == 1 {
-                    return Ok(
-                        choose_file(action == 0, "zip")?.map_or(Update::Canceled, Update::Path)
-                    );
+                if action == 1 {
+                    return Ok(choose_file(false, "zip")?.map_or(Update::Canceled, Update::Path));
                 }
                 if action == 11 {
                     return Ok(choose_folder()?.map_or(Update::Canceled, Update::Folder));
@@ -285,20 +337,39 @@ pub fn install(
                     Some(password.as_str())
                 };
                 match action {
-                    2 => crate::snapshot::run_heavy_task(|| {
-                        let info = lock(&storage)?.export_backup(
-                            &path,
-                            BackupOptions {
-                                include_snapshots: images,
-                                password,
-                            },
-                        )?;
-                        Ok(Update::Done(format!(
-                            "已导出 {} 个文件到 {}",
-                            info.files.len(),
-                            path.display()
-                        )))
-                    }),
+                    2 => {
+                        let Some(path) = choose_file(true, "zip")? else {
+                            return Ok(Update::Canceled);
+                        };
+                        crate::snapshot::run_heavy_task(|| {
+                            let parent = {
+                                let s = lock(&storage)?;
+                                s.export_backup(
+                                    &path,
+                                    BackupOptions {
+                                        include_snapshots: images,
+                                        password,
+                                    },
+                                )?;
+                                s.data_directory()
+                                    .parent()
+                                    .context("数据父目录不可用")?
+                                    .to_path_buf()
+                            };
+                            // Read the backup back, as a restore would, before
+                            // calling it done; a typo in the password shows now.
+                            let info = Storage::prepare_restore(&path, password, &parent)
+                                .context("备份已写出，但回读校验没有通过")?
+                                .info;
+                            let bytes = fs::metadata(&path).map_or(0, |m| m.len());
+                            Ok(Update::Done(format!(
+                                "备份已创建并通过校验 · {} 个文件 · {}，已导出到 {}",
+                                info.files.len(),
+                                crate::format_bytes(bytes),
+                                path.display()
+                            )))
+                        })
+                    }
                     3 => crate::snapshot::run_heavy_task(|| {
                         let parent = lock(&storage)?
                             .data_directory()
@@ -306,10 +377,15 @@ pub fn install(
                             .context("数据父目录不可用")?
                             .to_path_buf();
                         let prepared = Storage::prepare_restore(&path, password, &parent)?;
+                        let created = chrono::Local
+                            .timestamp_millis_opt(prepared.info.created_utc_ms)
+                            .single()
+                            .map_or_else(
+                                || "时间未知".to_owned(),
+                                |t| t.format("%Y-%m-%d %H:%M").to_string(),
+                            );
                         let info = format!(
-                            "校验通过 · 格式 {} · 数据结构 {} · {} 个文件 · {}。\n来源：{}",
-                            prepared.info.format_version,
-                            prepared.info.schema_version,
+                            "校验通过 · 备份创建于 {created} · {} 个文件 · {}。\n来源：{}",
                             prepared.info.files.len(),
                             if prepared.info.includes_snapshots {
                                 "包含快照"
@@ -366,7 +442,7 @@ pub fn install(
                     }
                     7 => {
                         let id = slot.context("请先在快照面板选择一张可用图片")?;
-                        let Some(path) = choose_file(true, "webp")? else {
+                        let Some(path) = choose_named(true, "webp", slot_name.as_deref())? else {
                             return Ok(Update::Canceled);
                         };
                         crate::snapshot::run_heavy_task(|| {
@@ -382,7 +458,10 @@ pub fn install(
                     }
                     8 => crate::snapshot::run_heavy_task(|| {
                         lock(&storage)?.verify_integrity()?;
-                        Ok(Update::Done("完整性与外键检查通过".into()))
+                        Ok(Update::Checked(format!(
+                            "上次检查：{} · 通过",
+                            chrono::Local::now().format("%H:%M")
+                        )))
                     }),
                     9 => {
                         let moved = (|| {
@@ -470,6 +549,12 @@ pub fn install(
                     g.set_archive(path.to_string_lossy().into_owned().into());
                     g.set_restore_ready(false);
                     g.set_restore_info("".into());
+                    // A chosen backup is checked straight away.
+                    g.invoke_action(3);
+                }
+                Update::Checked(message) => {
+                    g.set_integrity(message.into());
+                    g.set_status("完整性与外键检查通过".into());
                 }
                 Update::Ready(info) => {
                     g.set_restore_info(info.into());
@@ -485,6 +570,8 @@ pub fn install(
                     }
                     g.set_restore_ready(false);
                     g.set_password("".into());
+                    g.set_password_again("".into());
+                    g.set_sensitive_confirmed(false);
                 }
                 Update::Failed(message) => {
                     g.set_status(format!("操作失败：{message}").into());

@@ -15,7 +15,11 @@ fn settings(window: &AppWindow, tab: i32) {
     window.global::<AiState>().set_open(tab == 4);
     match tab {
         1 => window.invoke_snapshot_opened(),
-        2 => window.global::<CollectionState>().invoke_opened(),
+        2 => {
+            // As the settings do: the rules page, not the key statistics.
+            window.global::<CollectionState>().set_page(0);
+            window.global::<CollectionState>().invoke_opened();
+        }
         4 => window.global::<AiState>().invoke_opened(),
         _ => {}
     }
@@ -57,12 +61,38 @@ const STEPS: &[Step] = &[
         w.set_app_detail_open(false);
         w.invoke_navigate(2);
     }),
+    ("05a-snapshots-wide-list", |w| {
+        w.set_snapshot_list_width(760.0);
+        w.invoke_snapshot_step(-1, 1);
+    }),
+    ("05b-snapshot-viewer", |w| {
+        w.set_snapshot_list_width(432.0);
+        w.set_snapshot_viewer_open(true);
+    }),
+    ("05c-stats-keys", |w| {
+        w.set_snapshot_viewer_open(false);
+        w.set_stats_tab(1);
+        w.invoke_navigate(3);
+        w.global::<CollectionState>().set_page(1);
+        w.global::<CollectionState>().invoke_action(7);
+    }),
     ("06-stats", |w| {
         w.set_stats_tab(2);
         w.invoke_navigate(3);
         w.invoke_report_generate();
     }),
     ("07-ai", |w| w.invoke_navigate(4)),
+    ("07a-ai-reader", |w| {
+        let ai = w.global::<AiState>();
+        if ai.get_history().row_count() > 0 {
+            ai.invoke_choose_history(0);
+        }
+    }),
+    ("07b-ai-snapshots", |w| {
+        let ai = w.global::<AiState>();
+        ai.invoke_list_images();
+        ai.set_page(6);
+    }),
     ("08-settings-privacy", |w| settings(w, 0)),
     ("09-settings-snapshots", |w| settings(w, 1)),
     ("10-settings-rules", |w| settings(w, 2)),
@@ -84,6 +114,27 @@ const STEPS: &[Step] = &[
         );
         data.set_move_phase(3);
     }),
+    ("16-dark-timeline", |w| {
+        w.global::<DataState>().set_move_phase(0);
+        w.set_settings_open(false);
+        w.invoke_theme_mode_selected(2);
+        w.invoke_navigate(0);
+        select_activity(w);
+    }),
+    ("17-dark-apps", |w| {
+        w.invoke_history_close();
+        w.set_stats_tab(0);
+        w.invoke_navigate(3);
+    }),
+    ("18-dark-keys", |w| {
+        w.set_stats_tab(1);
+        w.global::<CollectionState>().set_page(1);
+        w.global::<CollectionState>().invoke_action(7);
+    }),
+    ("19-dark-snapshots", |w| w.invoke_navigate(2)),
+    ("20-dark-ai", |w| w.invoke_navigate(4)),
+    ("21-dark-settings-general", |w| settings(w, 6)),
+    ("22-dark-settings-data", |w| settings(w, 3)),
 ];
 
 pub fn install(window: &AppWindow) -> Option<Timer> {

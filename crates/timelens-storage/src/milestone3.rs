@@ -408,6 +408,16 @@ impl Storage {
         self.append_snapshot(request, &content_sha256)
     }
 
+    /// Snapshots saved and stretches without one in `start..end`.
+    pub fn count_snapshot_slots(&self, start: i64, end: i64) -> Result<(u64, u64)> {
+        Ok(self.connection.query_row(
+            "SELECT COALESCE(SUM(result = 'success'), 0), COALESCE(SUM(result != 'success'), 0)
+             FROM snapshot_slots WHERE slot_started_utc_ms >= ?1 AND slot_started_utc_ms < ?2",
+            params![start, end],
+            |row| Ok((row_u64(row, 0)?, row_u64(row, 1)?)),
+        )?)
+    }
+
     pub fn list_snapshot_slots(
         &self,
         range_started_utc_ms: i64,
@@ -777,6 +787,25 @@ impl Storage {
                  WHERE range_started_utc_ms = ?1 AND range_ended_utc_ms = ?2
                  ORDER BY generated_utc_ms DESC, report_id DESC LIMIT 1",
                 params![range_started_utc_ms, range_ended_utc_ms],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()?;
+        report_id.map(|id| self.load_local_report(id)).transpose()
+    }
+
+    /// The latest report whose range starts at `range_started_utc_ms`, for a
+    /// range such as today that still grows.
+    pub fn latest_local_report_starting(
+        &self,
+        range_started_utc_ms: i64,
+    ) -> Result<Option<LocalReport>> {
+        let report_id = self
+            .connection
+            .query_row(
+                "SELECT report_id FROM local_reports
+                 WHERE range_started_utc_ms = ?1
+                 ORDER BY generated_utc_ms DESC, report_id DESC LIMIT 1",
+                params![range_started_utc_ms],
                 |row| row.get::<_, i64>(0),
             )
             .optional()?;

@@ -110,18 +110,9 @@ pub struct CaptureSummary {
     pub missing: u32,
     pub encoded_bytes: u64,
     pub channel_range: Option<(u8, u8)>,
-}
-
-impl CaptureSummary {
-    pub fn label(self) -> String {
-        let diagnostics = self.channel_range.map_or_else(String::new, |(low, high)| {
-            format!(" · WebP {} · 像素范围 {low}–{high}", self.encoded_bytes)
-        });
-        format!(
-            "已保存 {} 张 · 缺失 {} 槽{diagnostics}",
-            self.stored, self.missing
-        )
-    }
+    /// The slot's start, and why a display went without an image.
+    pub slot_utc_ms: i64,
+    pub reason: Option<SnapshotMissingReason>,
 }
 
 struct CapturedFrame {
@@ -185,18 +176,24 @@ pub fn run_heavy_task<T>(operation: impl FnOnce() -> Result<T>) -> Result<T> {
     operation()
 }
 
-pub(crate) fn decode_preview(webp: Vec<u8>, width: u32, height: u32) -> Result<slint::Image> {
+/// The pixels of a preview, which unlike an image may cross threads.
+pub(crate) fn decode_preview_pixels(
+    webp: Vec<u8>,
+    width: u32,
+    height: u32,
+) -> Result<slint::SharedPixelBuffer<slint::Rgba8Pixel>> {
     let rgba = image::load_from_memory(&webp)?.into_rgba8();
     drop(webp);
     if rgba.dimensions() != (width, height) {
         bail!("解密图片尺寸与元数据不一致");
     }
-    let pixels = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
-        rgba.as_raw(),
-        width,
-        height,
-    );
-    Ok(slint::Image::from_rgba8(pixels))
+    Ok(
+        slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
+            rgba.as_raw(),
+            width,
+            height,
+        ),
+    )
 }
 
 /// Grid thumbnails are small enough that a screenful costs a few MiB.
@@ -433,7 +430,10 @@ fn capture_slot(
     }
     let exclusions = lock_storage(storage)?.snapshot_exclusions()?;
     let captured_at = unix_time_ms().max(slot_utc_ms);
-    let mut summary = CaptureSummary::default();
+    let mut summary = CaptureSummary {
+        slot_utc_ms,
+        ..CaptureSummary::default()
+    };
 
     for target in targets {
         let display = target.display();
@@ -447,6 +447,9 @@ fn capture_slot(
                 SnapshotMissingReason::PrivacyExclusion,
             )?;
             summary.missing += 1;
+            summary
+                .reason
+                .get_or_insert(SnapshotMissingReason::PrivacyExclusion);
             continue;
         }
         match capture_output(&target) {
@@ -483,10 +486,19 @@ fn capture_slot(
                     SnapshotMissingReason::CaptureFailed,
                 )?;
                 summary.missing += 1;
+                summary
+                    .reason
+                    .get_or_insert(SnapshotMissingReason::CaptureFailed);
             }
         }
     }
     lock_storage(storage)?.apply_retention(unix_time_ms())?;
+    if let Some((low, high)) = summary.channel_range {
+        eprintln!(
+            "snapshot stored: {} bytes, channels {low}–{high}",
+            summary.encoded_bytes
+        );
+    }
     Ok(summary)
 }
 
@@ -506,6 +518,8 @@ fn record_session_missing(
     Ok(CaptureSummary {
         stored: 0,
         missing: 1,
+        slot_utc_ms,
+        reason: Some(reason),
         ..CaptureSummary::default()
     })
 }
@@ -1358,12 +1372,9 @@ mod tests {
             .write_image(pixels.as_raw(), 8, 3, ExtendedColorType::Rgba8)
             .unwrap();
         let previous = image::load_from_memory(&webp).unwrap().to_rgba8();
-        let actual = decode_preview(webp.clone(), 8, 3)
-            .unwrap()
-            .to_rgba8()
-            .unwrap();
+        let actual = decode_preview_pixels(webp.clone(), 8, 3).unwrap();
         assert_eq!(actual.as_bytes(), previous.as_raw());
-        assert!(decode_preview(webp, 7, 3).is_err());
+        assert!(decode_preview_pixels(webp, 7, 3).is_err());
     }
 
     #[test]

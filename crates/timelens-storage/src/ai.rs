@@ -3,7 +3,7 @@ use chrono::{Local, NaiveDate};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use timelens_ai::{schedule::Schedule, *};
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct AiSettings {
     pub days: Option<u32>,
     pub max_bytes: u64,

@@ -4,9 +4,16 @@ import { Theme, Action, Note, SectionTitle, CheckBox, Segmented, Segment, Switch
 export global DataState {
     in-out property <bool> open: false;
     in-out property <bool> busy: false;
-    in-out property <string> status: "外部备份与导出文件由你管理，不会随应用清理而删除。";
+    in-out property <string> status;
     in-out property <string> archive;
     in-out property <string> password;
+    in-out property <string> password-again;
+    in-out property <string> restore-password;
+    in-out property <bool> backup-open;
+    // The last integrity check's result, in words.
+    in-out property <string> integrity;
+    // The confirmation open over the window: 1 replace from backup, 2 repair tool.
+    in-out property <int> restore-confirm;
     in-out property <bool> snapshots: false;
     in-out property <bool> sensitive-confirmed: false;
     in-out property <bool> restore-ready: false;
@@ -28,7 +35,8 @@ export global DataState {
 // Storage, backup, export and maintenance, as settings sections. The page that
 // hosts it provides scrolling and the retention and clearing sections.
 export component DataPanel inherits VerticalLayout {
-    private property <int> backup-mode: DataState.recovery-needed ? 1 : 0;
+    // The timeline's range in words, which exports cover.
+    in property <string> export-range;
     spacing: 10px;
     alignment: start;
 
@@ -58,68 +66,75 @@ export component DataPanel inherits VerticalLayout {
     SettingsHeader { text: "备份与恢复"; }
     SettingsGroup {
         SettingExpander {
-            title: root.backup-mode == 0 ? "创建便携备份" : "从备份恢复";
-            description: "便携 ZIP 包含活动、输入、设置、排除规则、本地报告和 AI 总结；API 凭据与登录任务不进入备份。";
+            title: "创建便携备份";
+            description: "ZIP 包含活动、输入、设置、排除规则、本地报告和 AI 总结；API 凭据与登录任务不进入备份。";
             icon: @image-url("icons/database.svg");
-            expanded: DataState.recovery-needed;
-            HorizontalLayout {
-                Segmented {
-                    Segment { text: "创建备份"; selected: root.backup-mode == 0; enabled: !DataState.busy; clicked => { root.backup-mode = 0; } }
-                    Segment { text: "从备份恢复"; selected: root.backup-mode == 1; enabled: !DataState.busy; clicked => { root.backup-mode = 1; } }
-                }
-                Rectangle { horizontal-stretch: 1; }
-            }
-            if DataState.recovery-needed : Note { text: "当前处于恢复模式。选择一个备份，校验通过后再替换数据集。"; color: Theme.brand-ink; }
-            HorizontalLayout {
-                spacing: 8px;
-                LineEdit {
-                    height: 34px;
-                    horizontal-stretch: 1;
-                    text <=> DataState.archive;
-                    placeholder-text: root.backup-mode == 0 ? "备份 ZIP 的保存路径" : "要恢复的 ZIP 文件路径";
-                    enabled: !DataState.busy;
-                    edited => { DataState.restore-ready = false; DataState.restore-info = ""; DataState.replace-confirmed = false; }
-                }
-                Action {
-                    text: root.backup-mode == 0 ? "选择位置" : "选择备份";
-                    icon: @image-url("icons/folder.svg");
-                    enabled: !DataState.busy;
-                    clicked => { DataState.replace-confirmed = false; DataState.action(root.backup-mode == 0 ? 0 : 1); }
-                }
-            }
+            expanded <=> DataState.backup-open;
+            CheckBox { font-size: 13px; text: "包含快照图片"; checked <=> DataState.snapshots; enabled: !DataState.busy; }
             LineEdit {
                 height: 34px;
                 text <=> DataState.password;
                 input-type: password;
-                placeholder-text: root.backup-mode == 0 ? "独立密码（留空则不加密）" : "备份密码（没有则留空）";
+                placeholder-text: "独立密码（留空则不加密）";
                 enabled: !DataState.busy;
-                edited => { DataState.restore-ready = false; DataState.restore-info = ""; DataState.replace-confirmed = false; }
             }
-            Note { text: "无密码 ZIP 中的敏感记录可以直接读取。独立密码无法找回，也不会保存在备份内。"; font-size: 12px; }
-            if root.backup-mode == 0 : VerticalLayout {
-                spacing: 10px;
-                CheckBox { font-size: 13px; text: "包含快照图片"; checked <=> DataState.snapshots; enabled: !DataState.busy; }
-                CheckBox { font-size: 13px; text: "我知道备份含敏感数据，并会妥善保管"; checked <=> DataState.sensitive-confirmed; enabled: !DataState.busy; }
-                HorizontalLayout {
-                    Action { text: DataState.busy ? "正在处理…" : "导出备份"; icon: @image-url("icons/download.svg"); accent: true; enabled: !DataState.busy && DataState.sensitive-confirmed && DataState.archive != ""; clicked => { DataState.action(2); } }
-                    Rectangle { horizontal-stretch: 1; }
-                }
+            if DataState.password != "" : LineEdit {
+                height: 34px;
+                text <=> DataState.password-again;
+                input-type: password;
+                placeholder-text: "再次输入密码";
+                enabled: !DataState.busy;
             }
-            if root.backup-mode == 1 : VerticalLayout {
+            if DataState.password != "" && DataState.password-again != "" && DataState.password != DataState.password-again : Note {
+                text: "两次输入的密码不一致。"; color: Theme.danger; font-size: 12px;
+            }
+            Note {
+                text: DataState.password != "" ? "独立密码无法找回，也不会保存在备份内；忘记密码后这份备份无法打开。" : "不设密码时，任何拿到 ZIP 的人都能读取其中的记录。";
+                font-size: 12px;
+            }
+            if DataState.password == "" : CheckBox { font-size: 13px; text: "我知道这份备份未加密、含敏感数据，并会妥善保管"; checked <=> DataState.sensitive-confirmed; enabled: !DataState.busy; }
+            HorizontalLayout {
+                Action {
+                    text: DataState.busy ? "正在处理…" : "创建备份…";
+                    icon: @image-url("icons/download.svg");
+                    accent: true;
+                    enabled: !DataState.busy && (DataState.password != "" ? DataState.password == DataState.password-again : DataState.sensitive-confirmed);
+                    clicked => { DataState.action(2); }
+                }
+                Rectangle { horizontal-stretch: 1; }
+            }
+        }
+        Rule { }
+        SettingExpander {
+            title: "从备份恢复";
+            description: "用一份便携备份替换当前的全部记录。恢复前会先校验备份。";
+            icon: @image-url("icons/history.svg");
+            expanded: DataState.recovery-needed;
+            if DataState.recovery-needed : Note { text: "当前处于恢复模式。选择一个备份，校验通过后再替换数据集。"; color: Theme.brand-ink; }
+            LineEdit {
+                height: 34px;
+                text <=> DataState.restore-password;
+                input-type: password;
+                placeholder-text: "备份密码（没有则留空）";
+                enabled: !DataState.busy;
+                edited => { DataState.restore-ready = false; DataState.restore-info = ""; }
+            }
+            HorizontalLayout {
                 spacing: 10px;
-                HorizontalLayout {
-                    spacing: 10px;
-                    Action { text: DataState.restore-ready ? "重新校验" : "校验备份"; enabled: !DataState.busy && DataState.archive != ""; clicked => { DataState.action(3); } }
-                    Text { text: DataState.restore-ready ? "校验通过" : "等待校验"; color: DataState.restore-ready ? Theme.ok : Theme.ink-3; font-size: 13px; vertical-alignment: center; }
-                    Rectangle { horizontal-stretch: 1; }
+                Action {
+                    text: DataState.archive == "" ? "选择备份…" : "换一个备份…";
+                    icon: @image-url("icons/folder.svg");
+                    enabled: !DataState.busy;
+                    clicked => { DataState.action(1); }
                 }
-                if DataState.restore-info != "" : Note { text: DataState.restore-info; color: Theme.ink-2; }
-                Note { text: "恢复会整体替换现有记录，不会合并。需要保留现有数据时，请先创建备份。恢复后需要重新配置 AI 凭据。"; font-size: 12px; }
-                CheckBox { font-size: 13px; text: "确认替换全部现有记录"; checked <=> DataState.replace-confirmed; enabled: !DataState.busy && DataState.restore-ready; }
-                HorizontalLayout {
-                    Action { text: "执行恢复"; danger: true; enabled: !DataState.busy && DataState.restore-ready && DataState.replace-confirmed; clicked => { DataState.action(4); } }
-                    Rectangle { horizontal-stretch: 1; }
-                }
+                if DataState.archive != "" && !DataState.restore-ready : Action { text: "重新校验"; enabled: !DataState.busy; clicked => { DataState.action(3); } }
+                Rectangle { horizontal-stretch: 1; }
+            }
+            if DataState.restore-info != "" : Note { text: DataState.restore-info; color: DataState.restore-ready ? Theme.ink-2 : Theme.danger; }
+            Note { text: "恢复会整体替换现有记录，不会合并。恢复后需要重新配置 AI 凭据。"; font-size: 12px; }
+            HorizontalLayout {
+                Action { text: "用此备份替换当前数据…"; danger: true; enabled: !DataState.busy && DataState.restore-ready; clicked => { DataState.restore-confirm = 1; } }
+                Rectangle { horizontal-stretch: 1; }
             }
         }
     }
@@ -128,21 +143,16 @@ export component DataPanel inherits VerticalLayout {
     SettingsHeader { text: "导出"; }
     SettingsGroup {
         SettingRow {
-            title: "导出所选时间范围";
-            description: "沿用时间线当前选择的范围，适合留存或继续分析。";
+            title: "导出时间线当前范围";
+            description: "将导出：" + root.export-range + "。想导出其他时段，先在时间线上选好范围。";
             icon: @image-url("icons/download.svg");
-            HorizontalLayout {
-                spacing: 8px;
-                Action { text: "JSON"; enabled: !DataState.busy; clicked => { DataState.action(5); } }
-                Action { text: "CSV"; enabled: !DataState.busy; clicked => { DataState.action(6); } }
-            }
         }
-        Rule { }
-        SettingRow {
-            title: "导出中包含可执行路径";
-            description: "默认关闭；开启后导出文件会带上应用的本地路径。";
-            icon: @image-url("icons/app-window.svg");
-            Switch { label: "导出中包含可执行路径"; checked: DataState.export-paths; enabled: !DataState.busy; toggled(on) => { DataState.export-paths = on; } }
+        HorizontalLayout {
+            padding-left: 60px; padding-right: 16px; padding-bottom: 14px; spacing: 8px;
+            CheckBox { font-size: 13px; text: "包含应用的本地路径"; checked <=> DataState.export-paths; enabled: !DataState.busy; }
+            Rectangle { horizontal-stretch: 1; }
+            Action { text: "导出 JSON…"; enabled: !DataState.busy; clicked => { DataState.action(5); } }
+            Action { text: "导出 CSV…"; enabled: !DataState.busy; clicked => { DataState.action(6); } }
         }
     }
 
@@ -151,16 +161,16 @@ export component DataPanel inherits VerticalLayout {
     SettingsGroup {
         SettingRow {
             title: "完整性检查";
-            description: "检查数据库的完整性与外键。";
+            description: DataState.integrity != "" ? DataState.integrity : "检查数据库的完整性与外键。";
             icon: @image-url("icons/shield.svg");
             Action { text: "运行检查"; enabled: !DataState.busy; clicked => { DataState.action(8); } }
         }
         Rule { }
         SettingRow {
-            title: "进入恢复界面";
-            description: "重新启动 Timelens 并打开恢复界面，用于从备份修复数据。";
+            title: "修复工具";
+            description: "数据损坏时使用：Timelens 会退出并打开修复工具，从备份或可读取的记录重建数据。";
             icon: @image-url("icons/refresh.svg");
-            Action { text: "重启并恢复"; enabled: !DataState.busy; clicked => { DataState.action(10); } }
+            Action { text: "打开修复工具…"; enabled: !DataState.busy; clicked => { DataState.restore-confirm = 2; } }
         }
     }
 }
@@ -173,10 +183,11 @@ export component MoveDialog inherits Rectangle {
     private property <bool> failed: DataState.move-phase == 3;
     background: Theme.scrim;
     TouchArea { }
-    FocusScope {
+    move-keys := FocusScope {
         focus-on-tab-navigation: false;
         focus-on-click: false;
-        init => { self.focus(); }
+        // Not in `init`; see ConfirmationDialog in theme.slint.
+        Timer { interval: 1ms; triggered => { move-keys.focus(); self.running = false; } }
         key-pressed(event) => {
             if !root.moving && (event.text == Key.Escape || event.text == Key.Return) { root.closed(); }
             return accept;
@@ -185,7 +196,7 @@ export component MoveDialog inherits Rectangle {
             width: min(460px, parent.width - 48px); height: sheet.preferred-height;
             x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
             background: Theme.surface; border-radius: 16px; border-width: 1px; border-color: Theme.line;
-            drop-shadow-blur: 48px; drop-shadow-offset-y: 18px; drop-shadow-color: #161c2d40;
+            drop-shadow-blur: 48px; drop-shadow-offset-y: 18px; drop-shadow-color: Theme.shadow-strong;
             sheet := VerticalLayout {
                 padding: 26px; padding-bottom: 22px; spacing: 14px;
                 HorizontalLayout {

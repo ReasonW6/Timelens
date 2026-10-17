@@ -36,6 +36,8 @@ pub(super) struct Paging {
     date: Option<NaiveDate>,
     today_requested: Option<Instant>,
     jump: Option<i32>,
+    /// Today's activities when last shown, to tell when new ones arrive.
+    today_count: Option<usize>,
 }
 
 /// Days back from today that a search covers.
@@ -148,6 +150,7 @@ fn placeholder(offset: i32) -> Outline {
         totals: Vec::new(),
         focus_ms: 0,
         source: None,
+        system: Vec::new(),
     };
     let (title, subtitle) = day_title(&day);
     let header = HistoryItem {
@@ -313,6 +316,7 @@ fn publish(window: &AppWindow, state: &mut HistoryState) {
     }
     window.set_day_anchors(ModelRc::new(VecModel::from(anchors)));
     window.set_history_selected(state.selected.clone().unwrap_or_default().into());
+    describe(window, state, &query);
     let wanted = needed(state, -window.get_history_scroll(), height);
     state.days.retain(|offset, _| wanted.contains(offset));
     for offset in wanted {
@@ -323,6 +327,95 @@ fn publish(window: &AppWindow, state: &mut HistoryState) {
     if -window.get_history_scroll() != scroll {
         publish(window, state);
     }
+}
+
+fn ymd(date: NaiveDate) -> i32 {
+    date.year() * 10_000 + date.month() as i32 * 100 + date.day() as i32
+}
+
+/// What the toolbar and the search line say about the history on screen.
+fn describe(window: &AppWindow, state: &mut HistoryState, query: &str) {
+    let today = Local::now().date_naive();
+    window.set_earliest_ymd(ymd(
+        today - chrono::Duration::days(i64::from(state.horizon.max(0)))
+    ));
+    // The day at the top of the view.
+    let scroll = -window.get_history_scroll();
+    let offset = state
+        .paging
+        .layout
+        .iter()
+        .find(|row| row.day >= 0 && row.top + row.height > scroll)
+        .map_or(0, |row| row.day);
+    let date = today - chrono::Duration::days(i64::from(offset));
+    window.set_history_day_ymd(ymd(date));
+    window.set_history_day_label(
+        match offset {
+            0 => String::new(),
+            1 => "昨天".to_owned(),
+            _ => date.format("%-m月%-d日").to_string(),
+        }
+        .into(),
+    );
+    // New activity below, while the user reads further up.
+    if let Some(count) = state.days.get(&0).map(|day| day.entries.len()) {
+        if state.paging.today_count.is_some_and(|shown| count > shown)
+            && !window.get_history_follow()
+        {
+            window.set_history_has_new(true);
+        }
+        state.paging.today_count = Some(count);
+    }
+    if query.is_empty() {
+        window.set_history_search_status(SharedString::new());
+        window.set_history_search_empty(false);
+        return;
+    }
+    let until = SEARCH_DAYS.min(state.horizon.max(0));
+    let searched = state.paging.outlines.range(0..=until).count() as i32;
+    let found = state
+        .paging
+        .layout
+        .iter()
+        .filter(|row| row.kind == KIND_ENTRY)
+        .count();
+    let done =
+        searched > until || (state.paging.queue.is_empty() && state.paging.pending.is_none());
+    let shown = state.query.trim();
+    window.set_history_search_status(
+        if done {
+            format!("“{shown}” · 最近一个月 · 找到 {found} 段")
+        } else {
+            format!(
+                "正在搜索最近一个月… 已查 {searched}/{} 天，找到 {found} 段",
+                until + 1
+            )
+        }
+        .into(),
+    );
+    window.set_history_search_empty(done && found == 0);
+}
+
+/// The activity `delta` rows from the selected one, with its place in the
+/// list; without a selection, the latest.
+pub(super) fn step(state: &HistoryState, delta: i32) -> Option<(SharedString, f32, f32)> {
+    let entries = state
+        .paging
+        .layout
+        .iter()
+        .filter(|row| row.kind == KIND_ENTRY)
+        .collect::<Vec<_>>();
+    let current = state
+        .selected
+        .as_deref()
+        .and_then(|key| entries.iter().position(|row| row.key == key));
+    let index = match current {
+        Some(index) => index.checked_add_signed(delta as isize)?,
+        None => entries.len().checked_sub(1)?,
+    };
+    entries
+        .get(index)
+        .map(|row| (row.key.clone(), row.top, row.height))
 }
 
 pub(super) fn refresh(
@@ -460,8 +553,17 @@ fn restart_search(state: &mut HistoryState, query: &str) {
     state.paging.queue.clear();
     state.paging.queued.clear();
     state.paging.outlines.clear();
+    // Days already read are searched at once; only the rest are read again.
+    let resident = state
+        .days
+        .iter()
+        .map(|(offset, day)| (*offset, outline(day, query)))
+        .collect::<Vec<_>>();
+    state.paging.outlines.extend(resident);
     for offset in 0..=state.loaded {
-        queue(state, offset);
+        if !state.days.contains_key(&offset) {
+            queue(state, offset);
+        }
     }
     extend_search(state);
 }
@@ -471,7 +573,9 @@ fn extend_search(state: &mut HistoryState) {
     let until = SEARCH_DAYS.min(state.horizon);
     if !state.query.trim().is_empty() && state.loaded < until {
         for offset in state.loaded + 1..=until {
-            queue(state, offset);
+            if !state.days.contains_key(&offset) {
+                queue(state, offset);
+            }
         }
         state.loaded = until;
     }

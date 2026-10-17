@@ -14,12 +14,16 @@ use windows_sys::Win32::{
 const CALLBACK: u32 = WM_APP + 27;
 const SHOW: u32 = WM_APP + 28;
 const STOP: u32 = WM_APP + 29;
+const TIP: u32 = WM_APP + 30;
+/// The file whose presence says the hide-to-tray notice was already shown.
+pub const EXPLAINED_FILE: &str = "tray-explained.txt";
 static WINDOW: std::sync::atomic::AtomicIsize = std::sync::atomic::AtomicIsize::new(0);
 static SHUTDOWN_READY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 static EVENTS: Mutex<Option<EventSink>> = Mutex::new(None);
 static COLLECTION_MENU: Mutex<CollectionMenu> = Mutex::new(CollectionMenu {
     paused: false,
     busy: false,
+    resume: String::new(),
 });
 static NOTICE: Mutex<Option<Notice>> = Mutex::new(None);
 static HIDE_EXPLAINED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
@@ -27,23 +31,37 @@ struct Notice {
     /// The AI job a click opens; general notices open nothing.
     job: Option<i64>,
     title: &'static str,
-    text: &'static str,
+    text: String,
     success: bool,
 }
 struct EventSink {
     sender: mpsc::Sender<Event>,
     window: slint::Weak<AppWindow>,
 }
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Default, PartialEq)]
 struct CollectionMenu {
     paused: bool,
     busy: bool,
+    /// When a timed pause ends, in words; empty otherwise.
+    resume: String,
+}
+impl CollectionMenu {
+    /// The tray tooltip and the menu's first line.
+    fn status(&self) -> String {
+        match (self.paused, self.resume.is_empty()) {
+            (false, _) => "正在记录".into(),
+            (true, true) => "已暂停记录".into(),
+            (true, false) => format!("已暂停记录 · {}", self.resume),
+        }
+    }
 }
 #[cfg_attr(test, derive(Debug, PartialEq))]
 enum Event {
     Open,
     Summary(i64),
     SetPaused(bool),
+    PauseFor(i32),
+    Capture,
     Quit,
     QuitReady,
     QuitFailed(String),
@@ -65,10 +83,16 @@ fn emit(event: Event) {
                         return;
                     }
                     if let Event::Summary(id) = event {
+                        // The settings would cover the summary.
+                        if w.get_settings_open() {
+                            if w.get_settings_tab() == 4 {
+                                w.global::<AiState>().invoke_flush_settings();
+                            }
+                            w.set_settings_open(false);
+                        }
                         w.invoke_navigate(4);
-                        let g = w.global::<AiState>();
-                        g.set_status(format!("任务 #{id}，可在任务历史中查看结果").into());
-                        g.set_page(4);
+                        w.global::<AiState>()
+                            .invoke_open_job(i32::try_from(id).unwrap_or(-1));
                     }
                 });
             }
@@ -79,40 +103,90 @@ fn emit(event: Event) {
     }
 }
 fn collection_menu(w: &AppWindow, quitting: bool) {
-    if let Ok(mut menu) = COLLECTION_MENU.lock() {
-        let state = w.global::<CollectionState>();
-        menu.paused = state.get_paused();
-        menu.busy = state.get_busy() || quitting;
+    let state = w.global::<CollectionState>();
+    let next = CollectionMenu {
+        paused: state.get_paused(),
+        busy: state.get_busy() || quitting,
+        resume: state.get_resume_label().into(),
+    };
+    if let Ok(mut menu) = COLLECTION_MENU.lock()
+        && *menu != next
+    {
+        let tip_changed = menu.status() != next.status();
+        *menu = next;
+        if tip_changed {
+            let hwnd = WINDOW.load(std::sync::atomic::Ordering::Acquire) as HWND;
+            if !hwnd.is_null() {
+                unsafe {
+                    PostMessageW(hwnd, TIP, 0, 0);
+                }
+            }
+        }
     }
 }
-fn popup_menu(state: CollectionMenu) -> HMENU {
+/// The pause lengths the tray offers, as menu id and minutes for `pause-for`.
+const PAUSES: [(usize, i32, &str); 4] = [
+    (10, 15, "15 分钟"),
+    (11, 60, "1 小时"),
+    (12, -2, "直到明天"),
+    (13, -1, "直到手动继续"),
+];
+fn popup_menu(state: &CollectionMenu) -> HMENU {
     unsafe {
         let menu = CreatePopupMenu();
         if !menu.is_null() {
-            AppendMenuW(menu, MF_STRING, 1, wide("打开 Timelens").as_ptr());
             AppendMenuW(
                 menu,
-                MF_STRING | if state.busy { MF_GRAYED } else { 0 },
-                2,
-                wide(if state.paused {
-                    "开始采集"
-                } else {
-                    "停止采集"
-                })
-                .as_ptr(),
+                MF_STRING | MF_GRAYED,
+                0,
+                wide(&state.status()).as_ptr(),
             );
             AppendMenuW(menu, MF_SEPARATOR, 0, null());
-            AppendMenuW(menu, MF_STRING, 3, wide("退出 Timelens").as_ptr());
+            AppendMenuW(menu, MF_STRING, 1, wide("打开 Timelens").as_ptr());
+            AppendMenuW(menu, MF_STRING, 4, wide("立即拍摄快照").as_ptr());
+            let busy = if state.busy { MF_GRAYED } else { 0 };
+            if state.paused {
+                AppendMenuW(menu, MF_STRING | busy, 2, wide("继续记录").as_ptr());
+            } else {
+                let lengths = CreatePopupMenu();
+                for (id, _, text) in PAUSES {
+                    AppendMenuW(lengths, MF_STRING, id, wide(text).as_ptr());
+                }
+                AppendMenuW(
+                    menu,
+                    MF_POPUP | busy,
+                    lengths as usize,
+                    wide("暂停记录").as_ptr(),
+                );
+            }
+            AppendMenuW(menu, MF_SEPARATOR, 0, null());
+            AppendMenuW(menu, MF_STRING, 3, wide("退出（停止记录）…").as_ptr());
         }
         menu
     }
 }
-fn menu_event(selected: i32, state: CollectionMenu) -> Option<Event> {
+fn menu_event(selected: i32, state: &CollectionMenu) -> Option<Event> {
     match selected {
         1 => Some(Event::Open),
-        2 if !state.busy => Some(Event::SetPaused(!state.paused)),
+        2 if !state.busy => Some(Event::SetPaused(false)),
         3 => Some(Event::Quit),
+        4 => Some(Event::Capture),
+        id if !state.busy => PAUSES
+            .iter()
+            .find(|(menu_id, ..)| *menu_id as i32 == id)
+            .map(|(_, minutes, _)| Event::PauseFor(*minutes)),
         _ => None,
+    }
+}
+/// Asks before quitting from the menu, since recording stops with Timelens.
+fn confirm_quit(hwnd: HWND) -> bool {
+    unsafe {
+        MessageBoxW(
+            hwnd,
+            wide("退出后不再记录活动、输入和快照，直到下次打开 Timelens。\n\n只想暂时不记录，可以改用「暂停记录」。").as_ptr(),
+            wide("退出 Timelens？").as_ptr(),
+            MB_OKCANCEL | MB_ICONQUESTION | MB_DEFBUTTON2,
+        ) == IDOK
     }
 }
 /// The embedded Timelens icon (resource 1 in app.rc) at the small-icon size.
@@ -144,10 +218,15 @@ fn notification_data(hwnd: HWND) -> NOTIFYICONDATAW {
         hIcon: tray_icon(),
         ..Default::default()
     };
+    let status = COLLECTION_MENU
+        .lock()
+        .map(|menu| menu.status())
+        .unwrap_or_default();
     for (slot, c) in d
         .szTip
         .iter_mut()
-        .zip("Timelens · 记录你的时间".encode_utf16())
+        .take(127)
+        .zip(format!("Timelens · {status}").encode_utf16())
     {
         *slot = c;
     }
@@ -185,6 +264,14 @@ unsafe extern "system" fn procedure(hwnd: HWND, message: u32, w: WPARAM, l: LPAR
             emit(Event::Quit);
             0
         }
+        TIP => {
+            let mut data = notification_data(hwnd);
+            data.uFlags = NIF_TIP;
+            unsafe {
+                Shell_NotifyIconW(NIM_MODIFY, &data);
+            }
+            0
+        }
         CALLBACK => {
             match l as u32 & 0xffff {
                 WM_LBUTTONUP | WM_LBUTTONDBLCLK | NIN_SELECT => emit(Event::Open),
@@ -196,8 +283,11 @@ unsafe extern "system" fn procedure(hwnd: HWND, message: u32, w: WPARAM, l: LPAR
                     }
                 }
                 WM_RBUTTONUP | WM_CONTEXTMENU => unsafe {
-                    let state = COLLECTION_MENU.lock().map(|s| *s).unwrap_or_default();
-                    let menu = popup_menu(state);
+                    let state = COLLECTION_MENU
+                        .lock()
+                        .map(|s| s.clone())
+                        .unwrap_or_default();
+                    let menu = popup_menu(&state);
                     if menu.is_null() {
                         return 0;
                     }
@@ -217,8 +307,10 @@ unsafe extern "system" fn procedure(hwnd: HWND, message: u32, w: WPARAM, l: LPAR
                     // Complete the tray menu's foreground transition before an
                     // Open command activates the main window on the UI thread.
                     PostMessageW(hwnd, WM_NULL, 0, 0);
-                    if let Some(event) = menu_event(selected, state) {
-                        emit(event);
+                    match menu_event(selected, &state) {
+                        Some(Event::Quit) if !confirm_quit(hwnd) => {}
+                        Some(event) => emit(event),
+                        None => {}
                     }
                 },
                 _ => {}
@@ -295,7 +387,17 @@ pub fn notify(id: i64, success: bool) {
             "总结已完成，点击查看。"
         } else {
             "AI 任务失败，点击查看原因与保留的内容。"
-        },
+        }
+        .into(),
+        success,
+    });
+}
+/// A notice for a result the hidden window cannot show; a click opens Timelens.
+pub fn show_message(title: &'static str, text: String, success: bool) {
+    show_notice(Notice {
+        job: None,
+        title,
+        text,
         success,
     });
 }
@@ -313,6 +415,7 @@ fn show_notice(notice: Notice) {
 pub fn install(
     w: &AppWindow,
     storage: Arc<Mutex<timelens_storage::Storage>>,
+    control: std::path::PathBuf,
 ) -> Result<slint::Timer> {
     let (sender, receiver) = mpsc::channel();
     *EVENTS.lock().map_err(|_| anyhow!("托盘锁不可用"))? = Some(EventSink {
@@ -369,13 +472,15 @@ pub fn install(
         if let Some(w) = weak.upgrade() {
             let _ = w.hide();
         }
-        // Closing the window only hides it; say so once so recording in the
-        // background is never a surprise.
-        if !HIDE_EXPLAINED.swap(true, std::sync::atomic::Ordering::AcqRel) {
+        // Closing the window only hides it; say so once, ever, so recording in
+        // the background is never a surprise.
+        let marker = control.join(EXPLAINED_FILE);
+        if !HIDE_EXPLAINED.swap(true, std::sync::atomic::Ordering::AcqRel) && !marker.exists() {
+            let _ = std::fs::create_dir_all(&control).and_then(|()| std::fs::write(&marker, b"1"));
             show_notice(Notice {
                 job: None,
-                title: "Timelens 仍在后台运行",
-                text: "窗口已收起到通知区域。点击托盘图标可重新打开；右键可以停止／开始采集，或退出 Timelens。",
+                title: "Timelens 仍在后台记录",
+                text: "窗口已收起到通知区域，记录照常进行。点击托盘图标可重新打开；右键可以暂停记录或退出。".into(),
                 success: true,
             });
         }
@@ -401,11 +506,26 @@ pub fn install(
                             state.invoke_action(0);
                         }
                     }
+                    Event::PauseFor(minutes) => {
+                        if !quitting {
+                            w.global::<CollectionState>().invoke_pause_for(minutes);
+                        }
+                    }
+                    Event::Capture => {
+                        if !quitting {
+                            w.invoke_snapshot_capture_now();
+                        }
+                    }
                     Event::Quit => {
                         if quitting {
                             continue;
                         }
                         quitting = true;
+                        // A field edited in the AI settings applies on Enter or when
+                        // it loses focus; quitting from the tray does neither.
+                        if w.get_settings_open() && w.get_settings_tab() == 4 {
+                            w.global::<AiState>().invoke_flush_settings();
+                        }
                         crate::collector_task::suspend();
                         w.set_action_status("正在保存并退出 Timelens…".into());
                         let storage = Arc::clone(&storage);
@@ -470,63 +590,70 @@ mod tests {
     use super::*;
 
     #[test]
-    fn capture_commands_are_distinct_from_exit() {
-        for paused in [false, true] {
-            let state = CollectionMenu {
-                paused,
-                busy: false,
-            };
-            assert_eq!(menu_event(1, state), Some(Event::Open));
-            assert_eq!(menu_event(2, state), Some(Event::SetPaused(!paused)));
-            assert_eq!(menu_event(3, state), Some(Event::Quit));
-            assert_eq!(menu_event(0, state), None);
-            assert_eq!(
-                menu_event(
-                    2,
-                    CollectionMenu {
-                        busy: true,
-                        ..state
-                    }
-                ),
-                None
-            );
-        }
+    fn menu_commands_pause_resume_capture_and_quit() {
+        let running = CollectionMenu::default();
+        assert_eq!(menu_event(1, &running), Some(Event::Open));
+        assert_eq!(menu_event(3, &running), Some(Event::Quit));
+        assert_eq!(menu_event(4, &running), Some(Event::Capture));
+        assert_eq!(menu_event(10, &running), Some(Event::PauseFor(15)));
+        assert_eq!(menu_event(13, &running), Some(Event::PauseFor(-1)));
+        assert_eq!(menu_event(0, &running), None);
+        let paused = CollectionMenu {
+            paused: true,
+            ..CollectionMenu::default()
+        };
+        assert_eq!(menu_event(2, &paused), Some(Event::SetPaused(false)));
+        let busy = CollectionMenu {
+            busy: true,
+            ..paused
+        };
+        assert_eq!(menu_event(2, &busy), None);
+        assert_eq!(menu_event(10, &busy), None);
     }
 
     #[test]
-    fn native_menu_shows_capture_state_and_disables_pending_changes() {
+    fn native_menu_shows_recording_state_and_disables_pending_changes() {
         for paused in [false, true] {
             for busy in [false, true] {
-                let menu = popup_menu(CollectionMenu { paused, busy });
+                let state = CollectionMenu {
+                    paused,
+                    busy,
+                    resume: if paused {
+                        "还剩 5 分钟".into()
+                    } else {
+                        String::new()
+                    },
+                };
+                let menu = popup_menu(&state);
                 assert!(!menu.is_null());
                 unsafe {
-                    assert_eq!(GetMenuItemCount(menu), 4);
-                    for (position, id, expected) in [
-                        (0, 1, "打开 Timelens"),
-                        (
-                            1,
-                            2,
-                            if paused {
-                                "开始采集"
-                            } else {
-                                "停止采集"
-                            },
-                        ),
-                        (3, 3, "退出 Timelens"),
-                    ] {
-                        assert_eq!(GetMenuItemID(menu, position), id);
-                        let mut label = [0_u16; 80];
+                    assert_eq!(GetMenuItemCount(menu), 7);
+                    let label = |position: u32| {
+                        let mut text = [0_u16; 80];
                         let len = GetMenuStringW(
                             menu,
-                            id,
-                            label.as_mut_ptr(),
-                            label.len() as i32,
-                            MF_BYCOMMAND,
+                            position,
+                            text.as_mut_ptr(),
+                            text.len() as i32,
+                            MF_BYPOSITION,
                         );
-                        assert_eq!(String::from_utf16_lossy(&label[..len as usize]), expected);
-                    }
-                    assert_ne!(GetMenuState(menu, 2, MF_BYPOSITION) & MF_SEPARATOR, 0);
-                    assert_eq!(GetMenuState(menu, 2, MF_BYCOMMAND) & MF_GRAYED != 0, busy);
+                        String::from_utf16_lossy(&text[..len as usize])
+                    };
+                    assert_eq!(label(0), state.status());
+                    assert_eq!(label(2), "打开 Timelens");
+                    assert_eq!(label(3), "立即拍摄快照");
+                    assert_eq!(
+                        label(4),
+                        if paused {
+                            "继续记录"
+                        } else {
+                            "暂停记录"
+                        }
+                    );
+                    assert_eq!(label(6), "退出（停止记录）…");
+                    assert_eq!(GetMenuItemID(menu, 6), 3);
+                    assert_ne!(GetMenuState(menu, 5, MF_BYPOSITION) & MF_SEPARATOR, 0);
+                    assert_eq!(GetMenuState(menu, 4, MF_BYPOSITION) & MF_GRAYED != 0, busy);
                     assert_eq!(GetMenuState(menu, 3, MF_BYCOMMAND) & MF_GRAYED, 0);
                     DestroyMenu(menu);
                 }

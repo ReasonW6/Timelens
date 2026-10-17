@@ -72,6 +72,10 @@ pub fn install(
             return;
         };
         window.set_action_status("".into());
+        if page != 2 && window.get_snapshot_selecting() {
+            window.invoke_snapshot_check_all(false);
+            window.set_snapshot_selecting(false);
+        }
         window.set_page(page.clamp(0, 4));
         window.set_snapshot_open(page == 2);
         window.set_report_open(page == 3);
@@ -85,15 +89,27 @@ pub fn install(
             3 if window.get_stats_tab() == 1 => {
                 // The application rules page shares this panel; switch it back.
                 window.global::<CollectionState>().set_page(1);
-                window
-                    .global::<CollectionState>()
-                    .set_date(window.get_calendar_date());
                 window.global::<CollectionState>().invoke_action(7);
             }
             4 => window.global::<AiState>().invoke_opened(),
             _ => {}
         }
     });
+    {
+        // Leaving a page the timeline pointed at an activity puts its range back.
+        let weak = window.as_weak();
+        let state = state.clone();
+        let storage = storage.clone();
+        window.on_range_origin_restore(move || {
+            let Some(origin) = state.borrow_mut().origin.take() else {
+                return;
+            };
+            origin.restore(&mut state.borrow_mut());
+            if let Some(w) = weak.upgrade() {
+                refresh(&w, &storage, &state);
+            }
+        });
+    }
     {
         let weak = window.as_weak();
         let state = state.clone();
@@ -154,7 +170,28 @@ pub fn install(
             if busy.load(Ordering::Acquire) {
                 return;
             }
-            *state.borrow_mut() = today_state();
+            let mut next = today_state();
+            next.selected_identity = state.borrow().selected_identity.clone();
+            *state.borrow_mut() = next;
+            if let Some(w) = weak.upgrade() {
+                refresh(&w, &storage, &state);
+            }
+        });
+    }
+    {
+        let weak = window.as_weak();
+        let state = state.clone();
+        let storage = storage.clone();
+        let busy = busy.clone();
+        window.on_days_ago_selected(move |days| {
+            if busy.load(Ordering::Acquire) {
+                return;
+            }
+            let Some(mut next) = state_for_day(unix_time_ms(), -days.max(0)) else {
+                return;
+            };
+            next.selected_identity = state.borrow().selected_identity.clone();
+            *state.borrow_mut() = next;
             if let Some(w) = weak.upgrade() {
                 refresh(&w, &storage, &state);
             }
@@ -181,6 +218,7 @@ pub fn install(
             match local_time_range(anchor, &start, &end, now) {
                 Ok((start, end)) => {
                     let mut s = state.borrow_mut();
+                    s.origin = None;
                     s.horizon_started_utc_ms = start;
                     s.horizon_ended_utc_ms = end;
                     s.range_started_utc_ms = start;
@@ -244,68 +282,128 @@ fn local_label(timestamp: i64, format: &str) -> String {
         .unwrap_or_else(|| "时间不可用".to_owned())
 }
 
+/// A local date as the number yyyymmdd.
+fn ymd(timestamp: i64) -> i32 {
+    Local
+        .timestamp_millis_opt(timestamp)
+        .single()
+        .map_or(0, |d| {
+            d.year() * 10_000 + d.month() as i32 * 100 + d.day() as i32
+        })
+}
+
+/// Where the shared range ends as the user chose it: a range that runs with the
+/// clock ends where it was planned to, any other where it was set.
+pub(crate) fn chosen_end(state: &UiState) -> i64 {
+    if state.follow_now {
+        state.horizon_ended_utc_ms
+    } else {
+        state.range_ended_utc_ms
+    }
+}
+
+/// Whether the shared range is the whole of its calendar day.
+fn whole_day(state: &UiState) -> bool {
+    state.calendar_day.is_some_and(|day| {
+        state.range_started_utc_ms == day
+            && timeline_view::selected_day_bounds(day, 0).map(|(_, end)| end)
+                == Some(chosen_end(state))
+    })
+}
+
+/// The shared range in words: a day by its date, part of a day with its hours,
+/// or a recent stretch by its length.
+fn range_title(state: &UiState, now: i64) -> String {
+    let Some(day) = state.calendar_day else {
+        if !state.follow_now {
+            // A fixed stretch over several days, such as a summary's.
+            return crate::ai_ui::range_text(
+                state.range_started_utc_ms,
+                state.range_ended_utc_ms,
+                now,
+                &Local,
+                true,
+            );
+        }
+        let hours = state
+            .horizon_ended_utc_ms
+            .saturating_sub(state.horizon_started_utc_ms)
+            / 3_600_000;
+        return if hours >= 48 && hours % 24 == 0 {
+            format!("最近 {} 天", hours / 24)
+        } else {
+            format!("最近 {hours} 小时")
+        };
+    };
+    let date = |timestamp: i64| {
+        Local
+            .timestamp_millis_opt(timestamp)
+            .single()
+            .map(|d| d.date_naive())
+    };
+    let (Some(date), Some(today)) = (date(day), date(now)) else {
+        return "时间不可用".to_owned();
+    };
+    let name = if date == today {
+        "今天 · "
+    } else if today.pred_opt() == Some(date) {
+        "昨天 · "
+    } else {
+        ""
+    };
+    let weekday = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
+        [date.weekday().num_days_from_monday() as usize];
+    let format = if date.year() == today.year() {
+        "%-m月%-d日"
+    } else {
+        "%Y年%-m月%-d日"
+    };
+    let label = format!("{name}{} {weekday}", date.format(format));
+    if whole_day(state) {
+        return label;
+    }
+    let end_ms = chosen_end(state);
+    let end = if timeline_view::selected_day_bounds(day, 0).map(|(_, end)| end) == Some(end_ms) {
+        "24:00".to_owned()
+    } else {
+        local_label(end_ms, "%H:%M")
+    };
+    format!(
+        "{label} · {}–{end}",
+        local_label(state.range_started_utc_ms, "%H:%M")
+    )
+}
+
 pub fn render(window: &AppWindow, state: &Rc<RefCell<UiState>>, snapshot: &TimelineSnapshot) {
     let state = state.borrow();
     let anchor = state
         .calendar_day
         .unwrap_or(snapshot.range_ended_utc_ms.saturating_sub(1));
+    let now = unix_time_ms();
     let now_date = Local::now().date_naive();
-    window.set_previous_year(
-        Local
-            .timestamp_millis_opt(anchor)
-            .single()
-            .filter(|date| date.year() != now_date.year())
-            .map(|date| date.year().to_string())
-            .unwrap_or_default()
-            .into(),
-    );
-    window.set_date_title(local_label(anchor, "%-m月%-d日").into());
     window.set_calendar_date(local_label(anchor, "%Y-%m-%d").into());
-    let weekdays = [
-        "星期一",
-        "星期二",
-        "星期三",
-        "星期四",
-        "星期五",
-        "星期六",
-        "星期日",
-    ];
-    window.set_weekday_title(
-        Local
-            .timestamp_millis_opt(anchor)
-            .single()
-            .map(|d| weekdays[d.weekday().num_days_from_monday() as usize])
-            .unwrap_or("")
-            .into(),
+    window.set_range_title(range_title(&state, now).into());
+    window.set_range_origin(
+        state
+            .origin
+            .as_ref()
+            .map_or_else(Default::default, |origin| origin.label.as_str().into()),
     );
+    window.set_today_ymd(ymd(now));
+    window.set_selected_ymd(state.calendar_day.map_or(0, ymd));
     window.set_can_next_day(
         Local
             .timestamp_millis_opt(anchor)
             .single()
             .is_some_and(|d| d.date_naive() < now_date),
     );
+    // Only the whole of today counts; part of it leaves "today" to choose.
     window.set_is_today(
-        state.calendar_day.is_some()
+        whole_day(&state)
             && Local
                 .timestamp_millis_opt(anchor)
                 .single()
                 .is_some_and(|d| d.date_naive() == now_date),
-    );
-    let same_day = local_label(snapshot.range_started_utc_ms, "%Y-%m-%d")
-        == local_label(snapshot.range_ended_utc_ms.saturating_sub(1), "%Y-%m-%d");
-    let time_format = if same_day { "%H:%M" } else { "%-m/%-d %H:%M" };
-    window.set_multiple_days(!same_day);
-    window.set_range_time(
-        format!(
-            "{}–{}",
-            local_label(snapshot.range_started_utc_ms, time_format),
-            if same_day && local_label(snapshot.range_ended_utc_ms, "%H:%M") == "00:00" {
-                "24:00".to_owned()
-            } else {
-                local_label(snapshot.range_ended_utc_ms, time_format)
-            }
-        )
-        .into(),
     );
     window.set_has_gaps(!snapshot.monitoring_gaps.is_empty());
     let gap_count = snapshot
@@ -325,13 +423,29 @@ pub fn render(window: &AppWindow, state: &Rc<RefCell<UiState>>, snapshot: &Timel
     );
 }
 
-/// What the application totals cover: all records since the first, or today.
-pub fn apps_range_label(snapshot: &TimelineSnapshot, range_start: i64, today: bool) -> String {
-    if today {
+/// What the application totals cover: all records since the first, or the
+/// chosen range.
+pub fn apps_range_label(snapshot: &TimelineSnapshot, range_start: i64, all: bool) -> String {
+    if !all {
+        let same_day = local_label(range_start, "%Y-%m-%d")
+            == local_label(snapshot.range_ended_utc_ms.saturating_sub(1), "%Y-%m-%d");
+        let format = if same_day {
+            "%H:%M"
+        } else {
+            "%-m月%-d日 %H:%M"
+        };
         format!(
-            "今天 {}–{}",
-            local_label(range_start, "%H:%M"),
-            local_label(snapshot.range_ended_utc_ms, "%H:%M")
+            "{}{}–{}",
+            if same_day {
+                local_label(range_start, "%-m月%-d日 ")
+            } else {
+                String::new()
+            },
+            local_label(range_start, format),
+            match local_label(snapshot.range_ended_utc_ms, format) {
+                end if same_day && end == "00:00" => "24:00".to_owned(),
+                end => end,
+            }
         )
     } else if snapshot.applications.is_empty() {
         "全部记录".to_owned()
@@ -379,10 +493,13 @@ mod tests {
             monitoring_gaps: Vec::new(),
         };
         assert_eq!(
-            apps_range_label(&snapshot, start, false),
+            apps_range_label(&snapshot, start, true),
             "全部记录 · 2026年9月5日起"
         );
-        assert_eq!(apps_range_label(&snapshot, start, true), "今天 12:00–12:01");
+        assert_eq!(
+            apps_range_label(&snapshot, start, false),
+            "9月5日 12:00–12:01"
+        );
         assert_eq!(snapshot.range_started_utc_ms, 1);
     }
 
@@ -411,5 +528,39 @@ mod tests {
             local_time_range(anchor, "09:00", "24:00", now).unwrap().1,
             now
         );
+    }
+
+    #[test]
+    fn range_titles_name_days_their_hours_and_recent_stretches() {
+        let at = |day: u32, hour: u32| {
+            Local
+                .with_ymd_and_hms(2026, 9, day, hour, 0, 0)
+                .earliest()
+                .unwrap()
+                .timestamp_millis()
+        };
+        let now = at(10, 9);
+        let mut state = state_for_day(now, 0).unwrap();
+        assert_eq!(ymd(now), 20260910);
+        assert_eq!(range_title(&state, now), "今天 · 9月10日 周四");
+        state = state_for_day(now, -1).unwrap();
+        assert_eq!(range_title(&state, now), "昨天 · 9月9日 周三");
+        let (start, end) = local_time_range(at(5, 12), "09:00", "24:00", now).unwrap();
+        state = state_for_day(at(5, 12), 0).unwrap();
+        state.range_started_utc_ms = start;
+        state.horizon_ended_utc_ms = end;
+        assert_eq!(range_title(&state, now), "9月5日 周六 · 09:00–24:00");
+        // An entry picked on the timeline, or a summary's span, within the day.
+        state.range_started_utc_ms = at(5, 9);
+        state.range_ended_utc_ms = at(5, 10);
+        state.follow_now = false;
+        assert_eq!(range_title(&state, now), "9月5日 周六 · 09:00–10:00");
+        assert!(!whole_day(&state));
+        state = state_for_day(now, 0).unwrap();
+        assert!(whole_day(&state));
+        state.range_started_utc_ms = at(10, 8);
+        assert!(!whole_day(&state));
+        assert_eq!(range_title(&UiState::recent_hours(168), now), "最近 7 天");
+        assert_eq!(range_title(&UiState::recent_hours(24), now), "最近 24 小时");
     }
 }

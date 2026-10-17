@@ -5,7 +5,9 @@ export struct AppRow { identity: string, original-index: int, name: string, summ
 export struct WindowRow { identity: string, label: string, summary: string, focused: string }
 export struct SegmentRow { offset: float, width: float, kind: int, tint: color }
 // `thumb` stays empty until the row scrolls into view; `checked` marks it for deletion.
-export struct SnapshotRow { identity: string, time: string, display: string, result: string, success: bool, thumb: image, checked: bool }
+// `note` says why a stretch has no image; `badge` names the display when
+// several are captured.
+export struct SnapshotRow { identity: string, time: string, display: string, result: string, success: bool, thumb: image, checked: bool, note: string, badge: string }
 export struct ReportAppRow { name: string, summary: string, focused: string, icon: image, tint: color, ratio: float }
 
 // The home history. `kind`: 0 day header, 1 morning/afternoon label, 2 activity,
@@ -25,4 +27,9 @@ export struct HistoryItem {
 // Where each day's rows start and end in the list, for the sticky day header.
 export struct DayAnchor { title: string, subtitle: string, duration: string, apps: string, shares: [ShareSlice], top: length, bottom: length }
 // An application used during the selected activity, with its own times there.
-export struct Participant { name: string, icon: image, tint: color, role: string, focused: string, visible: string, background: string, segments: [SegmentRow] }
+// `lookup` splits the activity into equal steps, each the index of the segment
+// there or -1; `start-minute` is the activity's local start in minutes after
+// midnight and `span-minutes` its length, so a point on the bar reads as a time.
+// From `shift-at` (a share of the bar) on, the clock reads `shift-minutes`
+// later, as when daylight saving time starts or ends during the activity.
+export struct Participant { name: string, icon: image, tint: color, role: string, focused: string, visible: string, background: string, segments: [SegmentRow], lookup: [int], start-minute: float, span-minutes: float, shift-at: float, shift-minutes: float }
