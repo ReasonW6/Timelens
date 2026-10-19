@@ -329,8 +329,10 @@ fn openai_thinking(body: &mut Value, profile: &ProviderProfile, host: &str, offi
         if !on {
             // Each model stops at its lowest level: `minimal` on gpt-5, `none` on
             // the gpt-5.x line and GPT-6 Sol and Luna, and `low`, which every
-            // other reasoning model takes.
+            // other reasoning model takes, Codex models included.
+            let codex = id.split('-').any(|segment| segment == "codex");
             body["reasoning_effort"] = json!(match generation {
+                _ if codex => "low",
                 Some(5) if id.starts_with("gpt-5.") => "none",
                 Some(6) if id.starts_with("gpt-6-sol") || id.starts_with("gpt-6-luna") => "none",
                 Some(5) => "minimal",
@@ -355,6 +357,8 @@ fn openai_thinking(body: &mut Value, profile: &ProviderProfile, host: &str, offi
         let always = id.starts_with("qwq")
             || id.starts_with("deepseek-r1")
             || id.starts_with("glm-5.3")
+            || id.starts_with("qwen3.7-max")
+            || id.starts_with("qwen3.8-2.4t")
             || id.split('-').any(|segment| segment == "thinking");
         if on || !always {
             body["enable_thinking"] = json!(on);
@@ -838,6 +842,8 @@ mod tests {
             Some(false),
         );
         assert_eq!(regional["reasoning_effort"], "none");
+        let codex = body(Protocol::OpenAi, openai, "gpt-5.3-codex", Some(false));
+        assert_eq!(codex["reasoning_effort"], "low");
         let astra = body(Protocol::OpenAi, openai, "gpt-6-astra", Some(false));
         assert_eq!(astra["reasoning_effort"], "low");
         assert_eq!(regional["max_completion_tokens"], 8192);
@@ -884,6 +890,13 @@ mod tests {
             Some(false),
         );
         assert!(glm.get("enable_thinking").is_none());
+        let qwen = body(
+            Protocol::OpenAi,
+            "https://dashscope.aliyuncs.com/compatible-mode/v1",
+            "qwen3.7-max-preview",
+            Some(false),
+        );
+        assert!(qwen.get("enable_thinking").is_none());
         let silicon = body(
             Protocol::OpenAi,
             "https://api.siliconflow.cn/v1",
