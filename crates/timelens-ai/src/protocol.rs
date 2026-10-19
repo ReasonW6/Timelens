@@ -79,7 +79,7 @@ pub fn build_request(request: &WorkerRequest) -> Result<HttpRequest, String> {
     let max_output = profile
         .parameters
         .max_output_tokens
-        .unwrap_or(4096)
+        .unwrap_or(DEFAULT_MAX_OUTPUT_TOKENS)
         .min(profile.model.context_tokens / 2);
     let mut body = match profile.protocol {
         Protocol::OpenAi => {
@@ -278,6 +278,8 @@ pub fn parse_models(protocol: Protocol, value: &Value) -> Vec<Model> {
                 .and_then(|v| u32::try_from(v).ok())
             {
                 model.context_tokens = n.clamp(1024, 4_000_000);
+            } else if let Some((context, _)) = known_limits(id) {
+                model.context_tokens = context;
             }
             for (key, capability) in [
                 ("vision", &mut model.vision),
@@ -694,6 +696,16 @@ mod tests {
             gemini["generationConfig"]["thinkingConfig"]["thinkingBudget"],
             0
         );
+    }
+    #[test]
+    fn catalog_fills_context_only_where_the_provider_is_silent() {
+        let models = parse_models(
+            Protocol::OpenAi,
+            &json!({"data":[{"id":"deepseek-flash"},{"id":"gpt-4o","context_length":64000},{"id":"custom"}]}),
+        );
+        assert_eq!(models[0].context_tokens, 1_000_000);
+        assert_eq!(models[1].context_tokens, 64_000);
+        assert_eq!(models[2].context_tokens, 32_768);
     }
     #[test]
     fn credentials_never_survive_error_rendering() {

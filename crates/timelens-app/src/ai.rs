@@ -427,7 +427,7 @@ fn job_request(
         let limit = profile
             .parameters
             .max_output_tokens
-            .unwrap_or(4096)
+            .unwrap_or(DEFAULT_MAX_OUTPUT_TOKENS)
             .min(profile.model.context_tokens / 2);
         if answer.reasoning.trim().is_empty() {
             bail!("提供商没有返回正文");
@@ -483,7 +483,7 @@ fn run_job(
                         .provider
                         .parameters
                         .max_output_tokens
-                        .unwrap_or(4096)
+                        .unwrap_or(DEFAULT_MAX_OUTPUT_TOKENS)
                         .min(job.spec.provider.model.context_tokens / 2)
                         as usize,
                 )
@@ -599,7 +599,7 @@ fn run_job(
                     .provider
                     .parameters
                     .max_output_tokens
-                    .unwrap_or(4096) as usize;
+                    .unwrap_or(DEFAULT_MAX_OUTPUT_TOKENS) as usize;
             let plan = plan_context(
                 &messages,
                 context_window,
@@ -677,7 +677,7 @@ fn run_job(
                         .provider
                         .parameters
                         .max_output_tokens
-                        .unwrap_or(4096)
+                        .unwrap_or(DEFAULT_MAX_OUTPUT_TOKENS)
                         .min(context_window / 2) as usize
             {
                 bail!("当前问题或数据超过模型上下文，请缩短问题或选择更大上下文模型");

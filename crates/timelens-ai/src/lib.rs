@@ -13,6 +13,22 @@ use std::collections::BTreeMap;
 pub const WORKER_PROTOCOL: u32 = 1;
 pub const MAX_FRAME_BYTES: usize = 32 * 1024 * 1024;
 pub const MAX_OUTPUT_BYTES: usize = 16 * 1024 * 1024;
+/// The output limit a connection starts with; roomy enough for a summary after
+/// a thinking model's reasoning, which counts against the same limit.
+pub const DEFAULT_MAX_OUTPUT_TOKENS: u32 = 8192;
+
+/// The context window and a default output limit for catalog models whose
+/// providers do not report them.
+pub fn known_limits(id: &str) -> Option<(u32, u32)> {
+    Some(match id {
+        "deepseek-flash" | "deepseek-v4-flash" | "deepseek-v4-pro" => (1_000_000, 32_768),
+        "gpt-4o" | "gpt-4o-mini" => (128_000, 16_384),
+        "gpt-4.1" | "gpt-4.1-mini" => (1_047_576, 32_768),
+        "gemini-2.5-pro" | "gemini-2.5-flash" => (1_048_576, 32_768),
+        "claude-sonnet-4-20250514" => (200_000, 32_000),
+        _ => return None,
+    })
+}
 pub const DEFAULT_PROMPT: &str = "你是 Timelens 的使用情况分析助手。仅依据提供的结构化事实回答。说明时间范围、覆盖率和缺失；区分显示中、聚焦中、后台，重叠时长不能相加为一天总长。不要推断应用中的具体内容、用户意图或未观测的活动。先给出简洁总结，再列出主要应用、时段趋势和可选建议。建议与事实分开。用 {{language}} 回答，范围 {{range}}，覆盖率 {{coverage}}。";
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]

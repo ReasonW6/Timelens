@@ -570,7 +570,12 @@ impl Storage {
         prompt: &PromptPreset,
     ) -> Result<Vec<AiEnvelope>> {
         let budget = (profile.model.context_tokens as usize)
-            .saturating_sub(profile.parameters.max_output_tokens.unwrap_or(4096) as usize)
+            .saturating_sub(
+                profile
+                    .parameters
+                    .max_output_tokens
+                    .unwrap_or(timelens_ai::DEFAULT_MAX_OUTPUT_TOKENS) as usize,
+            )
             .saturating_sub(timelens_ai::context::estimated_tokens(
                 &prompt.render(envelope),
             ))

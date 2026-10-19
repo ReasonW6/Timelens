@@ -433,14 +433,23 @@ pub fn install(
                                   d: &mut UiData,
                                   _: &Store,
                                   i: i32| {
-        let m = d
+        let mut m = d
             .profile
             .models
             .get(i as usize)
             .cloned()
             .ok_or_else(|| anyhow!("请选择模型"))?;
+        // Lists fetched before the catalog knew a model still carry the fallback size.
+        let known = known_limits(&m.id);
+        if let Some((context, _)) = known {
+            m.context_tokens = context;
+        }
         d.profile.model = m;
         show_model(w, &d.profile.model);
+        if let Some((_, output)) = known {
+            w.global::<AiState>()
+                .set_max_output(output.to_string().into());
+        }
         w.global::<AiState>().set_model_index(i);
         Ok(())
     });
@@ -1670,7 +1679,8 @@ fn show_profile(w: &AppWindow, d: &UiData) {
     g.set_max_output(
         p.parameters
             .max_output_tokens
-            .map_or("4096".into(), |v| v.to_string())
+            .unwrap_or(DEFAULT_MAX_OUTPUT_TOKENS)
+            .to_string()
             .into(),
     );
     g.set_temperature(

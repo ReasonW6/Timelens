@@ -15,4 +15,5 @@ Blocked by: 09
 - **允许附带快照**：开关。从模型列表选择时按提供商元数据或内置目录给出初值，用户可改；关闭时手动总结不能附带快照，开启后若模型不能看图，由服务商直接报错。快照仍逐次授权，定时总结仍不带快照。
 - **深度思考**：跟随模型 / 开启 / 关闭，开启时可选强度（默认、低、中、高）。跟随模型不发送任何思考参数。开启或关闭时，适配器按服务地址所属家族发送其文档化的类型化参数：OpenAI 官方与 Azure 用 `reasoning_effort`（关闭为 `none`）；OpenRouter 用 `reasoning`；硅基流动与 DashScope 用 `enable_thinking`（强度换成 `thinking_budget`）；Anthropic 用 `thinking.budget_tokens`（须给正文留出至少 1024 Token，开启时不发送温度）；Gemini 用 `thinkingConfig`；其余 OpenAI 兼容服务（DeepSeek、Kimi、GLM、豆包等）用 `thinking.type` 与 `reasoning_effort`。仍不开放原始 JSON 注入。
 - **工具调用**：Timelens 没有向模型提供任何工具，移除该项。将来如需让模型按需查询本机统计，另开票据决定工具范围及其与“发送前列出全部内容”的关系。
+- 新连接的最大输出默认 8192 Token。提供商未返回上下文大小时，内置目录为已知模型补上上下文窗口（如 DeepSeek `deepseek-flash` 为 1M）；从列表选中这些模型时同时填入较宽裕的最大输出（如 32768），用户仍可修改。
 - 思考把正文挤空时，任务失败并说明“思考用完了最大输出”，提示调高最大输出或关闭深度思考，不再显示为数据库完整性错误。
