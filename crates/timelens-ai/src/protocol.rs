@@ -103,7 +103,9 @@ pub fn build_request(request: &WorkerRequest) -> Result<HttpRequest, String> {
             let mut body = json!({"model":profile.model.id,"messages":wire,"stream":true,"stream_options":{"include_usage":true},"store":false});
             let host = url.host_str().unwrap_or("");
             // OpenAI's own reasoning models refuse max_tokens; others expect it.
-            let official = profile.azure || host == "api.openai.com";
+            // Regional endpoints such as eu.api.openai.com are official too.
+            let official =
+                profile.azure || host == "api.openai.com" || host.ends_with(".api.openai.com");
             let key = if official {
                 "max_completion_tokens"
             } else {
@@ -198,7 +200,13 @@ pub fn build_request(request: &WorkerRequest) -> Result<HttpRequest, String> {
                             _ => "high",
                         })
                 } else {
-                    Some(if pro { "low" } else { "minimal" })
+                    // Only the original 3 Flash goes down to `minimal`; `low` is
+                    // the floor every other Gemini 3 model accepts.
+                    Some(if id.starts_with("gemini-3-flash") {
+                        "minimal"
+                    } else {
+                        "low"
+                    })
                 };
                 let config = &mut body["generationConfig"]["thinkingConfig"];
                 *config = json!({"includeThoughts":on});
@@ -265,7 +273,16 @@ fn openai_thinking(body: &mut Value, profile: &ProviderProfile, host: &str, offi
         // Only reasoning models take the field; chat models reject it.
         let id = profile.model.id.trim_start_matches("openai/");
         let o_series = id.starts_with('o') && id[1..].starts_with(|c: char| c.is_ascii_digit());
-        let gpt5 = id.starts_with("gpt-5");
+        // GPT-5 and every later generation reason.
+        let generation = id
+            .strip_prefix("gpt-")
+            .map(|rest| {
+                rest.split(|c: char| !c.is_ascii_digit())
+                    .next()
+                    .unwrap_or("")
+            })
+            .and_then(|major| major.parse::<u32>().ok());
+        let gpt5 = generation.is_some_and(|major| major >= 5);
         let reasoning = o_series
             || gpt5
             || profile.model.supports_reasoning_effort
@@ -288,13 +305,14 @@ fn openai_thinking(body: &mut Value, profile: &ProviderProfile, host: &str, offi
         }
         if !on {
             // `none` arrived with gpt-5.1; earlier models stop at their lowest level.
-            body["reasoning_effort"] = json!(if id.starts_with("gpt-5.") {
-                "none"
-            } else if gpt5 {
-                "minimal"
-            } else {
-                "low"
-            });
+            body["reasoning_effort"] =
+                json!(if generation == Some(5) && !id.starts_with("gpt-5.") {
+                    "minimal"
+                } else if gpt5 {
+                    "none"
+                } else {
+                    "low"
+                });
         } else {
             // gpt-5.1 and later default to `none`, so switching on needs a level.
             body["reasoning_effort"] = json!(effort.unwrap_or(ReasoningEffort::Medium));
@@ -777,6 +795,14 @@ mod tests {
         assert!(gpt51.get("thinking").is_none());
         let gpt5 = body(Protocol::OpenAi, openai, "gpt-5-mini", Some(false));
         assert_eq!(gpt5["reasoning_effort"], "minimal");
+        let regional = body(
+            Protocol::OpenAi,
+            "https://eu.api.openai.com/v1",
+            "gpt-6-sol",
+            Some(false),
+        );
+        assert_eq!(regional["reasoning_effort"], "none");
+        assert_eq!(regional["max_completion_tokens"], 8192);
         let o3 = body(Protocol::OpenAi, openai, "o3", Some(false));
         assert_eq!(o3["reasoning_effort"], "low");
         let chat = body(Protocol::OpenAi, openai, "gpt-4o", Some(false));
@@ -870,6 +896,11 @@ mod tests {
         assert_eq!(
             encode(high)["generationConfig"]["thinkingConfig"]["thinkingBudget"],
             7168
+        );
+        let flash38 = body(Protocol::Gemini, gemini, "gemini-3.8-flash", Some(false));
+        assert_eq!(
+            flash38["generationConfig"]["thinkingConfig"]["thinkingLevel"],
+            "low"
         );
         let pro3 = body(
             Protocol::Gemini,

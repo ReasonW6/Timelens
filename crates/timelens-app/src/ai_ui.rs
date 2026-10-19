@@ -447,11 +447,14 @@ pub fn install(
         {
             m.context_tokens = context;
         }
-        if let Some((_, output)) = known {
-            let output = output.min(m.context_tokens / 2);
-            w.global::<AiState>()
-                .set_max_output(output.to_string().into());
-        }
+        // Keep the output below the new context even for uncatalogued models.
+        let state = w.global::<AiState>();
+        let output = known
+            .map(|(_, output)| output)
+            .or_else(|| state.get_max_output().trim().parse().ok())
+            .unwrap_or(DEFAULT_MAX_OUTPUT_TOKENS)
+            .min(m.context_tokens / 2);
+        state.set_max_output(output.to_string().into());
         d.profile.model = m;
         show_model(w, &d.profile.model);
         w.global::<AiState>().set_model_index(i);
