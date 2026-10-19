@@ -104,10 +104,18 @@ fn main() -> Result<()> {
         local_config::delete_pointer(&control)?;
         return Ok(());
     }
+    #[cfg(debug_assertions)]
+    let qa_headless = qa::start_headless(options.data_directory.as_deref())?;
+    #[cfg(not(debug_assertions))]
+    let qa_headless = false;
     let waiting_since = std::time::Instant::now();
     let _instance = loop {
+        // A headless QA run leaves the singleton to the installed core.
+        if qa_headless {
+            break None;
+        }
         match SingleInstanceGuard::acquire_core() {
-            Ok(instance) => break instance,
+            Ok(instance) => break Some(instance),
             Err(_) if options.recover && waiting_since.elapsed() < Duration::from_secs(30) => {
                 thread::sleep(Duration::from_millis(100));
             }
@@ -176,7 +184,12 @@ fn main() -> Result<()> {
             Err(error) => eprintln!("collector task {task} could not be read: {error}"),
         }
     }
-    let pipe_name = options.pipe_name.unwrap_or(current_pipe_name()?);
+    let pipe_name = match options.pipe_name {
+        Some(name) => name,
+        // Its own pipe keeps the installed core's collector away from QA data.
+        None if qa_headless => format!(r"\\.\pipe\Timelens.qa.{}", std::process::id()),
+        None => current_pipe_name()?,
+    };
 
     if options.handshake_once {
         let report = run_server_probe(&pipe_name, COLLECTOR_NAMES)?;
@@ -568,7 +581,15 @@ fn run_window(
         Rc::clone(&ui_state),
         Rc::clone(&snapshot_ui_state),
     );
-    let _tray_timer = tray::install(&window, Arc::clone(&storage), control_directory.clone())?;
+    #[cfg(debug_assertions)]
+    let tray_wanted = !qa::headless();
+    #[cfg(not(debug_assertions))]
+    let tray_wanted = true;
+    // Headless QA shows no tray icon, and its tray window would answer for the
+    // installed core.
+    let _tray_timer = tray_wanted
+        .then(|| tray::install(&window, Arc::clone(&storage), control_directory.clone()))
+        .transpose()?;
     let _general_timer = general_ui::install(&window, collector_task);
     let _collection_timer =
         collection_ui::install(&window, Arc::clone(&storage), Rc::clone(&ui_state))?;
