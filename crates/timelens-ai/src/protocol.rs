@@ -110,13 +110,7 @@ pub fn build_request(request: &WorkerRequest) -> Result<HttpRequest, String> {
                 "max_tokens"
             };
             body[key] = json!(max_output);
-            openai_thinking(
-                &mut body,
-                &profile.parameters,
-                &profile.model.id,
-                host,
-                official,
-            );
+            openai_thinking(&mut body, profile, host, official);
             body
         }
         Protocol::Anthropic => {
@@ -183,11 +177,19 @@ pub fn build_request(request: &WorkerRequest) -> Result<HttpRequest, String> {
             let mut body = json!({"systemInstruction":{"parts":[{"text":system}]},"contents":wire,"generationConfig":{"maxOutputTokens":max_output}});
             if let Some(on) = profile.parameters.thinking {
                 body["generationConfig"]["thinkingConfig"] = if on {
-                    // -1 lets the model size its own thinking.
-                    let budget = profile
-                        .parameters
-                        .reasoning_effort
-                        .map_or(-1, |e| i64::from(thinking_budget(Some(e))));
+                    // -1 lets the model size its own thinking; a fixed budget counts
+                    // against maxOutputTokens and must leave room to answer.
+                    let budget = match profile.parameters.reasoning_effort {
+                        None => -1,
+                        Some(effort) => {
+                            let budget =
+                                thinking_budget(Some(effort)).min(max_output.saturating_sub(1024));
+                            if budget < 1024 {
+                                return Err("开启思考时最大输出至少要 2048 Token".into());
+                            }
+                            i64::from(budget)
+                        }
+                    };
                     json!({"includeThoughts":true,"thinkingBudget":budget})
                 } else if profile.model.id.contains("-pro") {
                     // Pro models cannot stop thinking; 128 is their smallest budget.
@@ -223,23 +225,26 @@ pub fn build_request(request: &WorkerRequest) -> Result<HttpRequest, String> {
 
 /// OpenAI-compatible services each spell deep thinking their own way. Only the
 /// typed parameter of the endpoint's family is sent; following the model sends none.
-fn openai_thinking(
-    body: &mut Value,
-    parameters: &Parameters,
-    model: &str,
-    host: &str,
-    official: bool,
-) {
+fn openai_thinking(body: &mut Value, profile: &ProviderProfile, host: &str, official: bool) {
+    let parameters = &profile.parameters;
     let Some(on) = parameters.thinking else {
         return;
     };
     let effort = parameters.reasoning_effort.filter(|_| on);
     if official {
-        // Only reasoning models take the field; chat models reject it.
-        let id = model.trim_start_matches("openai/");
+        // Only reasoning models take the field; chat models reject it. Azure
+        // deployment names are arbitrary, so an unfamiliar one counts as reasoning.
+        let id = profile.model.id.trim_start_matches("openai/");
         let o_series = id.starts_with('o') && id[1..].starts_with(|c: char| c.is_ascii_digit());
         let gpt5 = id.starts_with("gpt-5");
-        if !o_series && !gpt5 {
+        let chat = id.starts_with("gpt-4") || id.starts_with("gpt-3");
+        let reasoning = o_series
+            || gpt5
+            || profile.model.supports_reasoning_effort
+            || profile.model.reasoning == Capability::Supported
+            || (profile.azure && !chat);
+        // gpt-5-pro only accepts `high`, its default.
+        if !reasoning || id.starts_with("gpt-5-pro") {
             return;
         }
         if !on {
@@ -251,8 +256,9 @@ fn openai_thinking(
             } else {
                 "low"
             });
-        } else if let Some(effort) = effort {
-            body["reasoning_effort"] = json!(effort);
+        } else {
+            // gpt-5.1 and later default to `none`, so switching on needs a level.
+            body["reasoning_effort"] = json!(effort.unwrap_or(ReasoningEffort::Medium));
         }
     } else if host == "openrouter.ai" {
         body["reasoning"] = match effort {
@@ -685,7 +691,7 @@ mod tests {
     }
     #[test]
     fn thinking_switch_uses_each_provider_family_spelling() {
-        let body = |protocol: Protocol, url: &str, model: &str, thinking: Option<bool>| {
+        let profile = |protocol: Protocol, url: &str, model: &str, thinking: Option<bool>| {
             let mut profile = ProviderProfile::preset(0, "test".into());
             profile.protocol = protocol;
             profile.base_url = url.into();
@@ -693,6 +699,9 @@ mod tests {
             profile.parameters.max_output_tokens = Some(8192);
             profile.parameters.thinking = thinking;
             profile.parameters.reasoning_effort = Some(ReasoningEffort::Low);
+            profile
+        };
+        let encode = |profile: ProviderProfile| {
             let request = WorkerRequest {
                 version: 1,
                 profile,
@@ -707,6 +716,9 @@ mod tests {
             };
             serde_json::from_slice::<Value>(&build_request(&request).unwrap().body.unwrap())
                 .unwrap()
+        };
+        let body = |protocol: Protocol, url: &str, model: &str, thinking: Option<bool>| {
+            encode(profile(protocol, url, model, thinking))
         };
         let deepseek = "https://api.deepseek.com/v1";
         let followed = body(Protocol::OpenAi, deepseek, "m", None);
@@ -729,6 +741,19 @@ mod tests {
         assert_eq!(o3["reasoning_effort"], "low");
         let chat = body(Protocol::OpenAi, openai, "gpt-4o", Some(false));
         assert!(chat.get("reasoning_effort").is_none());
+        let pro = body(Protocol::OpenAi, openai, "gpt-5-pro", Some(false));
+        assert!(pro.get("reasoning_effort").is_none());
+        let mut default_on = profile(Protocol::OpenAi, openai, "gpt-5.1", Some(true));
+        default_on.parameters.reasoning_effort = None;
+        assert_eq!(encode(default_on)["reasoning_effort"], "medium");
+        let mut alias = profile(
+            Protocol::OpenAi,
+            "https://example.openai.azure.com/openai/v1",
+            "production-reasoner",
+            Some(true),
+        );
+        alias.azure = true;
+        assert_eq!(encode(alias)["reasoning_effort"], "low");
         let silicon = body(
             Protocol::OpenAi,
             "https://api.siliconflow.cn/v1",
@@ -776,6 +801,12 @@ mod tests {
         assert_eq!(
             pro["generationConfig"]["thinkingConfig"]["thinkingBudget"],
             128
+        );
+        let mut high = profile(Protocol::Gemini, gemini, "gemini-2.5-flash", Some(true));
+        high.parameters.reasoning_effort = Some(ReasoningEffort::High);
+        assert_eq!(
+            encode(high)["generationConfig"]["thinkingConfig"]["thinkingBudget"],
+            7168
         );
     }
     #[test]

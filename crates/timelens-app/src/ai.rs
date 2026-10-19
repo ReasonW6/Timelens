@@ -599,7 +599,8 @@ fn run_job(
                     .provider
                     .parameters
                     .max_output_tokens
-                    .unwrap_or(DEFAULT_MAX_OUTPUT_TOKENS) as usize;
+                    .unwrap_or(DEFAULT_MAX_OUTPUT_TOKENS)
+                    .min(context_window / 2) as usize;
             let plan = plan_context(
                 &messages,
                 context_window,
@@ -634,7 +635,8 @@ fn run_job(
                     },
                     |_| Ok(()),
                 ) {
-                    Ok(answer) => {
+                    // A summary left empty by thinking would silently drop those turns.
+                    Ok(answer) if !answer.text.trim().is_empty() => {
                         usage.add(&answer.usage);
                         system.push_str(&format!("\n早期对话摘要：\n{}", answer.text));
                         if let Some(through) = indexes
@@ -651,7 +653,7 @@ fn run_job(
                             )?;
                         }
                     }
-                    Err(_) => {
+                    _ => {
                         let _ = events.send(AiEvent::Status(
                             "压缩失败；本次仅发送可容纳的最近完整用户对话，较早内容未发送".into(),
                         ));
