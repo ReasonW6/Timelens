@@ -439,17 +439,21 @@ pub fn install(
             .get(i as usize)
             .cloned()
             .ok_or_else(|| anyhow!("请选择模型"))?;
-        // Lists fetched before the catalog knew a model still carry the fallback size.
+        // Lists fetched before the catalog knew a model still carry the fallback
+        // size; a size the provider reported wins over the catalog.
         let known = known_limits(&m.id);
-        if let Some((context, _)) = known {
+        if let Some((context, _)) = known
+            && m.context_tokens == Model::unknown("").context_tokens
+        {
             m.context_tokens = context;
         }
-        d.profile.model = m;
-        show_model(w, &d.profile.model);
         if let Some((_, output)) = known {
+            let output = output.min(m.context_tokens / 2);
             w.global::<AiState>()
                 .set_max_output(output.to_string().into());
         }
+        d.profile.model = m;
+        show_model(w, &d.profile.model);
         w.global::<AiState>().set_model_index(i);
         Ok(())
     });
