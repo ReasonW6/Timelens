@@ -79,7 +79,7 @@ pub fn build_request(request: &WorkerRequest) -> Result<HttpRequest, String> {
     let max_output = profile
         .parameters
         .max_output_tokens
-        .unwrap_or(4096)
+        .unwrap_or(DEFAULT_MAX_OUTPUT_TOKENS)
         .min(profile.model.context_tokens / 2);
     let mut body = match profile.protocol {
         Protocol::OpenAi => {
@@ -101,17 +101,18 @@ pub fn build_request(request: &WorkerRequest) -> Result<HttpRequest, String> {
                 last["content"] = json!(parts);
             }
             let mut body = json!({"model":profile.model.id,"messages":wire,"stream":true,"stream_options":{"include_usage":true},"store":false});
-            let key = if profile.model.supports_reasoning_effort {
+            let host = url.host_str().unwrap_or("");
+            // OpenAI's own reasoning models refuse max_tokens; others expect it.
+            // Regional endpoints such as eu.api.openai.com are official too.
+            let official =
+                profile.azure || host == "api.openai.com" || host.ends_with(".api.openai.com");
+            let key = if official {
                 "max_completion_tokens"
             } else {
                 "max_tokens"
             };
             body[key] = json!(max_output);
-            if profile.model.supports_reasoning_effort
-                && let Some(effort) = profile.parameters.reasoning_effort
-            {
-                body["reasoning_effort"] = json!(effort);
-            }
+            openai_thinking(&mut body, profile, host, official);
             body
         }
         Protocol::Anthropic => {
@@ -129,7 +130,40 @@ pub fn build_request(request: &WorkerRequest) -> Result<HttpRequest, String> {
                 }
                 wire.last_mut().unwrap()["content"] = json!(parts);
             }
-            json!({"model":profile.model.id,"system":system,"messages":wire,"max_tokens":max_output,"stream":true})
+            let mut body = json!({"model":profile.model.id,"system":system,"messages":wire,"max_tokens":max_output,"stream":true});
+            if let Some(on) = profile.parameters.thinking {
+                let effort = profile.parameters.reasoning_effort;
+                if claude_takes_budget(&profile.model.id) {
+                    body["thinking"] = if on {
+                        // The budget counts against max_tokens and must leave room to answer.
+                        let budget = thinking_budget(effort).min(max_output.saturating_sub(1024));
+                        if budget < 1024 {
+                            return Err("开启思考时最大输出至少要 2048 Token".into());
+                        }
+                        json!({"type":"enabled","budget_tokens":budget})
+                    } else {
+                        json!({"type":"disabled"})
+                    };
+                } else if on {
+                    // Claude 4.6 and later reject budgets and size their own thinking.
+                    body["thinking"] = json!({"type":"adaptive","display":"summarized"});
+                    if let Some(effort) = effort {
+                        body["output_config"] = json!({"effort":effort});
+                    }
+                } else {
+                    let id = &profile.model.id;
+                    if claude_always_thinks(id) {
+                        // These cannot stop thinking; low effort keeps it brief.
+                        body["output_config"] = json!({"effort":"low"});
+                    } else if id.contains("sonnet-5-5") {
+                        // Sonnet 5.5 spells its lowest setting this way.
+                        body["thinking"] = json!({"type":"between_tools"});
+                    } else {
+                        body["thinking"] = json!({"type":"disabled"});
+                    }
+                }
+            }
+            body
         }
         Protocol::Gemini => {
             path.push_str("/models/");
@@ -149,10 +183,90 @@ pub fn build_request(request: &WorkerRequest) -> Result<HttpRequest, String> {
                 parts
                     .push(json!({"inlineData":{"mimeType":"image/webp","data":image.webp_base64}}));
             }
-            json!({"systemInstruction":{"parts":[{"text":system}]},"contents":wire,"generationConfig":{"maxOutputTokens":max_output}})
+            let mut body = json!({"systemInstruction":{"parts":[{"text":system}]},"contents":wire,"generationConfig":{"maxOutputTokens":max_output}});
+            let id = profile.model.id.trim_start_matches("models/");
+            let pro = id.split('-').any(|segment| segment == "pro");
+            let generation = id
+                .strip_prefix("gemini-")
+                .and_then(|rest| rest.split(|c: char| !c.is_ascii_digit()).next())
+                .and_then(|major| major.parse::<u32>().ok());
+            if let Some(on) = profile.parameters.thinking
+                && generation.is_some_and(|major| major >= 3)
+            {
+                // Gemini 3 and later take a level instead of a budget and cannot
+                // stop thinking.
+                // Image models only take `minimal` and `high`; the original 3 Pro
+                // has no `medium`.
+                let image = id.split('-').any(|segment| segment == "image");
+                let level = if image {
+                    Some(
+                        if on && profile.parameters.reasoning_effort == Some(ReasoningEffort::High)
+                        {
+                            "high"
+                        } else {
+                            "minimal"
+                        },
+                    )
+                } else if on {
+                    profile
+                        .parameters
+                        .reasoning_effort
+                        .map(|effort| match effort {
+                            ReasoningEffort::Low => "low",
+                            ReasoningEffort::Medium if !id.starts_with("gemini-3-pro") => "medium",
+                            _ => "high",
+                        })
+                } else {
+                    // The original 3 Flash and the Flash-Lite line go down to
+                    // `minimal`; `low` is the floor every other model accepts.
+                    let lite = id.split('-').any(|segment| segment == "lite");
+                    Some(if id.starts_with("gemini-3-flash") || lite {
+                        "minimal"
+                    } else {
+                        "low"
+                    })
+                };
+                let config = &mut body["generationConfig"]["thinkingConfig"];
+                *config = json!({"includeThoughts":on});
+                if let Some(level) = level {
+                    config["thinkingLevel"] = json!(level);
+                }
+            } else if let Some(on) = profile.parameters.thinking {
+                body["generationConfig"]["thinkingConfig"] = if on {
+                    // -1 lets the model size its own thinking; a fixed budget counts
+                    // against maxOutputTokens and must leave room to answer.
+                    let budget = match profile.parameters.reasoning_effort {
+                        None => -1,
+                        Some(effort) => {
+                            let budget =
+                                thinking_budget(Some(effort)).min(max_output.saturating_sub(1024));
+                            if budget < 1024 {
+                                return Err("开启思考时最大输出至少要 2048 Token".into());
+                            }
+                            i64::from(budget)
+                        }
+                    };
+                    json!({"includeThoughts":true,"thinkingBudget":budget})
+                } else if pro {
+                    // Pro models cannot stop thinking; 128 is their smallest budget.
+                    json!({"thinkingBudget":128})
+                } else {
+                    json!({"thinkingBudget":0})
+                };
+            }
+            body
         }
     };
+    // Claude refuses a temperature while it thinks, and OpenAI reasoning models
+    // take one only with reasoning off.
+    let reasoning_on = body
+        .get("reasoning_effort")
+        .is_some_and(|effort| effort != "none");
     if profile.model.supports_temperature
+        && !(profile.protocol == Protocol::Anthropic
+            && (profile.parameters.thinking == Some(true)
+                || claude_always_thinks(&profile.model.id)))
+        && !reasoning_on
         && let Some(temperature) = profile.parameters.temperature
     {
         if profile.protocol == Protocol::Gemini {
@@ -170,6 +284,131 @@ pub fn build_request(request: &WorkerRequest) -> Result<HttpRequest, String> {
         method: "POST",
         body: Some(body),
     })
+}
+
+/// OpenAI-compatible services each spell deep thinking their own way. Only the
+/// typed parameter of the endpoint's family is sent; following the model sends none.
+fn openai_thinking(body: &mut Value, profile: &ProviderProfile, host: &str, official: bool) {
+    let parameters = &profile.parameters;
+    let Some(on) = parameters.thinking else {
+        return;
+    };
+    let effort = parameters.reasoning_effort.filter(|_| on);
+    if official {
+        // Only reasoning models take the field; chat models reject it.
+        let id = profile.model.id.trim_start_matches("openai/");
+        let o_series = id.starts_with('o') && id[1..].starts_with(|c: char| c.is_ascii_digit());
+        // GPT-5 and every later generation reason.
+        let generation = id
+            .strip_prefix("gpt-")
+            .map(|rest| {
+                rest.split(|c: char| !c.is_ascii_digit())
+                    .next()
+                    .unwrap_or("")
+            })
+            .and_then(|major| major.parse::<u32>().ok());
+        let gpt5 = generation.is_some_and(|major| major >= 5);
+        // A known chat family wins over metadata left behind by an earlier model.
+        let chat = id.starts_with("gpt-4") || id.starts_with("gpt-3");
+        let reasoning = o_series
+            || gpt5
+            || (!chat
+                && (profile.model.supports_reasoning_effort
+                    || profile.model.reasoning == Capability::Supported));
+        // gpt-5-pro only accepts `high`, its default.
+        if id.starts_with("gpt-5-pro") {
+            return;
+        }
+        // Later Pro models start at `medium` and cannot be turned down further.
+        if gpt5 && id.split('-').any(|segment| segment == "pro") {
+            if let Some(effort) = effort {
+                body["reasoning_effort"] = json!(match effort {
+                    ReasoningEffort::Low => ReasoningEffort::Medium,
+                    effort => effort,
+                });
+            }
+            return;
+        }
+        if !reasoning {
+            // An Azure deployment name hides its model; a chosen strength is the
+            // user's word that it reasons, anything less is left to the model.
+            if profile.azure
+                && !chat
+                && let Some(effort) = effort
+            {
+                body["reasoning_effort"] = json!(effort);
+            }
+            return;
+        }
+        if !on {
+            // Each model stops at its lowest level: `minimal` on gpt-5, `none` on
+            // the gpt-5.x line and GPT-6 Sol and Luna, and `low`, which every
+            // other reasoning model takes, Codex models included.
+            let codex = id.split('-').any(|segment| segment == "codex");
+            body["reasoning_effort"] = json!(match generation {
+                _ if codex => "low",
+                Some(5) if id.starts_with("gpt-5.") => "none",
+                Some(6) if id.starts_with("gpt-6-sol") || id.starts_with("gpt-6-luna") => "none",
+                Some(5) => "minimal",
+                _ => "low",
+            });
+        } else {
+            // gpt-5.1 and later default to `none`, so switching on needs a level.
+            body["reasoning_effort"] = json!(effort.unwrap_or(ReasoningEffort::Medium));
+        }
+    } else if host == "openrouter.ai" {
+        body["reasoning"] = match effort {
+            Some(effort) => json!({"effort":effort}),
+            None => json!({"enabled":on}),
+        };
+    } else if host.ends_with("siliconflow.cn")
+        || host.ends_with("siliconflow.com")
+        || host.starts_with("dashscope")
+        || host.ends_with(".maas.aliyuncs.com")
+    {
+        // Thinking-only models refuse `false`; off leaves them to their default.
+        let id = profile.model.id.as_str();
+        let always = id.starts_with("qwq")
+            || id.starts_with("deepseek-r1")
+            || id.starts_with("glm-5.3")
+            || id.starts_with("qwen3.7-max")
+            || id.starts_with("qwen3.8-2.4t")
+            || id.split('-').any(|segment| segment == "thinking");
+        if on || !always {
+            body["enable_thinking"] = json!(on);
+        }
+        if effort.is_some() {
+            body["thinking_budget"] = json!(thinking_budget(effort));
+        }
+    } else {
+        // DeepSeek, Kimi, GLM and Doubao share this switch.
+        body["thinking"] = json!({"type":if on {"enabled"} else {"disabled"}});
+        if let Some(effort) = effort {
+            body["reasoning_effort"] = json!(effort);
+        }
+    }
+}
+
+/// Claude models that cannot stop thinking, and so also refuse a temperature.
+fn claude_always_thinks(model: &str) -> bool {
+    model.contains("opus-5-5") || model.contains("fable") || model.contains("mythos")
+}
+
+/// Claude models before 4.6 take a fixed thinking budget; later ones reject it.
+fn claude_takes_budget(model: &str) -> bool {
+    model.starts_with("claude-3")
+        || ["-4-0", "-4-1", "-4-5", "-4-2025"]
+            .iter()
+            .any(|old| model.contains(old))
+}
+
+/// A thinking token budget for providers that take one instead of a level.
+fn thinking_budget(effort: Option<ReasoningEffort>) -> u32 {
+    match effort {
+        Some(ReasoningEffort::Low) => 2048,
+        Some(ReasoningEffort::High) => 24_576,
+        Some(ReasoningEffort::Medium) | None => 8192,
+    }
 }
 
 pub fn parse_models(protocol: Protocol, value: &Value) -> Vec<Model> {
@@ -206,6 +445,8 @@ pub fn parse_models(protocol: Protocol, value: &Value) -> Vec<Model> {
                 .and_then(|v| u32::try_from(v).ok())
             {
                 model.context_tokens = n.clamp(1024, 4_000_000);
+            } else if let Some((context, _)) = known_limits(id) {
+                model.context_tokens = context;
             }
             for (key, capability) in [
                 ("vision", &mut model.vision),
@@ -559,6 +800,274 @@ mod tests {
             });
         }
         assert!(build_request(&request).is_err());
+    }
+    #[test]
+    fn thinking_switch_uses_each_provider_family_spelling() {
+        let profile = |protocol: Protocol, url: &str, model: &str, thinking: Option<bool>| {
+            let mut profile = ProviderProfile::preset(0, "test".into());
+            profile.protocol = protocol;
+            profile.base_url = url.into();
+            profile.model = Model::unknown(model);
+            profile.parameters.max_output_tokens = Some(8192);
+            profile.parameters.thinking = thinking;
+            profile.parameters.reasoning_effort = Some(ReasoningEffort::Low);
+            profile
+        };
+        let encode = |profile: ProviderProfile| {
+            let request = WorkerRequest {
+                version: 1,
+                profile,
+                operation: WorkerOperation::Generate {
+                    system: "s".into(),
+                    messages: vec![ChatMessage {
+                        role: Role::User,
+                        text: "u".into(),
+                    }],
+                    images: vec![],
+                },
+            };
+            serde_json::from_slice::<Value>(&build_request(&request).unwrap().body.unwrap())
+                .unwrap()
+        };
+        let body = |protocol: Protocol, url: &str, model: &str, thinking: Option<bool>| {
+            encode(profile(protocol, url, model, thinking))
+        };
+        let deepseek = "https://api.deepseek.com/v1";
+        let followed = body(Protocol::OpenAi, deepseek, "m", None);
+        assert!(followed.get("thinking").is_none() && followed.get("reasoning_effort").is_none());
+        let off = body(Protocol::OpenAi, deepseek, "m", Some(false));
+        assert_eq!(off["thinking"]["type"], "disabled");
+        assert!(off.get("reasoning_effort").is_none());
+        let on = body(Protocol::OpenAi, deepseek, "m", Some(true));
+        assert_eq!(on["thinking"]["type"], "enabled");
+        assert_eq!(on["reasoning_effort"], "low");
+        assert_eq!(on["max_tokens"], 8192);
+        let openai = "https://api.openai.com/v1";
+        let gpt51 = body(Protocol::OpenAi, openai, "gpt-5.1", Some(false));
+        assert_eq!(gpt51["reasoning_effort"], "none");
+        assert_eq!(gpt51["max_completion_tokens"], 8192);
+        assert!(gpt51.get("thinking").is_none());
+        let gpt5 = body(Protocol::OpenAi, openai, "gpt-5-mini", Some(false));
+        assert_eq!(gpt5["reasoning_effort"], "minimal");
+        let regional = body(
+            Protocol::OpenAi,
+            "https://eu.api.openai.com/v1",
+            "gpt-6-sol",
+            Some(false),
+        );
+        assert_eq!(regional["reasoning_effort"], "none");
+        let codex = body(Protocol::OpenAi, openai, "gpt-5.3-codex", Some(false));
+        assert_eq!(codex["reasoning_effort"], "low");
+        let astra = body(Protocol::OpenAi, openai, "gpt-6-astra", Some(false));
+        assert_eq!(astra["reasoning_effort"], "low");
+        assert_eq!(regional["max_completion_tokens"], 8192);
+        let pro54 = body(Protocol::OpenAi, openai, "gpt-5.4-pro", Some(true));
+        assert_eq!(pro54["reasoning_effort"], "medium");
+        let pro54_off = body(Protocol::OpenAi, openai, "gpt-5.4-pro", Some(false));
+        assert!(pro54_off.get("reasoning_effort").is_none());
+        let mut warm = profile(Protocol::OpenAi, openai, "gpt-5.4", Some(true));
+        warm.model.supports_temperature = true;
+        warm.parameters.temperature = Some(0.3);
+        assert!(encode(warm.clone()).get("temperature").is_none());
+        warm.parameters.thinking = Some(false);
+        assert_eq!(encode(warm)["reasoning_effort"], "none");
+        let o3 = body(Protocol::OpenAi, openai, "o3", Some(false));
+        assert_eq!(o3["reasoning_effort"], "low");
+        let chat = body(Protocol::OpenAi, openai, "gpt-4o", Some(false));
+        assert!(chat.get("reasoning_effort").is_none());
+        let mut stale = profile(Protocol::OpenAi, openai, "gpt-4o", Some(true));
+        stale.model.supports_reasoning_effort = true;
+        assert!(encode(stale).get("reasoning_effort").is_none());
+        let pro = body(Protocol::OpenAi, openai, "gpt-5-pro", Some(false));
+        assert!(pro.get("reasoning_effort").is_none());
+        let mut default_on = profile(Protocol::OpenAi, openai, "gpt-5.1", Some(true));
+        default_on.parameters.reasoning_effort = None;
+        assert_eq!(encode(default_on)["reasoning_effort"], "medium");
+        let mut alias = profile(
+            Protocol::OpenAi,
+            "https://example.openai.azure.com/openai/v1",
+            "production-reasoner",
+            Some(true),
+        );
+        alias.azure = true;
+        assert_eq!(encode(alias.clone())["reasoning_effort"], "low");
+        alias.parameters.thinking = Some(false);
+        assert!(encode(alias)["reasoning_effort"].is_null());
+        let workspace = body(
+            Protocol::OpenAi,
+            "https://ws.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1",
+            "qwen-plus",
+            Some(true),
+        );
+        assert_eq!(workspace["enable_thinking"], true);
+        let glm = body(
+            Protocol::OpenAi,
+            "https://dashscope.aliyuncs.com/compatible-mode/v1",
+            "glm-5.3",
+            Some(false),
+        );
+        assert!(glm.get("enable_thinking").is_none());
+        let qwen = body(
+            Protocol::OpenAi,
+            "https://dashscope.aliyuncs.com/compatible-mode/v1",
+            "qwen3.7-max-preview",
+            Some(false),
+        );
+        assert!(qwen.get("enable_thinking").is_none());
+        let silicon = body(
+            Protocol::OpenAi,
+            "https://api.siliconflow.cn/v1",
+            "m",
+            Some(true),
+        );
+        assert_eq!(silicon["enable_thinking"], true);
+        let router = body(
+            Protocol::OpenAi,
+            "https://openrouter.ai/api/v1",
+            "m",
+            Some(false),
+        );
+        assert_eq!(router["reasoning"]["enabled"], false);
+        let anthropic = "https://api.anthropic.com/v1";
+        let legacy = body(
+            Protocol::Anthropic,
+            anthropic,
+            "claude-sonnet-4-20250514",
+            Some(true),
+        );
+        assert_eq!(legacy["thinking"]["budget_tokens"], 2048);
+        let current = body(
+            Protocol::Anthropic,
+            anthropic,
+            "claude-opus-5-5",
+            Some(true),
+        );
+        assert_eq!(current["thinking"]["type"], "adaptive");
+        assert_eq!(current["output_config"]["effort"], "low");
+        let current_off = body(
+            Protocol::Anthropic,
+            anthropic,
+            "claude-opus-5-5",
+            Some(false),
+        );
+        assert!(current_off.get("thinking").is_none());
+        let mut warm_claude = profile(
+            Protocol::Anthropic,
+            anthropic,
+            "claude-opus-5-5",
+            Some(false),
+        );
+        warm_claude.model.supports_temperature = true;
+        warm_claude.parameters.temperature = Some(0.3);
+        assert!(encode(warm_claude).get("temperature").is_none());
+        let sonnet55 = body(
+            Protocol::Anthropic,
+            anthropic,
+            "claude-sonnet-5-5",
+            Some(false),
+        );
+        assert_eq!(sonnet55["thinking"]["type"], "between_tools");
+        let sonnet5 = body(
+            Protocol::Anthropic,
+            anthropic,
+            "claude-sonnet-5",
+            Some(false),
+        );
+        assert_eq!(sonnet5["thinking"]["type"], "disabled");
+        let gemini = "https://example.com/v1beta";
+        let flash = body(Protocol::Gemini, gemini, "gemini-2.5-flash", Some(false));
+        assert_eq!(
+            flash["generationConfig"]["thinkingConfig"]["thinkingBudget"],
+            0
+        );
+        let pro = body(Protocol::Gemini, gemini, "gemini-2.5-pro", Some(false));
+        assert_eq!(
+            pro["generationConfig"]["thinkingConfig"]["thinkingBudget"],
+            128
+        );
+        let mut high = profile(Protocol::Gemini, gemini, "gemini-2.5-flash", Some(true));
+        high.parameters.reasoning_effort = Some(ReasoningEffort::High);
+        assert_eq!(
+            encode(high)["generationConfig"]["thinkingConfig"]["thinkingBudget"],
+            7168
+        );
+        let preview = body(
+            Protocol::Gemini,
+            gemini,
+            "gemini-2.5-flash-preview-09-2025",
+            Some(false),
+        );
+        assert_eq!(
+            preview["generationConfig"]["thinkingConfig"]["thinkingBudget"],
+            0
+        );
+        let lite = body(
+            Protocol::Gemini,
+            gemini,
+            "gemini-3.5-flash-lite",
+            Some(false),
+        );
+        assert_eq!(
+            lite["generationConfig"]["thinkingConfig"]["thinkingLevel"],
+            "minimal"
+        );
+        let image = body(
+            Protocol::Gemini,
+            gemini,
+            "gemini-3.1-flash-lite-image",
+            Some(true),
+        );
+        assert_eq!(
+            image["generationConfig"]["thinkingConfig"]["thinkingLevel"],
+            "minimal"
+        );
+        let mut pro31 = profile(
+            Protocol::Gemini,
+            gemini,
+            "gemini-3.1-pro-preview",
+            Some(true),
+        );
+        pro31.parameters.reasoning_effort = Some(ReasoningEffort::Medium);
+        assert_eq!(
+            encode(pro31)["generationConfig"]["thinkingConfig"]["thinkingLevel"],
+            "medium"
+        );
+        let gemini4 = body(Protocol::Gemini, gemini, "gemini-4-argon", Some(false));
+        assert_eq!(
+            gemini4["generationConfig"]["thinkingConfig"]["thinkingLevel"],
+            "low"
+        );
+        let flash38 = body(Protocol::Gemini, gemini, "gemini-3.8-flash", Some(false));
+        assert_eq!(
+            flash38["generationConfig"]["thinkingConfig"]["thinkingLevel"],
+            "low"
+        );
+        let pro3 = body(
+            Protocol::Gemini,
+            gemini,
+            "gemini-3-pro-preview",
+            Some(false),
+        );
+        assert_eq!(
+            pro3["generationConfig"]["thinkingConfig"]["thinkingLevel"],
+            "low"
+        );
+        assert!(pro3["generationConfig"]["thinkingConfig"]["thinkingBudget"].is_null());
+        let flash3 = body(Protocol::Gemini, gemini, "gemini-3-flash", Some(true));
+        assert_eq!(
+            flash3["generationConfig"]["thinkingConfig"]["thinkingLevel"],
+            "low"
+        );
+    }
+    #[test]
+    fn catalog_fills_context_only_where_the_provider_is_silent() {
+        let models = parse_models(
+            Protocol::OpenAi,
+            &json!({"data":[{"id":"deepseek-flash"},{"id":"gpt-4o","context_length":64000},{"id":"custom"}]}),
+        );
+        assert_eq!(models[0].context_tokens, 1_000_000);
+        assert_eq!(models[1].context_tokens, 64_000);
+        assert_eq!(models[2].context_tokens, 32_768);
     }
     #[test]
     fn credentials_never_survive_error_rendering() {

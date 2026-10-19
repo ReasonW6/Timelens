@@ -1,10 +1,137 @@
 //! Debug-only visual QA: with TIMELENS_QA_CAPTURE=<directory>, walk the main pages
 //! once, write each rendered frame as a BMP, then exit. Release builds omit this.
-use std::{cell::Cell, fs, io::Write, path::PathBuf, rc::Rc, time::Duration};
+//!
+//! Adding TIMELENS_QA_HEADLESS=1 renders in memory instead: no window or tray
+//! icon appears, so the run can share the desktop with the installed core.
+use std::{
+    cell::Cell,
+    fs,
+    io::Write,
+    path::{Path, PathBuf},
+    rc::Rc,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        mpsc,
+    },
+    time::Duration,
+};
 
-use slint::{ComponentHandle, Model, Timer, TimerMode};
+use anyhow::{Context, bail};
+use slint::{
+    ComponentHandle, EventLoopError, Model, PhysicalSize, PlatformError, Timer, TimerMode,
+    platform::{
+        EventLoopProxy, Platform, WindowAdapter,
+        software_renderer::{MinimalSoftwareWindow, RepaintBufferType},
+    },
+};
 
 use crate::{AiState, AppWindow, CollectionState, DataState};
+
+static HEADLESS: AtomicBool = AtomicBool::new(false);
+
+/// Whether this run renders in memory, without a window, tray icon or collector.
+pub fn headless() -> bool {
+    HEADLESS.load(Ordering::Relaxed)
+}
+
+/// Switch to the in-memory platform when asked. It must run before any window
+/// exists. The run then skips the core's singleton, so it only accepts an
+/// explicit `--data-dir` that is not the installed core's dataset.
+pub fn start_headless(data_directory: Option<&Path>) -> anyhow::Result<bool> {
+    if std::env::var_os("TIMELENS_QA_CAPTURE").is_none()
+        || std::env::var_os("TIMELENS_QA_HEADLESS").is_none_or(|value| value != "1")
+    {
+        return Ok(false);
+    }
+    let Some(directory) = data_directory else {
+        bail!("TIMELENS_QA_HEADLESS requires --data-dir with a separate dataset");
+    };
+    // A directory that does not exist yet cannot be the installed dataset.
+    if let Ok(directory) = fs::canonicalize(directory) {
+        let control = crate::local_config::control_directory()?;
+        let installed = [crate::local_config::resolve(&control)?, control]
+            .iter()
+            .filter_map(|path| fs::canonicalize(path).ok())
+            .collect::<Vec<_>>();
+        // The directory may itself point elsewhere through a data-location file.
+        let target = crate::local_config::resolve(&directory)?;
+        if [directory, target]
+            .iter()
+            .any(|path| fs::canonicalize(path).is_ok_and(|path| installed.contains(&path)))
+        {
+            bail!("TIMELENS_QA_HEADLESS must not open the installed Timelens dataset");
+        }
+    }
+    let (sender, receiver) = mpsc::channel();
+    slint::platform::set_platform(Box::new(Headless { sender, receiver }))
+        .context("the headless QA platform must be set before any window")?;
+    HEADLESS.store(true, Ordering::Relaxed);
+    Ok(true)
+}
+
+enum Message {
+    Invoke(Box<dyn FnOnce() + Send>),
+    Quit,
+}
+
+struct Headless {
+    sender: mpsc::Sender<Message>,
+    receiver: mpsc::Receiver<Message>,
+}
+
+impl Platform for Headless {
+    fn create_window_adapter(&self) -> Result<Rc<dyn WindowAdapter>, PlatformError> {
+        let window = MinimalSoftwareWindow::new(RepaintBufferType::NewBuffer);
+        // The main window's preferred size; TIMELENS_QA_VIEWPORT may override it.
+        window.set_size(PhysicalSize::new(1440, 900));
+        Ok(window)
+    }
+
+    fn run_event_loop(&self) -> Result<(), PlatformError> {
+        loop {
+            slint::platform::update_timers_and_animations();
+            // Frames are rendered only when the capture takes a snapshot.
+            let message = match slint::platform::duration_until_next_timer_update() {
+                Some(wait) => match self.receiver.recv_timeout(wait) {
+                    Ok(message) => message,
+                    Err(mpsc::RecvTimeoutError::Timeout) => continue,
+                    Err(mpsc::RecvTimeoutError::Disconnected) => return Ok(()),
+                },
+                None => match self.receiver.recv() {
+                    Ok(message) => message,
+                    Err(_) => return Ok(()),
+                },
+            };
+            match message {
+                Message::Invoke(event) => event(),
+                Message::Quit => return Ok(()),
+            }
+        }
+    }
+
+    fn new_event_loop_proxy(&self) -> Option<Box<dyn EventLoopProxy>> {
+        Some(Box::new(Proxy(self.sender.clone())))
+    }
+}
+
+struct Proxy(mpsc::Sender<Message>);
+
+impl EventLoopProxy for Proxy {
+    fn quit_event_loop(&self) -> Result<(), EventLoopError> {
+        self.0
+            .send(Message::Quit)
+            .map_err(|_| EventLoopError::EventLoopTerminated)
+    }
+
+    fn invoke_from_event_loop(
+        &self,
+        event: Box<dyn FnOnce() + Send>,
+    ) -> Result<(), EventLoopError> {
+        self.0
+            .send(Message::Invoke(event))
+            .map_err(|_| EventLoopError::EventLoopTerminated)
+    }
+}
 
 type Step = (&'static str, fn(&AppWindow));
 

@@ -30,7 +30,14 @@ cargo test --workspace --release -- --test-threads=2
 
 - 核心是单实例的，运行前先关闭已安装的 Timelens；用 `--data-dir <目录>`（或 `TIMELENS_DATA_DIR`）指向隔离数据。
 - 采集器自检：`cargo run -p timelens-collector -- --observe-windows-once`、`-- --observe-window-events-seconds 10`。
-- 调试构建可设 `TIMELENS_QA_CAPTURE=<目录>` 依次截取主要页面后自动退出；`TIMELENS_QA_VIEWPORT=WxH` 固定窗口尺寸。
+- 调试构建可设 `TIMELENS_QA_CAPTURE=<目录>` 依次截取主要页面后自动退出；`TIMELENS_QA_VIEWPORT=WxH` 固定窗口尺寸（无头模式默认 1440×900，缩放 1.0）。
+- 再加 `TIMELENS_QA_HEADLESS=1` 则在内存中用软件渲染器出图：不弹窗口、不建托盘、使用独立管道，也不占用单实例锁，所以已安装的 Timelens 可以照常运行和采集。此模式必须配合独立的 `--data-dir`（拒绝已安装实例的数据集），可先用 `design_fixture` 示例生成合成数据：
+
+  ```powershell
+  cargo run -p timelens-storage --example design_fixture -- <空目录的绝对路径>
+  $env:TIMELENS_QA_CAPTURE = "<截图目录>"; $env:TIMELENS_QA_HEADLESS = "1"
+  cargo run -p timelens-app -- --data-dir <同一数据目录>
+  ```
 - 合成数据：`crates/timelens-storage/examples/`（如 `cargo run --release -p timelens-storage --example milestone2_capacity -- --data-dir <空目录> --include-ai`，`inspect_dataset` 用于查看数据集）。
 
 ## 架构总览

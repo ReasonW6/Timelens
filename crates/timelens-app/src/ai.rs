@@ -421,7 +421,30 @@ fn job_request(
         crate::unix_time_ms(),
     )?;
     let _ = events.send(AiEvent::Changed);
-    result
+    let answer = result?;
+    if answer.text.trim().is_empty() {
+        let profile = &job.spec.provider;
+        let limit = profile
+            .parameters
+            .max_output_tokens
+            .unwrap_or(DEFAULT_MAX_OUTPUT_TOKENS)
+            .min(profile.model.context_tokens / 2);
+        if answer.reasoning.trim().is_empty() {
+            bail!("提供商没有返回正文");
+        }
+        // Thinking models count their reasoning against the same output limit;
+        // only blame it when usage shows the limit was actually reached.
+        let used = answer.usage.output.max(answer.usage.reasoning).unwrap_or(0);
+        if used < u64::from(limit) * 9 / 10 {
+            bail!(
+                "模型只返回了思考过程，没有写正文，可能被服务商过滤或提前结束。请稍后重试，或关闭深度思考后重试"
+            );
+        }
+        bail!(
+            "模型的思考过程用完了最大输出（{limit} Token），没来得及写正文。请在“检查 AI 设置”里调高最大输出（思考模型建议 16384 以上，上下文窗口也要按模型实际大小填写），或关闭深度思考后重试"
+        );
+    }
+    Ok(answer)
 }
 
 fn run_job(
@@ -467,7 +490,7 @@ fn run_job(
                         .provider
                         .parameters
                         .max_output_tokens
-                        .unwrap_or(4096)
+                        .unwrap_or(DEFAULT_MAX_OUTPUT_TOKENS)
                         .min(job.spec.provider.model.context_tokens / 2)
                         as usize,
                 )
@@ -583,7 +606,8 @@ fn run_job(
                     .provider
                     .parameters
                     .max_output_tokens
-                    .unwrap_or(4096) as usize;
+                    .unwrap_or(DEFAULT_MAX_OUTPUT_TOKENS)
+                    .min(context_window / 2) as usize;
             let plan = plan_context(
                 &messages,
                 context_window,
@@ -609,7 +633,7 @@ fn run_job(
                         images: vec![],
                     },
                 };
-                match run_worker(
+                let summary = run_worker(
                     &compression_request,
                     || {
                         lock(storage).map_or(true, |s| {
@@ -617,9 +641,13 @@ fn run_job(
                         })
                     },
                     |_| Ok(()),
-                ) {
-                    Ok(answer) => {
-                        usage.add(&answer.usage);
+                )
+                .ok()
+                .inspect(|answer| usage.add(&answer.usage))
+                // A summary left empty by thinking would silently drop those turns.
+                .filter(|answer| !answer.text.trim().is_empty());
+                match summary {
+                    Some(answer) => {
                         system.push_str(&format!("\n早期对话摘要：\n{}", answer.text));
                         if let Some(through) = indexes
                             .get(plan.older.len().saturating_sub(1))
@@ -635,7 +663,7 @@ fn run_job(
                             )?;
                         }
                     }
-                    Err(_) => {
+                    None => {
                         let _ = events.send(AiEvent::Status(
                             "压缩失败；本次仅发送可容纳的最近完整用户对话，较早内容未发送".into(),
                         ));
@@ -661,7 +689,7 @@ fn run_job(
                         .provider
                         .parameters
                         .max_output_tokens
-                        .unwrap_or(4096)
+                        .unwrap_or(DEFAULT_MAX_OUTPUT_TOKENS)
                         .min(context_window / 2) as usize
             {
                 bail!("当前问题或数据超过模型上下文，请缩短问题或选择更大上下文模型");
