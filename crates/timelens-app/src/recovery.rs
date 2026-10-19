@@ -40,6 +40,11 @@ pub fn open(data: Result<PathBuf>, control: &Path, force: bool) -> Result<Storag
         }
         Err(error) => (control.into(), error.to_string(), false),
     };
+    // Nobody can answer the recovery window in a headless QA run.
+    #[cfg(debug_assertions)]
+    if crate::qa::headless() {
+        bail!("headless QA cannot recover {}: {detail}", source.display());
+    }
     let window = RecoveryWindow::new()?;
     window.set_source(source.display().to_string().into());
     window.set_destination(

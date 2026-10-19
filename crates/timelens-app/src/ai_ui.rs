@@ -433,20 +433,14 @@ pub fn install(
                                   d: &mut UiData,
                                   _: &Store,
                                   i: i32| {
-        let mut m = d
+        let m = d
             .profile
             .models
             .get(i as usize)
             .cloned()
             .ok_or_else(|| anyhow!("请选择模型"))?;
-        // Lists fetched before the catalog knew a model still carry the fallback
-        // size; a size the provider reported wins over the catalog.
+        // The catalog already filled the context when the list was fetched.
         let known = known_limits(&m.id);
-        if let Some((context, _)) = known
-            && m.context_tokens == Model::unknown("").context_tokens
-        {
-            m.context_tokens = context;
-        }
         // Keep the output below the new context even for uncatalogued models.
         let state = w.global::<AiState>();
         let output = known
@@ -1686,7 +1680,7 @@ fn show_profile(w: &AppWindow, d: &UiData) {
     g.set_max_output(
         p.parameters
             .max_output_tokens
-            .unwrap_or(DEFAULT_MAX_OUTPUT_TOKENS)
+            .unwrap_or(DEFAULT_MAX_OUTPUT_TOKENS.min(p.model.context_tokens / 2))
             .to_string()
             .into(),
     );

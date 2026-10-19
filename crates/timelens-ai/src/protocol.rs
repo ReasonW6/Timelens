@@ -304,15 +304,13 @@ fn openai_thinking(body: &mut Value, profile: &ProviderProfile, host: &str, offi
             return;
         }
         if !on {
-            // `none` arrived with gpt-5.1; earlier models stop at their lowest level.
-            body["reasoning_effort"] =
-                json!(if generation == Some(5) && !id.starts_with("gpt-5.") {
-                    "minimal"
-                } else if gpt5 {
-                    "none"
-                } else {
-                    "low"
-                });
+            // Each model stops at its lowest level: `minimal` on gpt-5, `none` on
+            // the gpt-5.x line, and `low`, which every other reasoning model takes.
+            body["reasoning_effort"] = json!(match generation {
+                Some(5) if id.starts_with("gpt-5.") => "none",
+                Some(5) => "minimal",
+                _ => "low",
+            });
         } else {
             // gpt-5.1 and later default to `none`, so switching on needs a level.
             body["reasoning_effort"] = json!(effort.unwrap_or(ReasoningEffort::Medium));
@@ -801,7 +799,7 @@ mod tests {
             "gpt-6-sol",
             Some(false),
         );
-        assert_eq!(regional["reasoning_effort"], "none");
+        assert_eq!(regional["reasoning_effort"], "low");
         assert_eq!(regional["max_completion_tokens"], 8192);
         let o3 = body(Protocol::OpenAi, openai, "o3", Some(false));
         assert_eq!(o3["reasoning_effort"], "low");
