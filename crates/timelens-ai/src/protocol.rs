@@ -185,24 +185,30 @@ pub fn build_request(request: &WorkerRequest) -> Result<HttpRequest, String> {
             }
             let mut body = json!({"systemInstruction":{"parts":[{"text":system}]},"contents":wire,"generationConfig":{"maxOutputTokens":max_output}});
             let id = profile.model.id.trim_start_matches("models/");
+            let pro = id.split('-').any(|segment| segment == "pro");
+            let generation = id
+                .strip_prefix("gemini-")
+                .and_then(|rest| rest.split(|c: char| !c.is_ascii_digit()).next())
+                .and_then(|major| major.parse::<u32>().ok());
             if let Some(on) = profile.parameters.thinking
-                && id.starts_with("gemini-3")
+                && generation.is_some_and(|major| major >= 3)
             {
-                // Gemini 3 takes a level instead of a budget and cannot stop thinking.
-                let pro = id.contains("-pro");
+                // Gemini 3 and later take a level instead of a budget and cannot
+                // stop thinking.
                 let level = if on {
                     profile
                         .parameters
                         .reasoning_effort
                         .map(|effort| match effort {
                             ReasoningEffort::Low => "low",
-                            ReasoningEffort::Medium if !pro => "medium",
+                            ReasoningEffort::Medium if !pro || generation != Some(3) => "medium",
                             _ => "high",
                         })
                 } else {
-                    // Only the original 3 Flash goes down to `minimal`; `low` is
-                    // the floor every other Gemini 3 model accepts.
-                    Some(if id.starts_with("gemini-3-flash") {
+                    // The original 3 Flash and the Flash-Lite line go down to
+                    // `minimal`; `low` is the floor every other model accepts.
+                    let lite = id.split('-').any(|segment| segment == "lite");
+                    Some(if id.starts_with("gemini-3-flash") || lite {
                         "minimal"
                     } else {
                         "low"
@@ -229,7 +235,7 @@ pub fn build_request(request: &WorkerRequest) -> Result<HttpRequest, String> {
                         }
                     };
                     json!({"includeThoughts":true,"thinkingBudget":budget})
-                } else if profile.model.id.contains("-pro") {
+                } else if pro {
                     // Pro models cannot stop thinking; 128 is their smallest budget.
                     json!({"thinkingBudget":128})
                 } else {
@@ -239,9 +245,14 @@ pub fn build_request(request: &WorkerRequest) -> Result<HttpRequest, String> {
             body
         }
     };
-    // Claude refuses a temperature while it thinks.
+    // Claude refuses a temperature while it thinks, and OpenAI reasoning models
+    // take one only with reasoning off.
+    let reasoning_on = body
+        .get("reasoning_effort")
+        .is_some_and(|effort| effort != "none");
     if profile.model.supports_temperature
         && !(profile.protocol == Protocol::Anthropic && profile.parameters.thinking == Some(true))
+        && !reasoning_on
         && let Some(temperature) = profile.parameters.temperature
     {
         if profile.protocol == Protocol::Gemini {
@@ -289,6 +300,16 @@ fn openai_thinking(body: &mut Value, profile: &ProviderProfile, host: &str, offi
             || profile.model.reasoning == Capability::Supported;
         // gpt-5-pro only accepts `high`, its default.
         if id.starts_with("gpt-5-pro") {
+            return;
+        }
+        // Later Pro models start at `medium` and cannot be turned down further.
+        if gpt5 && id.split('-').any(|segment| segment == "pro") {
+            if let Some(effort) = effort {
+                body["reasoning_effort"] = json!(match effort {
+                    ReasoningEffort::Low => ReasoningEffort::Medium,
+                    effort => effort,
+                });
+            }
             return;
         }
         if !reasoning {
@@ -801,6 +822,16 @@ mod tests {
         );
         assert_eq!(regional["reasoning_effort"], "low");
         assert_eq!(regional["max_completion_tokens"], 8192);
+        let pro54 = body(Protocol::OpenAi, openai, "gpt-5.4-pro", Some(true));
+        assert_eq!(pro54["reasoning_effort"], "medium");
+        let pro54_off = body(Protocol::OpenAi, openai, "gpt-5.4-pro", Some(false));
+        assert!(pro54_off.get("reasoning_effort").is_none());
+        let mut warm = profile(Protocol::OpenAi, openai, "gpt-5.4", Some(true));
+        warm.model.supports_temperature = true;
+        warm.parameters.temperature = Some(0.3);
+        assert!(encode(warm.clone()).get("temperature").is_none());
+        warm.parameters.thinking = Some(false);
+        assert_eq!(encode(warm)["reasoning_effort"], "none");
         let o3 = body(Protocol::OpenAi, openai, "o3", Some(false));
         assert_eq!(o3["reasoning_effort"], "low");
         let chat = body(Protocol::OpenAi, openai, "gpt-4o", Some(false));
@@ -894,6 +925,31 @@ mod tests {
         assert_eq!(
             encode(high)["generationConfig"]["thinkingConfig"]["thinkingBudget"],
             7168
+        );
+        let preview = body(
+            Protocol::Gemini,
+            gemini,
+            "gemini-2.5-flash-preview-09-2025",
+            Some(false),
+        );
+        assert_eq!(
+            preview["generationConfig"]["thinkingConfig"]["thinkingBudget"],
+            0
+        );
+        let lite = body(
+            Protocol::Gemini,
+            gemini,
+            "gemini-3.5-flash-lite",
+            Some(false),
+        );
+        assert_eq!(
+            lite["generationConfig"]["thinkingConfig"]["thinkingLevel"],
+            "minimal"
+        );
+        let gemini4 = body(Protocol::Gemini, gemini, "gemini-4-argon", Some(false));
+        assert_eq!(
+            gemini4["generationConfig"]["thinkingConfig"]["thinkingLevel"],
+            "low"
         );
         let flash38 = body(Protocol::Gemini, gemini, "gemini-3.8-flash", Some(false));
         assert_eq!(
