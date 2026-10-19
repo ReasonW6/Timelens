@@ -421,7 +421,23 @@ fn job_request(
         crate::unix_time_ms(),
     )?;
     let _ = events.send(AiEvent::Changed);
-    result
+    let answer = result?;
+    if answer.text.trim().is_empty() {
+        let profile = &job.spec.provider;
+        let limit = profile
+            .parameters
+            .max_output_tokens
+            .unwrap_or(4096)
+            .min(profile.model.context_tokens / 2);
+        if answer.reasoning.trim().is_empty() {
+            bail!("提供商没有返回正文");
+        }
+        // Thinking models count their reasoning against the same output limit.
+        bail!(
+            "模型的思考过程用完了最大输出（{limit} Token），没来得及写正文。请在“检查 AI 设置”里调高最大输出（思考模型建议 16384 以上，上下文窗口也要按模型实际大小填写），或关闭深度思考后重试"
+        );
+    }
+    Ok(answer)
 }
 
 fn run_job(

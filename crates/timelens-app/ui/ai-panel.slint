@@ -58,6 +58,8 @@ export global AiState {
     in-out property <string> temperature;
     in-out property <string> max-output: "4096";
     in-out property <int> effort: 0;
+    // Deep thinking: 0 follows the model, 1 on, 2 off.
+    in-out property <int> thinking: 0;
     in-out property <string> retries: "3";
     in-out property <string> idle-timeout;
     // 0 not tested, 1 testing, 2 passed, 3 failed.
@@ -123,6 +125,8 @@ export global AiState {
     pure callback markdown(string) -> [MdBlock];
     in-out property <bool> raw-view: false;
     in-out property <string> exposed-reasoning;
+    // The model is still thinking: reasoning arrives but the answer has not begun.
+    in-out property <bool> reasoning-active: false;
     in-out property <string> token-label;
     in-out property <string> source-label;
     in-out property <string> question;
@@ -335,6 +339,55 @@ component Callout inherits Rectangle {
     }
 }
 
+// The reasoning a provider returned, folded above the answer the way chat apps
+// show it: a quiet header that opens to muted text set off by a rule.
+component ThinkingBlock inherits VerticalLayout {
+    in property <string> text;
+    in property <bool> active;
+    in-out property <bool> open;
+    vertical-stretch: 0;
+    spacing: 8px;
+    HorizontalLayout {
+        alignment: start;
+        Rectangle {
+            height: 30px;
+            border-radius: 15px;
+            border-width: key.has-focus ? 2px : 1px;
+            border-color: key.has-focus ? Theme.focus : Theme.line;
+            background: touch.has-hover && !Theme.modal-open ? Theme.surface-2 : Theme.surface;
+            forward-focus: key;
+            accessible-role: button;
+            accessible-label: (root.active ? "正在思考" : "已深度思考") + "，" + (root.open ? "收起思考过程" : "展开思考过程");
+            accessible-enabled: !Theme.modal-open;
+            accessible-action-default => { if !Theme.modal-open { root.open = !root.open; } }
+            HorizontalLayout {
+                padding-left: 10px; padding-right: 10px; spacing: 6px;
+                VerticalLayout { alignment: center; Image { width: 15px; height: 15px; source: @image-url("icons/sparkles.svg"); colorize: root.active ? Theme.brand : Theme.ink-3; } }
+                Text { text: root.active ? "思考中…" : "已深度思考"; color: Theme.ink-2; font-size: 13px; vertical-alignment: center; }
+                VerticalLayout { alignment: center; Image { width: 14px; height: 14px; source: root.open ? @image-url("icons/chevron-up.svg") : @image-url("icons/chevron-down.svg"); colorize: Theme.ink-3; } }
+            }
+            touch := TouchArea { enabled: !Theme.modal-open; mouse-cursor: pointer; clicked => { root.open = !root.open; } }
+            key := FocusScope { width: 0px; enabled: !Theme.modal-open; key-pressed(event) => { if !Theme.modal-open && (event.text == " " || event.text == "\n") { root.open = !root.open; return accept; } return reject; } }
+        }
+    }
+    if root.open : HorizontalLayout {
+        padding-left: 14px;
+        spacing: 12px;
+        Rectangle { width: 2px; border-radius: 1px; background: Theme.line-strong; }
+        thought := ScrollView {
+            horizontal-stretch: 1;
+            height: min(thought-body.preferred-height, 280px);
+            horizontal-scrollbar-policy: always-off;
+            viewport-width: self.visible-width;
+            thought-body := VerticalLayout {
+                width: thought.visible-width;
+                padding-right: 12px;
+                Text { text: root.text; color: Theme.ink-3; font-size: 13px; wrap: word-wrap; accessible-label: "服务商返回的思考过程"; }
+            }
+        }
+    }
+}
+
 // One step of the getting-started card.
 component GuideStep inherits HorizontalLayout {
     in property <string> number;
@@ -506,12 +559,11 @@ export component AiPanel inherits Rectangle {
                                 Action { text: AiState.image-selected == 0 ? "选择快照…" : "调整"; icon: @image-url("icons/photo.svg"); clicked => { AiState.list-images(); AiState.page = 6; } }
                                 if AiState.image-selected > 0 : Action { quiet: true; text: "全部移除"; clicked => { AiState.clear-images(); } }
                             }
-                            if AiState.use-vision == 2 : Note { text: "当前模型只支持文本，总结不含图片。"; }
-                            if AiState.use-vision == 0 : HorizontalLayout {
+                            if AiState.use-vision != 1 : HorizontalLayout {
                                 spacing: 10px;
                                 alignment: LayoutAlignment.start;
-                                VerticalLayout { alignment: center; Note { text: "还没确认这个模型能否看图，确认后才能附带快照。"; } }
-                                Action { quiet: true; text: "去设置确认"; clicked => { root.edit-connection(); } }
+                                VerticalLayout { alignment: center; Note { text: "这个连接没有开启附带快照，总结只含文字。"; } }
+                                Action { quiet: true; text: "去设置开启"; clicked => { root.edit-connection(); } }
                             }
                         }
 
@@ -650,6 +702,12 @@ export component AiPanel inherits Rectangle {
                         HorizontalLayout { alignment: LayoutAlignment.start; Action { text: "重新生成"; clicked => { AiState.regenerate(); } } }
                     }
 
+                    if AiState.exposed-reasoning != "" : ThinkingBlock {
+                        text: AiState.exposed-reasoning;
+                        active: AiState.reasoning-active;
+                        open <=> root.reasoning-open;
+                    }
+
                     // Formatted reading; the raw text stays below for selecting and copying.
                     if root.reader-body && !AiState.raw-view && AiState.conversation != "" : Rectangle {
                         vertical-stretch: 1;
@@ -699,15 +757,6 @@ export component AiPanel inherits Rectangle {
                         accessible-label: "总结与对话";
                     }
                     if !root.reader-body : Rectangle { vertical-stretch: 1; }
-
-                    if AiState.exposed-reasoning != "" : VerticalLayout {
-                        spacing: 8px;
-                        HorizontalLayout {
-                            alignment: LayoutAlignment.start;
-                            Action { quiet: true; height: 28px; text: root.reasoning-open ? "收起服务商返回的思考过程" : "查看服务商返回的思考过程"; clicked => { root.reasoning-open = !root.reasoning-open; } }
-                        }
-                        if root.reasoning-open : TextEdit { text: AiState.exposed-reasoning; read-only: true; height: 140px; font-size: 13px; wrap: word-wrap; accessible-label: "服务商返回的思考过程"; }
-                    }
 
                     if AiState.token-label != "" || AiState.source-label != "" : HorizontalLayout {
                         spacing: 12px;
@@ -938,16 +987,38 @@ export component AiPanel inherits Rectangle {
                                 AiField { text <=> AiState.model-id; placeholder-text: AiState.model-hint; accessible-label: "模型 ID"; edited => { AiState.model-index = -1; } }
                             }
                             AiLabelled {
-                                label: "能看图片吗？";
+                                label: "深度思考";
                                 HorizontalLayout {
                                     alignment: LayoutAlignment.start;
+                                    spacing: 12px;
                                     Segmented {
-                                        Segment { text: "未确认"; selected: AiState.vision == 0; clicked => { AiState.vision = 0; } }
-                                        Segment { text: "能"; selected: AiState.vision == 1; clicked => { AiState.vision = 1; } }
-                                        Segment { text: "不能"; selected: AiState.vision == 2; clicked => { AiState.vision = 2; } }
+                                        Segment { text: "跟随模型"; selected: AiState.thinking == 0; clicked => { AiState.thinking = 0; } }
+                                        Segment { text: "开启"; selected: AiState.thinking == 1; clicked => { AiState.thinking = 1; } }
+                                        Segment { text: "关闭"; selected: AiState.thinking == 2; clicked => { AiState.thinking = 2; } }
+                                    }
+                                    if AiState.thinking == 1 : VerticalLayout { alignment: center; Text { text: "强度"; color: Theme.ink-2; font-size: 13px; } }
+                                    if AiState.thinking == 1 : Segmented {
+                                        Segment { text: "默认"; selected: AiState.effort == 0; clicked => { AiState.effort = 0; } }
+                                        Segment { text: "低"; selected: AiState.effort == 1; clicked => { AiState.effort = 1; } }
+                                        Segment { text: "中"; selected: AiState.effort == 2; clicked => { AiState.effort = 2; } }
+                                        Segment { text: "高"; selected: AiState.effort == 3; clicked => { AiState.effort = 3; } }
                                     }
                                 }
-                                Note { text: "能看图的模型才可以在总结里附带你挑选的快照；不确定时保持「未确认」。"; font-size: 12px; }
+                                Note {
+                                    font-size: 12px;
+                                    text: AiState.thinking == 1 ? "思考内容也算在最大输出里；思考模型建议在「模型参数」中把最大输出调到 16384 以上。"
+                                        : AiState.thinking == 2 ? "请服务商关闭思考，回答更快、更省额度。"
+                                        : "不发送思考相关参数，由模型自己决定。";
+                                }
+                            }
+                            HorizontalLayout {
+                                spacing: 12px;
+                                VerticalLayout {
+                                    horizontal-stretch: 1; spacing: 4px;
+                                    Text { text: "允许附带快照"; color: Theme.ink-2; font-size: 13px; }
+                                    Note { text: "开启后，手动总结可以附带你挑选的快照。模型看不了图片时，服务商会直接报错。"; font-size: 12px; }
+                                }
+                                VerticalLayout { alignment: center; Switch { label: "允许附带快照"; checked: AiState.vision == 1; toggled(on) => { AiState.vision = on ? 1 : 2; } } }
                             }
                         }
                         Rule { }
@@ -969,7 +1040,7 @@ export component AiPanel inherits Rectangle {
                         Rule { }
                         SettingExpander {
                             title: "模型参数";
-                            description: "上下文窗口、输出长度、温度、推理强度、重试和超时。";
+                            description: "上下文窗口、输出长度、温度、重试和超时。";
                             icon: @image-url("icons/adjustments-horizontal.svg");
                             expanded <=> root.params-open;
                             HorizontalLayout {
@@ -979,19 +1050,11 @@ export component AiPanel inherits Rectangle {
                             }
                             AiCheck { text: "模型支持 temperature"; font-size: 13px; checked <=> AiState.temperature-supported; }
                             if AiState.temperature-supported : AiLabelled { label: "温度（0–2）"; AiField { text <=> AiState.temperature; placeholder-text: "留空使用服务商默认值"; accessible-label: "模型温度"; } }
-                            AiCheck { text: "模型支持 OpenAI reasoning_effort"; font-size: 13px; checked <=> AiState.effort-supported; }
-                            if AiState.effort-supported : AiLabelled { label: "推理强度"; AiSelect { model: ["服务商默认", "low", "medium", "high"]; current-index <=> AiState.effort; accessible-label: "模型推理强度"; } }
                             HorizontalLayout {
                                 spacing: 14px;
                                 AiLabelled { label: "自动重试（0–10 次）"; AiField { text <=> AiState.retries; input-type: number; accessible-label: "AI 自动重试次数"; } }
                                 AiLabelled { label: "无响应超时（秒）"; AiField { text <=> AiState.idle-timeout; placeholder-text: "留空表示不限"; accessible-label: "AI 无响应超时秒数"; } }
                             }
-                            HorizontalLayout {
-                                spacing: 14px;
-                                AiLabelled { label: "返回思考过程"; AiSelect { model: ["未确认", "会返回", "不返回"]; current-index <=> AiState.reasoning; accessible-label: "模型是否返回思考过程"; } }
-                                AiLabelled { label: "工具调用"; AiSelect { model: ["未确认", "支持", "不支持"]; current-index <=> AiState.tools; accessible-label: "模型工具调用能力"; } }
-                            }
-                            Note { text: "这两项只作记录：Timelens 不调用模型工具，思考过程只在服务商返回时显示。"; font-size: 12px; }
                         }
                     }
                     if AiState.editing : HorizontalLayout {

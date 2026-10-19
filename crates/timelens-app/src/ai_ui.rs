@@ -1391,10 +1391,16 @@ fn read_profile(w: &AppWindow, d: &UiData) -> Result<ProviderProfile> {
     p.parameters = Parameters {
         temperature: optional(&g.get_temperature(), "温度")?,
         max_output_tokens: optional(&g.get_max_output(), "最大输出")?,
-        reasoning_effort: match g.get_effort() {
-            1 => Some(ReasoningEffort::Low),
-            2 => Some(ReasoningEffort::Medium),
-            3 => Some(ReasoningEffort::High),
+        // A strength only means something while thinking is on.
+        reasoning_effort: match (g.get_thinking(), g.get_effort()) {
+            (1, 1) => Some(ReasoningEffort::Low),
+            (1, 2) => Some(ReasoningEffort::Medium),
+            (1, 3) => Some(ReasoningEffort::High),
+            _ => None,
+        },
+        thinking: match g.get_thinking() {
+            1 => Some(true),
+            2 => Some(false),
             _ => None,
         },
     };
@@ -1673,6 +1679,11 @@ fn show_profile(w: &AppWindow, d: &UiData) {
             .map_or(String::new(), |v| v.to_string())
             .into(),
     );
+    g.set_thinking(match p.parameters.thinking {
+        None => 0,
+        Some(true) => 1,
+        Some(false) => 2,
+    });
     g.set_effort(match p.parameters.reasoning_effort {
         None => 0,
         Some(ReasoningEffort::Low) => 1,
@@ -2128,6 +2139,7 @@ fn clear_reader(w: &AppWindow) {
     g.set_reader_busy("".into());
     g.set_conversation("".into());
     g.set_exposed_reasoning("".into());
+    g.set_reasoning_active(false);
     g.set_token_label("".into());
     g.set_source_label("".into());
     g.set_pinned(false);
@@ -2174,6 +2186,7 @@ fn show_version(w: &AppWindow, d: &mut UiData, s: &Storage, id: i64) -> Result<(
         usage.add(&m.usage);
     }
     let mut busy = "";
+    let mut thinking = false;
     if let Some(job) = d.followup {
         match s.ai_job(job) {
             Ok(job) if job.state == "queued" || job.state == "running" => {
@@ -2186,6 +2199,7 @@ fn show_version(w: &AppWindow, d: &mut UiData, s: &Storage, id: i64) -> Result<(
                 text.push_str(&job.body);
                 add_reasoning(&job.reasoning);
                 busy = if running { "回答中…" } else { "排队中" };
+                thinking = running && job.body.is_empty() && !job.reasoning.is_empty();
             }
             _ => d.followup = None,
         }
@@ -2250,6 +2264,7 @@ fn show_version(w: &AppWindow, d: &mut UiData, s: &Storage, id: i64) -> Result<(
     g.set_has_follow_ups(!messages.is_empty());
     g.set_conversation(text.into());
     g.set_exposed_reasoning(reasoning.into());
+    g.set_reasoning_active(thinking);
     g.set_token_label(usage_label(&usage).into());
     g.set_source_label(
         if available {
@@ -2328,6 +2343,7 @@ fn show_job(w: &AppWindow, d: &mut UiData, s: &Storage, id: i64) -> Result<()> {
     );
     g.set_pinned(false);
     g.set_has_follow_ups(false);
+    g.set_reasoning_active(state == 2 && job.body.is_empty());
     g.set_conversation(job.body.into());
     g.set_exposed_reasoning(job.reasoning.into());
     g.set_token_label(usage_label(&job.usage).into());

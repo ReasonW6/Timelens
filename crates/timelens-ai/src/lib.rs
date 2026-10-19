@@ -42,6 +42,7 @@ pub struct Model {
     pub tools: Capability,
     pub context_tokens: u32,
     pub supports_temperature: bool,
+    /// Catalog metadata only; requests follow `Parameters::thinking` instead.
     pub supports_reasoning_effort: bool,
 }
 
@@ -60,7 +61,13 @@ impl Model {
 pub struct Parameters {
     pub temperature: Option<f64>,
     pub max_output_tokens: Option<u32>,
+    /// How hard to think when `thinking` is on; `None` keeps the model's default.
     pub reasoning_effort: Option<ReasoningEffort>,
+    /// Deep thinking: `None` follows the model, otherwise asks the provider to
+    /// turn it on or off in that provider's own typed parameter.
+    /// Left out while unset, so connections tested before this field keep their revision.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thinking: Option<bool>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]

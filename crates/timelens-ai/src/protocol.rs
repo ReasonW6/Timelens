@@ -101,17 +101,16 @@ pub fn build_request(request: &WorkerRequest) -> Result<HttpRequest, String> {
                 last["content"] = json!(parts);
             }
             let mut body = json!({"model":profile.model.id,"messages":wire,"stream":true,"stream_options":{"include_usage":true},"store":false});
-            let key = if profile.model.supports_reasoning_effort {
+            let host = url.host_str().unwrap_or("");
+            // OpenAI's own reasoning models refuse max_tokens; others expect it.
+            let official = profile.azure || host == "api.openai.com";
+            let key = if official {
                 "max_completion_tokens"
             } else {
                 "max_tokens"
             };
             body[key] = json!(max_output);
-            if profile.model.supports_reasoning_effort
-                && let Some(effort) = profile.parameters.reasoning_effort
-            {
-                body["reasoning_effort"] = json!(effort);
-            }
+            openai_thinking(&mut body, &profile.parameters, host, official);
             body
         }
         Protocol::Anthropic => {
@@ -129,7 +128,21 @@ pub fn build_request(request: &WorkerRequest) -> Result<HttpRequest, String> {
                 }
                 wire.last_mut().unwrap()["content"] = json!(parts);
             }
-            json!({"model":profile.model.id,"system":system,"messages":wire,"max_tokens":max_output,"stream":true})
+            let mut body = json!({"model":profile.model.id,"system":system,"messages":wire,"max_tokens":max_output,"stream":true});
+            if let Some(on) = profile.parameters.thinking {
+                body["thinking"] = if on {
+                    // The budget counts against max_tokens and must leave room to answer.
+                    let budget = thinking_budget(profile.parameters.reasoning_effort)
+                        .min(max_output.saturating_sub(1024));
+                    if budget < 1024 {
+                        return Err("开启思考时最大输出至少要 2048 Token".into());
+                    }
+                    json!({"type":"enabled","budget_tokens":budget})
+                } else {
+                    json!({"type":"disabled"})
+                };
+            }
+            body
         }
         Protocol::Gemini => {
             path.push_str("/models/");
@@ -149,10 +162,25 @@ pub fn build_request(request: &WorkerRequest) -> Result<HttpRequest, String> {
                 parts
                     .push(json!({"inlineData":{"mimeType":"image/webp","data":image.webp_base64}}));
             }
-            json!({"systemInstruction":{"parts":[{"text":system}]},"contents":wire,"generationConfig":{"maxOutputTokens":max_output}})
+            let mut body = json!({"systemInstruction":{"parts":[{"text":system}]},"contents":wire,"generationConfig":{"maxOutputTokens":max_output}});
+            if let Some(on) = profile.parameters.thinking {
+                body["generationConfig"]["thinkingConfig"] = if on {
+                    // -1 lets the model size its own thinking.
+                    let budget = profile
+                        .parameters
+                        .reasoning_effort
+                        .map_or(-1, |e| i64::from(thinking_budget(Some(e))));
+                    json!({"includeThoughts":true,"thinkingBudget":budget})
+                } else {
+                    json!({"thinkingBudget":0})
+                };
+            }
+            body
         }
     };
+    // Claude refuses a temperature while it thinks.
     if profile.model.supports_temperature
+        && !(profile.protocol == Protocol::Anthropic && profile.parameters.thinking == Some(true))
         && let Some(temperature) = profile.parameters.temperature
     {
         if profile.protocol == Protocol::Gemini {
@@ -170,6 +198,50 @@ pub fn build_request(request: &WorkerRequest) -> Result<HttpRequest, String> {
         method: "POST",
         body: Some(body),
     })
+}
+
+/// OpenAI-compatible services each spell deep thinking their own way. Only the
+/// typed parameter of the endpoint's family is sent; following the model sends none.
+fn openai_thinking(body: &mut Value, parameters: &Parameters, host: &str, official: bool) {
+    let Some(on) = parameters.thinking else {
+        return;
+    };
+    let effort = parameters.reasoning_effort.filter(|_| on);
+    if official {
+        if !on {
+            body["reasoning_effort"] = json!("none");
+        } else if let Some(effort) = effort {
+            body["reasoning_effort"] = json!(effort);
+        }
+    } else if host == "openrouter.ai" {
+        body["reasoning"] = match effort {
+            Some(effort) => json!({"effort":effort}),
+            None => json!({"enabled":on}),
+        };
+    } else if host.ends_with("siliconflow.cn")
+        || host.ends_with("siliconflow.com")
+        || host.starts_with("dashscope")
+    {
+        body["enable_thinking"] = json!(on);
+        if effort.is_some() {
+            body["thinking_budget"] = json!(thinking_budget(effort));
+        }
+    } else {
+        // DeepSeek, Kimi, GLM and Doubao share this switch.
+        body["thinking"] = json!({"type":if on {"enabled"} else {"disabled"}});
+        if let Some(effort) = effort {
+            body["reasoning_effort"] = json!(effort);
+        }
+    }
+}
+
+/// A thinking token budget for providers that take one instead of a level.
+fn thinking_budget(effort: Option<ReasoningEffort>) -> u32 {
+    match effort {
+        Some(ReasoningEffort::Low) => 2048,
+        Some(ReasoningEffort::High) => 24_576,
+        Some(ReasoningEffort::Medium) | None => 8192,
+    }
 }
 
 pub fn parse_models(protocol: Protocol, value: &Value) -> Vec<Model> {
@@ -559,6 +631,69 @@ mod tests {
             });
         }
         assert!(build_request(&request).is_err());
+    }
+    #[test]
+    fn thinking_switch_uses_each_provider_family_spelling() {
+        let body = |protocol: Protocol, url: &str, thinking: Option<bool>| {
+            let mut profile = ProviderProfile::preset(0, "test".into());
+            profile.protocol = protocol;
+            profile.base_url = url.into();
+            profile.model = Model::unknown("m");
+            profile.parameters.max_output_tokens = Some(8192);
+            profile.parameters.thinking = thinking;
+            profile.parameters.reasoning_effort = Some(ReasoningEffort::Low);
+            let request = WorkerRequest {
+                version: 1,
+                profile,
+                operation: WorkerOperation::Generate {
+                    system: "s".into(),
+                    messages: vec![ChatMessage {
+                        role: Role::User,
+                        text: "u".into(),
+                    }],
+                    images: vec![],
+                },
+            };
+            serde_json::from_slice::<Value>(&build_request(&request).unwrap().body.unwrap())
+                .unwrap()
+        };
+        let deepseek = "https://api.deepseek.com/v1";
+        let followed = body(Protocol::OpenAi, deepseek, None);
+        assert!(followed.get("thinking").is_none() && followed.get("reasoning_effort").is_none());
+        let off = body(Protocol::OpenAi, deepseek, Some(false));
+        assert_eq!(off["thinking"]["type"], "disabled");
+        assert!(off.get("reasoning_effort").is_none());
+        let on = body(Protocol::OpenAi, deepseek, Some(true));
+        assert_eq!(on["thinking"]["type"], "enabled");
+        assert_eq!(on["reasoning_effort"], "low");
+        assert_eq!(on["max_tokens"], 8192);
+        let openai = body(Protocol::OpenAi, "https://api.openai.com/v1", Some(false));
+        assert_eq!(openai["reasoning_effort"], "none");
+        assert_eq!(openai["max_completion_tokens"], 8192);
+        assert!(openai.get("thinking").is_none());
+        let silicon = body(
+            Protocol::OpenAi,
+            "https://api.siliconflow.cn/v1",
+            Some(true),
+        );
+        assert_eq!(silicon["enable_thinking"], true);
+        let router = body(
+            Protocol::OpenAi,
+            "https://openrouter.ai/api/v1",
+            Some(false),
+        );
+        assert_eq!(router["reasoning"]["enabled"], false);
+        let claude = body(
+            Protocol::Anthropic,
+            "https://api.anthropic.com/v1",
+            Some(true),
+        );
+        assert_eq!(claude["thinking"]["budget_tokens"], 2048);
+        let gemini = body(Protocol::Gemini, "https://example.com/v1beta", Some(false));
+        assert_eq!(
+            gemini["generationConfig"]["thinkingConfig"]["thinkingBudget"],
+            0
+        );
     }
     #[test]
     fn credentials_never_survive_error_rendering() {
