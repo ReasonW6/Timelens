@@ -7,6 +7,11 @@ use windows::Win32::{
 };
 
 pub fn fit_after_show<T: ComponentHandle + 'static>(component: &T) {
+    // Headless QA keeps its requested viewport whatever the host monitor is.
+    #[cfg(debug_assertions)]
+    if crate::qa::headless() {
+        return;
+    }
     let weak = component.as_weak();
     // Winit caches the pre-show client size until its first native resize event.
     // Fit after that event so a scaled preferred size cannot overwrite the fit.

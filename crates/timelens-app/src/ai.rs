@@ -432,7 +432,14 @@ fn job_request(
         if answer.reasoning.trim().is_empty() {
             bail!("提供商没有返回正文");
         }
-        // Thinking models count their reasoning against the same output limit.
+        // Thinking models count their reasoning against the same output limit;
+        // only blame it when usage shows the limit was actually reached.
+        let used = answer.usage.output.max(answer.usage.reasoning).unwrap_or(0);
+        if used < u64::from(limit) * 9 / 10 {
+            bail!(
+                "模型只返回了思考过程，没有写正文，可能被服务商过滤或提前结束。请稍后重试，或关闭深度思考后重试"
+            );
+        }
         bail!(
             "模型的思考过程用完了最大输出（{limit} Token），没来得及写正文。请在“检查 AI 设置”里调高最大输出（思考模型建议 16384 以上，上下文窗口也要按模型实际大小填写），或关闭深度思考后重试"
         );

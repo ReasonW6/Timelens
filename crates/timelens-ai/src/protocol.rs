@@ -195,13 +195,25 @@ pub fn build_request(request: &WorkerRequest) -> Result<HttpRequest, String> {
             {
                 // Gemini 3 and later take a level instead of a budget and cannot
                 // stop thinking.
-                let level = if on {
+                // Image models only take `minimal` and `high`; the original 3 Pro
+                // has no `medium`.
+                let image = id.split('-').any(|segment| segment == "image");
+                let level = if image {
+                    Some(
+                        if on && profile.parameters.reasoning_effort == Some(ReasoningEffort::High)
+                        {
+                            "high"
+                        } else {
+                            "minimal"
+                        },
+                    )
+                } else if on {
                     profile
                         .parameters
                         .reasoning_effort
                         .map(|effort| match effort {
                             ReasoningEffort::Low => "low",
-                            ReasoningEffort::Medium if !pro || generation != Some(3) => "medium",
+                            ReasoningEffort::Medium if !id.starts_with("gemini-3-pro") => "medium",
                             _ => "high",
                         })
                 } else {
@@ -296,10 +308,13 @@ fn openai_thinking(body: &mut Value, profile: &ProviderProfile, host: &str, offi
             })
             .and_then(|major| major.parse::<u32>().ok());
         let gpt5 = generation.is_some_and(|major| major >= 5);
+        // A known chat family wins over metadata left behind by an earlier model.
+        let chat = id.starts_with("gpt-4") || id.starts_with("gpt-3");
         let reasoning = o_series
             || gpt5
-            || profile.model.supports_reasoning_effort
-            || profile.model.reasoning == Capability::Supported;
+            || (!chat
+                && (profile.model.supports_reasoning_effort
+                    || profile.model.reasoning == Capability::Supported));
         // gpt-5-pro only accepts `high`, its default.
         if id.starts_with("gpt-5-pro") {
             return;
@@ -317,7 +332,6 @@ fn openai_thinking(body: &mut Value, profile: &ProviderProfile, host: &str, offi
         if !reasoning {
             // An Azure deployment name hides its model; a chosen strength is the
             // user's word that it reasons, anything less is left to the model.
-            let chat = id.starts_with("gpt-4") || id.starts_with("gpt-3");
             if profile.azure
                 && !chat
                 && let Some(effort) = effort
@@ -861,6 +875,9 @@ mod tests {
         assert_eq!(o3["reasoning_effort"], "low");
         let chat = body(Protocol::OpenAi, openai, "gpt-4o", Some(false));
         assert!(chat.get("reasoning_effort").is_none());
+        let mut stale = profile(Protocol::OpenAi, openai, "gpt-4o", Some(true));
+        stale.model.supports_reasoning_effort = true;
+        assert!(encode(stale).get("reasoning_effort").is_none());
         let pro = body(Protocol::OpenAi, openai, "gpt-5-pro", Some(false));
         assert!(pro.get("reasoning_effort").is_none());
         let mut default_on = profile(Protocol::OpenAi, openai, "gpt-5.1", Some(true));
@@ -993,6 +1010,27 @@ mod tests {
         assert_eq!(
             lite["generationConfig"]["thinkingConfig"]["thinkingLevel"],
             "minimal"
+        );
+        let image = body(
+            Protocol::Gemini,
+            gemini,
+            "gemini-3.1-flash-lite-image",
+            Some(true),
+        );
+        assert_eq!(
+            image["generationConfig"]["thinkingConfig"]["thinkingLevel"],
+            "minimal"
+        );
+        let mut pro31 = profile(
+            Protocol::Gemini,
+            gemini,
+            "gemini-3.1-pro-preview",
+            Some(true),
+        );
+        pro31.parameters.reasoning_effort = Some(ReasoningEffort::Medium);
+        assert_eq!(
+            encode(pro31)["generationConfig"]["thinkingConfig"]["thinkingLevel"],
+            "medium"
         );
         let gemini4 = body(Protocol::Gemini, gemini, "gemini-4-argon", Some(false));
         assert_eq!(
