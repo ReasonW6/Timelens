@@ -152,7 +152,7 @@ pub fn build_request(request: &WorkerRequest) -> Result<HttpRequest, String> {
                     }
                 } else {
                     let id = &profile.model.id;
-                    if id.contains("opus-5-5") || id.contains("fable") || id.contains("mythos") {
+                    if claude_always_thinks(id) {
                         // These cannot stop thinking; low effort keeps it brief.
                         body["output_config"] = json!({"effort":"low"});
                     } else if id.contains("sonnet-5-5") {
@@ -251,7 +251,9 @@ pub fn build_request(request: &WorkerRequest) -> Result<HttpRequest, String> {
         .get("reasoning_effort")
         .is_some_and(|effort| effort != "none");
     if profile.model.supports_temperature
-        && !(profile.protocol == Protocol::Anthropic && profile.parameters.thinking == Some(true))
+        && !(profile.protocol == Protocol::Anthropic
+            && (profile.parameters.thinking == Some(true)
+                || claude_always_thinks(&profile.model.id)))
         && !reasoning_on
         && let Some(temperature) = profile.parameters.temperature
     {
@@ -326,9 +328,11 @@ fn openai_thinking(body: &mut Value, profile: &ProviderProfile, host: &str, offi
         }
         if !on {
             // Each model stops at its lowest level: `minimal` on gpt-5, `none` on
-            // the gpt-5.x line, and `low`, which every other reasoning model takes.
+            // the gpt-5.x line and GPT-6 Sol and Luna, and `low`, which every
+            // other reasoning model takes.
             body["reasoning_effort"] = json!(match generation {
                 Some(5) if id.starts_with("gpt-5.") => "none",
+                Some(6) if id.starts_with("gpt-6-sol") || id.starts_with("gpt-6-luna") => "none",
                 Some(5) => "minimal",
                 _ => "low",
             });
@@ -346,7 +350,15 @@ fn openai_thinking(body: &mut Value, profile: &ProviderProfile, host: &str, offi
         || host.starts_with("dashscope")
         || host.ends_with(".maas.aliyuncs.com")
     {
-        body["enable_thinking"] = json!(on);
+        // Thinking-only models refuse `false`; off leaves them to their default.
+        let id = profile.model.id.as_str();
+        let always = id.starts_with("qwq")
+            || id.starts_with("deepseek-r1")
+            || id.starts_with("glm-5.3")
+            || id.split('-').any(|segment| segment == "thinking");
+        if on || !always {
+            body["enable_thinking"] = json!(on);
+        }
         if effort.is_some() {
             body["thinking_budget"] = json!(thinking_budget(effort));
         }
@@ -357,6 +369,11 @@ fn openai_thinking(body: &mut Value, profile: &ProviderProfile, host: &str, offi
             body["reasoning_effort"] = json!(effort);
         }
     }
+}
+
+/// Claude models that cannot stop thinking, and so also refuse a temperature.
+fn claude_always_thinks(model: &str) -> bool {
+    model.contains("opus-5-5") || model.contains("fable") || model.contains("mythos")
 }
 
 /// Claude models before 4.6 take a fixed thinking budget; later ones reject it.
@@ -820,7 +837,9 @@ mod tests {
             "gpt-6-sol",
             Some(false),
         );
-        assert_eq!(regional["reasoning_effort"], "low");
+        assert_eq!(regional["reasoning_effort"], "none");
+        let astra = body(Protocol::OpenAi, openai, "gpt-6-astra", Some(false));
+        assert_eq!(astra["reasoning_effort"], "low");
         assert_eq!(regional["max_completion_tokens"], 8192);
         let pro54 = body(Protocol::OpenAi, openai, "gpt-5.4-pro", Some(true));
         assert_eq!(pro54["reasoning_effort"], "medium");
@@ -858,6 +877,13 @@ mod tests {
             Some(true),
         );
         assert_eq!(workspace["enable_thinking"], true);
+        let glm = body(
+            Protocol::OpenAi,
+            "https://dashscope.aliyuncs.com/compatible-mode/v1",
+            "glm-5.3",
+            Some(false),
+        );
+        assert!(glm.get("enable_thinking").is_none());
         let silicon = body(
             Protocol::OpenAi,
             "https://api.siliconflow.cn/v1",
@@ -895,6 +921,15 @@ mod tests {
             Some(false),
         );
         assert!(current_off.get("thinking").is_none());
+        let mut warm_claude = profile(
+            Protocol::Anthropic,
+            anthropic,
+            "claude-opus-5-5",
+            Some(false),
+        );
+        warm_claude.model.supports_temperature = true;
+        warm_claude.parameters.temperature = Some(0.3);
+        assert!(encode(warm_claude).get("temperature").is_none());
         let sonnet55 = body(
             Protocol::Anthropic,
             anthropic,
