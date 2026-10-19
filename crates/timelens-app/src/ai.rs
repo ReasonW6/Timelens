@@ -626,7 +626,7 @@ fn run_job(
                         images: vec![],
                     },
                 };
-                match run_worker(
+                let summary = run_worker(
                     &compression_request,
                     || {
                         lock(storage).map_or(true, |s| {
@@ -634,10 +634,13 @@ fn run_job(
                         })
                     },
                     |_| Ok(()),
-                ) {
-                    // A summary left empty by thinking would silently drop those turns.
-                    Ok(answer) if !answer.text.trim().is_empty() => {
-                        usage.add(&answer.usage);
+                )
+                .ok()
+                .inspect(|answer| usage.add(&answer.usage))
+                // A summary left empty by thinking would silently drop those turns.
+                .filter(|answer| !answer.text.trim().is_empty());
+                match summary {
+                    Some(answer) => {
                         system.push_str(&format!("\n早期对话摘要：\n{}", answer.text));
                         if let Some(through) = indexes
                             .get(plan.older.len().saturating_sub(1))
@@ -653,7 +656,7 @@ fn run_job(
                             )?;
                         }
                     }
-                    _ => {
+                    None => {
                         let _ = events.send(AiEvent::Status(
                             "压缩失败；本次仅发送可容纳的最近完整用户对话，较早内容未发送".into(),
                         ));

@@ -49,10 +49,15 @@ pub fn start_headless(data_directory: Option<&Path>) -> anyhow::Result<bool> {
     // A directory that does not exist yet cannot be the installed dataset.
     if let Ok(directory) = fs::canonicalize(directory) {
         let control = crate::local_config::control_directory()?;
-        let installed = [crate::local_config::resolve(&control)?, control];
-        if installed
+        let installed = [crate::local_config::resolve(&control)?, control]
             .iter()
-            .any(|path| fs::canonicalize(path).is_ok_and(|path| path == directory))
+            .filter_map(|path| fs::canonicalize(path).ok())
+            .collect::<Vec<_>>();
+        // The directory may itself point elsewhere through a data-location file.
+        let target = crate::local_config::resolve(&directory)?;
+        if [directory, target]
+            .iter()
+            .any(|path| fs::canonicalize(path).is_ok_and(|path| installed.contains(&path)))
         {
             bail!("TIMELENS_QA_HEADLESS must not open the installed Timelens dataset");
         }

@@ -149,9 +149,16 @@ pub fn build_request(request: &WorkerRequest) -> Result<HttpRequest, String> {
                         body["output_config"] = json!({"effort":effort});
                     }
                 } else {
-                    // Newer models refuse `disabled`; without the field they skip
-                    // thinking on easy turns, and low effort keeps it rare.
-                    body["output_config"] = json!({"effort":"low"});
+                    let id = &profile.model.id;
+                    if id.contains("opus-5-5") || id.contains("fable") || id.contains("mythos") {
+                        // These cannot stop thinking; low effort keeps it brief.
+                        body["output_config"] = json!({"effort":"low"});
+                    } else if id.contains("sonnet-5-5") {
+                        // Sonnet 5.5 spells its lowest setting this way.
+                        body["thinking"] = json!({"type":"between_tools"});
+                    } else {
+                        body["thinking"] = json!({"type":"disabled"});
+                    }
                 }
             }
             body
@@ -175,7 +182,30 @@ pub fn build_request(request: &WorkerRequest) -> Result<HttpRequest, String> {
                     .push(json!({"inlineData":{"mimeType":"image/webp","data":image.webp_base64}}));
             }
             let mut body = json!({"systemInstruction":{"parts":[{"text":system}]},"contents":wire,"generationConfig":{"maxOutputTokens":max_output}});
-            if let Some(on) = profile.parameters.thinking {
+            let id = profile.model.id.trim_start_matches("models/");
+            if let Some(on) = profile.parameters.thinking
+                && id.starts_with("gemini-3")
+            {
+                // Gemini 3 takes a level instead of a budget and cannot stop thinking.
+                let pro = id.contains("-pro");
+                let level = if on {
+                    profile
+                        .parameters
+                        .reasoning_effort
+                        .map(|effort| match effort {
+                            ReasoningEffort::Low => "low",
+                            ReasoningEffort::Medium if !pro => "medium",
+                            _ => "high",
+                        })
+                } else {
+                    Some(if pro { "low" } else { "minimal" })
+                };
+                let config = &mut body["generationConfig"]["thinkingConfig"];
+                *config = json!({"includeThoughts":on});
+                if let Some(level) = level {
+                    config["thinkingLevel"] = json!(level);
+                }
+            } else if let Some(on) = profile.parameters.thinking {
                 body["generationConfig"]["thinkingConfig"] = if on {
                     // -1 lets the model size its own thinking; a fixed budget counts
                     // against maxOutputTokens and must leave room to answer.
@@ -232,19 +262,28 @@ fn openai_thinking(body: &mut Value, profile: &ProviderProfile, host: &str, offi
     };
     let effort = parameters.reasoning_effort.filter(|_| on);
     if official {
-        // Only reasoning models take the field; chat models reject it. Azure
-        // deployment names are arbitrary, so an unfamiliar one counts as reasoning.
+        // Only reasoning models take the field; chat models reject it.
         let id = profile.model.id.trim_start_matches("openai/");
         let o_series = id.starts_with('o') && id[1..].starts_with(|c: char| c.is_ascii_digit());
         let gpt5 = id.starts_with("gpt-5");
-        let chat = id.starts_with("gpt-4") || id.starts_with("gpt-3");
         let reasoning = o_series
             || gpt5
             || profile.model.supports_reasoning_effort
-            || profile.model.reasoning == Capability::Supported
-            || (profile.azure && !chat);
+            || profile.model.reasoning == Capability::Supported;
         // gpt-5-pro only accepts `high`, its default.
-        if !reasoning || id.starts_with("gpt-5-pro") {
+        if id.starts_with("gpt-5-pro") {
+            return;
+        }
+        if !reasoning {
+            // An Azure deployment name hides its model; a chosen strength is the
+            // user's word that it reasons, anything less is left to the model.
+            let chat = id.starts_with("gpt-4") || id.starts_with("gpt-3");
+            if profile.azure
+                && !chat
+                && let Some(effort) = effort
+            {
+                body["reasoning_effort"] = json!(effort);
+            }
             return;
         }
         if !on {
@@ -268,6 +307,7 @@ fn openai_thinking(body: &mut Value, profile: &ProviderProfile, host: &str, offi
     } else if host.ends_with("siliconflow.cn")
         || host.ends_with("siliconflow.com")
         || host.starts_with("dashscope")
+        || host.ends_with(".maas.aliyuncs.com")
     {
         body["enable_thinking"] = json!(on);
         if effort.is_some() {
@@ -753,7 +793,16 @@ mod tests {
             Some(true),
         );
         alias.azure = true;
-        assert_eq!(encode(alias)["reasoning_effort"], "low");
+        assert_eq!(encode(alias.clone())["reasoning_effort"], "low");
+        alias.parameters.thinking = Some(false);
+        assert!(encode(alias)["reasoning_effort"].is_null());
+        let workspace = body(
+            Protocol::OpenAi,
+            "https://ws.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1",
+            "qwen-plus",
+            Some(true),
+        );
+        assert_eq!(workspace["enable_thinking"], true);
         let silicon = body(
             Protocol::OpenAi,
             "https://api.siliconflow.cn/v1",
@@ -791,6 +840,20 @@ mod tests {
             Some(false),
         );
         assert!(current_off.get("thinking").is_none());
+        let sonnet55 = body(
+            Protocol::Anthropic,
+            anthropic,
+            "claude-sonnet-5-5",
+            Some(false),
+        );
+        assert_eq!(sonnet55["thinking"]["type"], "between_tools");
+        let sonnet5 = body(
+            Protocol::Anthropic,
+            anthropic,
+            "claude-sonnet-5",
+            Some(false),
+        );
+        assert_eq!(sonnet5["thinking"]["type"], "disabled");
         let gemini = "https://example.com/v1beta";
         let flash = body(Protocol::Gemini, gemini, "gemini-2.5-flash", Some(false));
         assert_eq!(
@@ -807,6 +870,22 @@ mod tests {
         assert_eq!(
             encode(high)["generationConfig"]["thinkingConfig"]["thinkingBudget"],
             7168
+        );
+        let pro3 = body(
+            Protocol::Gemini,
+            gemini,
+            "gemini-3-pro-preview",
+            Some(false),
+        );
+        assert_eq!(
+            pro3["generationConfig"]["thinkingConfig"]["thinkingLevel"],
+            "low"
+        );
+        assert!(pro3["generationConfig"]["thinkingConfig"]["thinkingBudget"].is_null());
+        let flash3 = body(Protocol::Gemini, gemini, "gemini-3-flash", Some(true));
+        assert_eq!(
+            flash3["generationConfig"]["thinkingConfig"]["thinkingLevel"],
+            "low"
         );
     }
     #[test]
