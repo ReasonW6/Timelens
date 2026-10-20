@@ -2,14 +2,17 @@ import { ComboBox, LineEdit, TextEdit, ScrollView, ListView } from "std-widgets.
 import { Theme, Action, Label, Note, SectionTitle, Eyebrow, Rule, CheckBox, StatusLine, Segmented, Segment, Switch, SettingRow, SettingsHeader, SettingsGroup, SettingExpander, Card, Badge, Dot } from "theme.slint";
 
 // One block of a Markdown answer. `kind`: 0 paragraph, 1 title, 2 heading,
-// 3 list item, 4 quote, 5 code, 6 rule, 7 table header, 8 table row;
-// `marker` is the bullet or number, `cells` a table row's cells.
+// 3 list item, 4 quote, 5 code, 6 rule, 7 table header, 8 table row,
+// 9 a follow-up question, 10 the answer's speaker, 11 a new topic; `marker`
+// is the bullet or number, `cells` a table row's cells.
 export struct MdBlock { kind: int, text: string, marker: string, indent: int, cells: [string] }
 
 // One row of the summary history: a summary version, or a first summary attempt
 // that has not succeeded. `state`: 0 done, 1 queued or running, 2 failed,
 // 3 no data, missed or canceled.
 export struct AiHistoryRow { key: string, title: string, detail: string, state: int, pinned: bool }
+// One figure of what a new summary would send, and what it counts.
+export struct AiStat { value: string, label: string }
 // A saved AI connection in the settings list.
 export struct AiConnectionRow { title: string, detail: string, tested: bool }
 
@@ -86,7 +89,7 @@ export global AiState {
     in-out property <bool> prepared: false;
     in-out property <int> preview-state: 0;
     in-out property <string> preview-target;
-    in-out property <string> preview-facts;
+    in-out property <[AiStat]> preview-stats;
     in-out property <string> preview-missing;
     in-out property <int> preview-missing-count: 0;
     in-out property <bool> preview-empty: false;
@@ -125,6 +128,8 @@ export global AiState {
     // which can be selected, instead.
     pure callback markdown(string) -> [MdBlock];
     in-out property <bool> raw-view: false;
+    // The reader's menu of rarer actions is open.
+    in-out property <bool> reader-menu: false;
     in-out property <string> exposed-reasoning;
     // The model is still thinking: reasoning arrives but the answer has not begun.
     in-out property <bool> reasoning-active: false;
@@ -262,9 +267,9 @@ component PickRow inherits Rectangle {
     in property <string> mark;
     in property <color> mark-color: Theme.warn;
     callback clicked;
-    height: root.detail == "" ? 42px : 56px;
+    height: root.detail == "" ? 44px : 60px;
     vertical-stretch: 0;
-    border-radius: 9px;
+    border-radius: 10px;
     background: root.selected ? Theme.raised : touch.has-hover && !Theme.modal-open ? Theme.hover-tint : transparent;
     border-width: key.has-focus ? 2px : root.selected ? 1px : 0px;
     border-color: key.has-focus ? Theme.focus : Theme.line;
@@ -283,7 +288,7 @@ component PickRow inherits Rectangle {
             alignment: center; spacing: 3px; horizontal-stretch: 1;
             HorizontalLayout {
                 spacing: 6px;
-                Text { text: root.title; color: Theme.ink; font-size: 13px; font-weight: root.selected ? 600 : 500; overflow: elide; horizontal-stretch: 1; }
+                Text { text: root.title; color: Theme.ink; font-size: 14px; font-weight: root.selected ? 600 : 500; overflow: elide; horizontal-stretch: 1; }
                 if root.mark != "" : Text { text: root.mark; color: root.mark-color; font-size: 12px; vertical-alignment: center; }
             }
             if root.detail != "" : Text { text: root.detail; color: Theme.ink-3; font-size: 12px; overflow: elide; }
@@ -391,6 +396,83 @@ component ThinkingBlock inherits VerticalLayout {
     }
 }
 
+// The AI page's mark: a sparkle on a soft tile.
+component HeroMark inherits Rectangle {
+    in property <length> size: 48px;
+    in property <image> icon: @image-url("icons/sparkles.svg");
+    width: root.size; height: root.size;
+    border-radius: root.size * 0.3;
+    background: Theme.brand-soft;
+    Image { width: root.size * 0.5; height: self.width; source: root.icon; colorize: Theme.brand; }
+}
+
+// One choice for a new summary: an icon, a title with a quieter line, and the
+// controls on the right, the way the settings rows read.
+component OptionRow inherits Rectangle {
+    in property <image> icon;
+    in property <string> title;
+    in property <string> detail;
+    height: 64px;
+    vertical-stretch: 0;
+    HorizontalLayout {
+        padding-left: 18px; padding-right: 16px; spacing: 14px;
+        VerticalLayout {
+            alignment: center;
+            Rectangle {
+                width: 34px; height: 34px; border-radius: 9px; background: Theme.surface-3;
+                Image { width: 18px; height: 18px; source: root.icon; colorize: Theme.ink-2; }
+            }
+        }
+        VerticalLayout {
+            alignment: center; spacing: 2px; horizontal-stretch: 1;
+            Text { text: root.title; color: Theme.ink; font-size: 14px; font-weight: 600; overflow: elide; }
+            if root.detail != "" : Text { text: root.detail; color: Theme.ink-3; font-size: 12px; overflow: elide; }
+        }
+        VerticalLayout { alignment: center; HorizontalLayout { spacing: 8px; @children } }
+    }
+}
+
+// One figure of the send preview.
+component StatTile inherits Rectangle {
+    in property <string> value;
+    in property <string> label;
+    height: 70px;
+    min-width: 0px;
+    preferred-width: 0px;
+    horizontal-stretch: 1;
+    border-radius: 10px;
+    background: Theme.surface-2;
+    accessible-role: text;
+    accessible-label: root.value + " " + root.label;
+    VerticalLayout {
+        padding-left: 14px; padding-right: 8px; alignment: center; spacing: 3px;
+        Text { text: root.value; color: Theme.ink; font-family: Theme.font-display; font-size: 22px; font-weight: 600; overflow: elide; }
+        Text { text: root.label; color: Theme.ink-3; font-size: 12px; overflow: elide; }
+    }
+}
+
+// An entry of a small menu.
+component MenuItem inherits Rectangle {
+    in property <string> text;
+    in property <image> icon;
+    in property <bool> danger: false;
+    in property <bool> enabled: true;
+    callback clicked;
+    height: 36px;
+    border-radius: 7px;
+    background: touch.has-hover && root.enabled ? (root.danger ? Theme.danger-soft : Theme.hover-tint) : transparent;
+    accessible-role: button;
+    accessible-label: root.text;
+    accessible-enabled: root.enabled;
+    accessible-action-default => { if root.enabled { root.clicked(); } }
+    HorizontalLayout {
+        padding-left: 10px; padding-right: 12px; spacing: 10px;
+        VerticalLayout { alignment: center; Image { width: 16px; height: 16px; source: root.icon; colorize: !root.enabled ? Theme.ink-4 : root.danger ? Theme.danger : Theme.ink-2; } }
+        Text { text: root.text; font-size: 14px; vertical-alignment: center; color: !root.enabled ? Theme.ink-4 : root.danger ? Theme.danger : Theme.ink; }
+    }
+    touch := TouchArea { enabled: root.enabled; mouse-cursor: pointer; clicked => { root.clicked(); } }
+}
+
 // One step of the getting-started card.
 component GuideStep inherits HorizontalLayout {
     in property <string> number;
@@ -415,6 +497,9 @@ export component AiPanel inherits Rectangle {
     // The settings center shows connections, templates, automatic summaries and
     // records; the AI page writes and reads summaries.
     in property <bool> settings-mode: false;
+    // The window is too narrow for labelled reader actions; with `rail`, also for the full history pane.
+    in property <bool> narrow: false;
+    in property <bool> rail: false;
     callback open-settings;
 
     // This panel's own view state. Two panels exist at once while the AI page
@@ -431,10 +516,6 @@ export component AiPanel inherits Rectangle {
     // 0 a new summary, 1 the getting-started card, 4 reading, 6 choosing snapshots.
     private property <int> view: AiState.page == 4 ? 4 : AiState.page == 6 ? 6 : AiState.providers.length == 0 ? 1 : 0;
     private property <bool> show-history: AiState.history.length > 0 || AiState.providers.length > 0;
-    // Set by the window: beside the history list a narrow reader cannot fit
-    // every action on one row.
-    in property <bool> narrow-reader: false;
-    private property <bool> reader-body: AiState.conversation != "" || AiState.reader-state <= 2;
     private property <bool> image-in: AiState.image-index >= 0 && AiState.image-checked[AiState.image-index];
 
     function confirm(kind: int) {
@@ -456,21 +537,26 @@ export component AiPanel inherits Rectangle {
 
         if !root.settings-mode : HorizontalLayout {
             vertical-stretch: 1;
-            spacing: 20px;
+            spacing: 24px;
 
             // ───── The summary history ─────
             if root.show-history : Rectangle {
-                width: 264px;
+                width: root.rail ? 232px : 272px;
                 background: Theme.pane;
-                border-radius: 12px;
+                border-radius: 14px;
                 border-width: 1px;
                 border-color: Theme.line;
                 VerticalLayout {
-                    padding: 8px; spacing: 6px;
-                    HorizontalLayout { height: 26px; padding-left: 6px; Eyebrow { text: "总结记录"; vertical-alignment: center; } }
-                    PickRow { title: "＋ 新建总结"; dot: false; selected: AiState.page != 4; clicked => { AiState.new-summary(); } }
-                    Rule { }
-                    if AiState.history.length == 0 : Note { text: "生成的总结会出现在这里。"; font-size: 12px; horizontal-alignment: center; }
+                    padding: 10px; spacing: 4px;
+                    Action {
+                        height: 40px;
+                        text: "新建总结";
+                        icon: @image-url("icons/plus.svg");
+                        selected: AiState.page != 4;
+                        clicked => { AiState.reader-menu = false; AiState.new-summary(); }
+                    }
+                    HorizontalLayout { height: 36px; padding-left: 8px; padding-top: 10px; Eyebrow { text: "总结记录"; vertical-alignment: center; } }
+                    if AiState.history.length == 0 : Note { text: "生成的总结会出现在这里。"; font-size: 13px; horizontal-alignment: center; }
                     ListView {
                         vertical-stretch: 1;
                         for row[i] in AiState.history : PickRow {
@@ -480,7 +566,7 @@ export component AiPanel inherits Rectangle {
                             halo: row.state == 1;
                             mark: row.pinned ? "★" : "";
                             selected: AiState.page == 4 && AiState.history-index == i;
-                            clicked => { AiState.choose-history(i); }
+                            clicked => { AiState.reader-menu = false; AiState.choose-history(i); }
                         }
                     }
                 }
@@ -492,364 +578,471 @@ export component AiPanel inherits Rectangle {
                 // ───── Getting started ─────
                 if root.view == 1 : VerticalLayout {
                     alignment: start;
-                    Card {
-                        height: guide.preferred-height;
-                        guide := VerticalLayout {
-                            padding: 24px; spacing: 16px;
-                            SectionTitle { text: "开始之前"; }
-                            Note { text: "Timelens 用你自己的 AI 服务整理记录。总结和对话只保存在本机，每次发送前都会列出将发送的内容。"; }
-                            GuideStep { number: "1"; title: "选择 AI 服务"; detail: "OpenAI、Claude、Gemini、DeepSeek 等，也可以是本机的兼容服务。"; }
-                            GuideStep { number: "2"; title: "填写密钥并获取模型"; detail: "密钥只保存在 Windows 凭据管理器，界面不会再显示。"; }
-                            GuideStep { number: "3"; title: "测试连接"; detail: "测试只发送一句不含活动数据的测试文本。"; }
-                            HorizontalLayout {
-                                alignment: start;
-                                Action { text: "去设置"; icon: @image-url("icons/settings.svg"); accent: true; clicked => { AiState.settings-section = 0; root.open-settings(); } }
+                    padding-top: 16px;
+                    HorizontalLayout {
+                        Rectangle { horizontal-stretch: 1; }
+                        Card {
+                            max-width: 640px;
+                            horizontal-stretch: 1000;
+                            height: guide.preferred-height;
+                            guide := VerticalLayout {
+                                padding: 32px; spacing: 20px;
+                                HorizontalLayout {
+                                    spacing: 16px;
+                                    HeroMark { }
+                                    VerticalLayout {
+                                        alignment: center; spacing: 4px;
+                                        Text { text: "开始之前"; color: Theme.ink; font-size: 22px; font-weight: 600; }
+                                        Text { text: "用你自己的 AI 服务整理记录"; color: Theme.ink-2; font-size: 14px; overflow: elide; }
+                                    }
+                                }
+                                Note { text: "总结和对话只保存在本机，每次发送前都会列出将发送的内容。"; font-size: 14px; }
+                                Rule { }
+                                GuideStep { number: "1"; title: "选择 AI 服务"; detail: "OpenAI、Claude、Gemini、DeepSeek 等，也可以是本机的兼容服务。"; }
+                                GuideStep { number: "2"; title: "填写密钥并获取模型"; detail: "密钥只保存在 Windows 凭据管理器，界面不会再显示。"; }
+                                GuideStep { number: "3"; title: "测试连接"; detail: "测试只发送一句不含活动数据的测试文本。"; }
+                                HorizontalLayout {
+                                    alignment: start;
+                                    Action { height: 40px; text: "去设置 AI 连接"; icon: @image-url("icons/settings.svg"); accent: true; clicked => { AiState.settings-section = 0; root.open-settings(); } }
+                                }
                             }
                         }
+                        Rectangle { horizontal-stretch: 1; }
                     }
                 }
 
                 // ───── A new summary ─────
                 if root.view == 0 : composer := ScrollView {
+                    // The column's width, given up front: wrapped text inside the
+                    // conditional blocks below is measured before the layout gives it
+                    // a width, so it would count too few lines and spill out.
+                    property <length> column: min(760px, self.visible-width - 16px);
                     vertical-stretch: 1;
                     horizontal-scrollbar-policy: always-off;
                     viewport-width: self.visible-width;
                     VerticalLayout {
                         width: composer.visible-width;
-                        alignment: start;
-                        spacing: 20px;
-                        padding-right: 12px; padding-bottom: 12px;
-
-                        VerticalLayout {
-                            spacing: 6px;
-                            Eyebrow { text: "时段"; }
-                            Text { text: AiState.range-label; color: Theme.ink; font-size: 18px; font-weight: 600; wrap: word-wrap; }
-                            Note { text: "在右上角调整时段；时间线、统计和快照页会一起变化。"; font-size: 12px; }
-                        }
-
-                        VerticalLayout {
-                            spacing: 8px;
-                            Eyebrow { text: "使用"; }
-                            HorizontalLayout {
-                                spacing: 8px;
-                                alignment: LayoutAlignment.start;
-                                VerticalLayout { alignment: center; Label { text: "用"; } }
-                                if AiState.providers.length > 1 : AiSelect {
-                                    width: 220px;
-                                    model: AiState.providers;
-                                    current-index <=> AiState.use-provider-index;
-                                    accessible-label: "这次总结使用的 AI 连接";
-                                    selected => { AiState.use-provider(self.current-index); }
-                                }
-                                if AiState.providers.length == 1 : VerticalLayout { alignment: center; Label { text: AiState.providers[0]; font-weight: 600; } }
-                                VerticalLayout { alignment: center; Label { text: "按"; } }
-                                AiSelect {
-                                    width: 180px;
-                                    model: AiState.prompts;
-                                    current-index <=> AiState.use-prompt-index;
-                                    accessible-label: "这次总结使用的总结模板";
-                                    selected => { AiState.use-prompt(self.current-index); }
-                                }
-                                VerticalLayout { alignment: center; Label { text: "整理"; } }
-                                if AiState.providers.length == 1 : VerticalLayout { alignment: center; Action { quiet: true; text: "更改"; clicked => { root.edit-connection(); } } }
-                            }
-                        }
-
-                        VerticalLayout {
-                            spacing: 8px;
-                            Eyebrow { text: "快照"; }
-                            if AiState.use-vision == 1 : HorizontalLayout {
-                                spacing: 10px;
-                                alignment: LayoutAlignment.start;
-                                VerticalLayout { alignment: center; Label { text: AiState.image-selected == 0 ? "附带快照：未选择" : "已选 " + AiState.image-selected + " 张快照"; } }
-                                Action { text: AiState.image-selected == 0 ? "选择快照…" : "调整"; icon: @image-url("icons/photo.svg"); clicked => { AiState.list-images(); AiState.page = 6; } }
-                                if AiState.image-selected > 0 : Action { quiet: true; text: "全部移除"; clicked => { AiState.clear-images(); } }
-                            }
-                            if AiState.use-vision != 1 : HorizontalLayout {
-                                spacing: 10px;
-                                alignment: LayoutAlignment.start;
-                                VerticalLayout { alignment: center; Note { text: "这个连接没有开启附带快照，总结只含文字。"; } }
-                                Action { quiet: true; text: "去设置开启"; clicked => { root.edit-connection(); } }
-                            }
-                        }
-
-                        // What will be sent, worked out locally before anything leaves.
-                        preview-card := Rectangle {
-                            // Wrapped text inside the conditional blocks below is measured
-                            // before the layout gives it a width, so it counts too few lines
-                            // and spills out of the card. Give it the width up front:
-                            // the column's right padding plus this card's own padding.
-                            property <length> text-width: composer.visible-width - 44px;
-                            vertical-stretch: 0;
-                            border-radius: 12px;
-                            border-width: 1px;
-                            border-color: AiState.preview-state == 1 && AiState.preview-empty ? Theme.warn-line : AiState.preview-state == 2 ? Theme.danger-line : Theme.line;
-                            background: AiState.preview-state == 1 && AiState.preview-empty ? Theme.warn-soft : Theme.surface;
-                            preview-body := VerticalLayout {
-                                padding: 16px; spacing: 12px;
-                                Text {
-                                    text: AiState.preview-state == 1 ? "将发送给 " + AiState.preview-target : "将发送的内容";
-                                    color: Theme.ink; font-size: 15px; font-weight: 600; wrap: word-wrap;
-                                }
-                                if AiState.preview-state == 0 : Note { text: "正在整理将发送的内容…"; }
-                                if AiState.preview-state == 2 : VerticalLayout {
-                                    spacing: 10px;
-                                    HorizontalLayout {
-                                        spacing: 8px;
-                                        VerticalLayout { alignment: start; Image { width: 16px; height: 16px; source: @image-url("icons/alert-triangle.svg"); colorize: Theme.danger; } }
-                                        Text { width: preview-card.text-width - 24px; text: AiState.preview-error; color: Theme.ink-2; font-size: 13px; wrap: word-wrap; horizontal-stretch: 1; }
-                                    }
-                                    HorizontalLayout {
-                                        spacing: 8px;
-                                        alignment: LayoutAlignment.start;
-                                        if AiState.preview-fix == 1 : Action { text: "打开连接设置"; clicked => { root.edit-connection(); } }
-                                        if AiState.preview-fix == 2 : Action { text: "去设置模板"; clicked => { AiState.settings-section = 1; root.open-settings(); } }
-                                        if AiState.preview-fix == 3 : Action { text: "移除已选快照"; clicked => { AiState.clear-images(); } }
-                                        Action { quiet: true; text: "重新检查"; clicked => { AiState.prepare(); } }
-                                    }
-                                }
-                                if AiState.preview-state == 1 : VerticalLayout {
-                                    spacing: 12px;
-                                    Text { width: preview-card.text-width; text: AiState.preview-facts; color: Theme.ink-2; font-size: 13px; wrap: word-wrap; }
-                                    if AiState.preview-empty : Text { width: preview-card.text-width; text: "这个时段没有记录。继续只会保存一条「无数据」记录，不会调用 AI。"; color: Theme.warn; font-size: 13px; wrap: word-wrap; }
-                                    // One above the other: wrapped text side by side is measured
-                                    // too short and spills out of the card.
-                                    VerticalLayout {
-                                        spacing: 4px;
-                                        Eyebrow { text: "包含"; }
-                                        Note { width: preview-card.text-width; text: "各应用的名称，以及打开、显示、专注和后台时长；窗口数量；空闲、锁屏、睡眠、暂停等系统状态时长；按小时的专注与输入趋势；键盘和鼠标总次数；完整自然日内次数最多的 20 个键位；缺失时段。" + (AiState.image-selected > 0 ? "另附你选的 " + AiState.image-selected + " 张快照原图。" : ""); }
-                                    }
-                                    VerticalLayout {
-                                        spacing: 4px;
-                                        Eyebrow { text: "不含"; }
-                                        Note {
-                                            width: preview-card.text-width;
-                                            text: AiState.image-selected > 0
-                                                ? "以上数据不含窗口标题、网址、文档内容、按键顺序、文件路径和密钥。但快照是整屏图像，图中能看到的标题、网址和文档内容会一起发送。"
-                                                : "窗口标题、网址、文档内容、按键顺序、文件路径和密钥。";
-                                        }
-                                    }
-                                    if AiState.preview-missing-count > 0 : VerticalLayout {
-                                        spacing: 6px;
-                                        HorizontalLayout {
-                                            alignment: LayoutAlignment.start;
-                                            Action { quiet: true; text: (root.missing-open ? "收起" : "查看") + "缺失时段（" + AiState.preview-missing-count + "）"; clicked => { root.missing-open = !root.missing-open; } }
-                                        }
-                                        if root.missing-open : Note { width: preview-card.text-width; text: AiState.preview-missing; }
-                                    }
-                                }
-                            }
-                        }
-
                         HorizontalLayout {
-                            spacing: 12px;
-                            alignment: LayoutAlignment.start;
-                            Action { text: "生成总结"; icon: @image-url("icons/sparkles.svg"); accent: true; enabled: AiState.prepared && AiState.preview-state == 1; clicked => { AiState.send-summary(); } }
-                            VerticalLayout { alignment: center; Note { text: "会使用你自己的 AI 服务额度；结果只保存在本机。"; font-size: 12px; } }
+                            alignment: center;
+                            VerticalLayout {
+                                width: composer.column;
+                                alignment: start;
+                                spacing: 20px;
+                                padding-top: 12px; padding-bottom: 24px;
+
+                                HorizontalLayout {
+                                    spacing: 16px;
+                                    HeroMark { }
+                                    VerticalLayout {
+                                        alignment: center; spacing: 4px; horizontal-stretch: 1;
+                                        Text { text: "总结这段时间"; color: Theme.ink; font-size: 24px; font-weight: 600; }
+                                        Text { text: AiState.range-label; color: Theme.ink-2; font-size: 15px; overflow: elide; }
+                                    }
+                                }
+
+                                Card {
+                                    height: options.preferred-height;
+                                    options := VerticalLayout {
+                                        OptionRow {
+                                            icon: @image-url("icons/plug-connected.svg");
+                                            title: "AI 连接";
+                                            detail: AiState.preview-target != "" ? AiState.preview-target : "这次总结使用的服务和模型";
+                                            if AiState.providers.length > 1 : AiSelect {
+                                                width: 220px;
+                                                model: AiState.providers;
+                                                current-index <=> AiState.use-provider-index;
+                                                accessible-label: "这次总结使用的 AI 连接";
+                                                selected => { AiState.use-provider(self.current-index); }
+                                            }
+                                            Action { quiet: AiState.providers.length > 1; text: AiState.providers.length > 1 ? "设置" : "更改"; accessible-label: "更改这个 AI 连接"; clicked => { root.edit-connection(); } }
+                                        }
+                                        Rule { }
+                                        OptionRow {
+                                            icon: @image-url("icons/file-description.svg");
+                                            title: "总结模板";
+                                            detail: "决定总结的结构和侧重";
+                                            AiSelect {
+                                                width: 220px;
+                                                model: AiState.prompts;
+                                                current-index <=> AiState.use-prompt-index;
+                                                accessible-label: "这次总结使用的总结模板";
+                                                selected => { AiState.use-prompt(self.current-index); }
+                                            }
+                                        }
+                                        Rule { }
+                                        OptionRow {
+                                            icon: @image-url("icons/photo.svg");
+                                            title: "附带快照";
+                                            detail: AiState.use-vision != 1 ? "这个连接没有开启附带快照，总结只含文字"
+                                                : AiState.image-selected == 0 ? "可选，最多 20 张，只用于这一次请求"
+                                                : "已选 " + AiState.image-selected + " 张，只用于这一次请求";
+                                            if AiState.use-vision == 1 && AiState.image-selected > 0 : Action { quiet: true; text: "全部移除"; clicked => { AiState.clear-images(); } }
+                                            if AiState.use-vision == 1 : Action { text: AiState.image-selected == 0 ? "选择快照…" : "调整"; icon: @image-url("icons/photo.svg"); clicked => { AiState.list-images(); AiState.page = 6; } }
+                                            if AiState.use-vision != 1 : Action { text: "去设置开启"; clicked => { root.edit-connection(); } }
+                                        }
+                                    }
+                                }
+
+                                // What will be sent, worked out locally before anything leaves.
+                                Card {
+                                    height: preview-body.preferred-height;
+                                    border-color: AiState.preview-state == 1 && AiState.preview-empty ? Theme.warn-line : AiState.preview-state == 2 ? Theme.danger-line : Theme.line;
+                                    background: AiState.preview-state == 1 && AiState.preview-empty ? Theme.warn-soft : Theme.surface;
+                                    preview-body := VerticalLayout {
+                                        padding: 20px; spacing: 16px;
+                                        HorizontalLayout {
+                                            spacing: 10px;
+                                            VerticalLayout { alignment: center; Image { width: 18px; height: 18px; source: @image-url("icons/shield.svg"); colorize: Theme.ink-2; } }
+                                            Text { text: "发送前预览"; color: Theme.ink; font-size: 16px; font-weight: 600; vertical-alignment: center; }
+                                            Text {
+                                                text: AiState.preview-state == 1 ? "将发送给 " + AiState.preview-target : "";
+                                                color: Theme.ink-3; font-size: 13px;
+                                                horizontal-alignment: right; vertical-alignment: center;
+                                                horizontal-stretch: 1; overflow: elide;
+                                            }
+                                        }
+                                        if AiState.preview-state == 0 : Note { text: "正在整理将发送的内容…"; font-size: 14px; }
+                                        if AiState.preview-state == 2 : VerticalLayout {
+                                            spacing: 12px;
+                                            HorizontalLayout {
+                                                spacing: 12px;
+                                                VerticalLayout { alignment: start; Image { width: 16px; height: 16px; source: @image-url("icons/alert-triangle.svg"); colorize: Theme.danger; } }
+                                                Text { width: composer.column - 68px; text: AiState.preview-error; color: Theme.ink-2; font-size: 14px; wrap: word-wrap; }
+                                            }
+                                            HorizontalLayout {
+                                                spacing: 8px;
+                                                alignment: LayoutAlignment.start;
+                                                if AiState.preview-fix == 1 : Action { text: "打开连接设置"; clicked => { root.edit-connection(); } }
+                                                if AiState.preview-fix == 2 : Action { text: "去设置模板"; clicked => { AiState.settings-section = 1; root.open-settings(); } }
+                                                if AiState.preview-fix == 3 : Action { text: "移除已选快照"; clicked => { AiState.clear-images(); } }
+                                                Action { quiet: true; text: "重新检查"; icon: @image-url("icons/refresh.svg"); clicked => { AiState.prepare(); } }
+                                            }
+                                        }
+                                        if AiState.preview-state == 1 : VerticalLayout {
+                                            spacing: 16px;
+                                            HorizontalLayout {
+                                                spacing: 10px;
+                                                for stat in AiState.preview-stats : StatTile { value: stat.value; label: stat.label; }
+                                            }
+                                            if AiState.preview-empty : Text { width: composer.column - 40px; text: "这个时段没有记录。继续只会保存一条「无数据」记录，不会调用 AI。"; color: Theme.warn; font-size: 14px; wrap: word-wrap; }
+                                            HorizontalLayout {
+                                                spacing: 12px;
+                                                VerticalLayout { alignment: start; padding-top: 2px; Image { width: 16px; height: 16px; source: @image-url("icons/check.svg"); colorize: Theme.ok; } }
+                                                VerticalLayout {
+                                                    spacing: 3px;
+                                                    Text { text: "包含"; color: Theme.ink; font-size: 14px; font-weight: 600; }
+                                                    Note { width: composer.column - 68px; text: "各应用的名称，以及打开、显示、专注和后台时长；窗口数量；空闲、锁屏、睡眠、暂停等系统状态时长；按小时的专注与输入趋势；键盘和鼠标总次数；完整自然日内次数最多的 20 个键位；缺失时段。" + (AiState.image-selected > 0 ? "另附你选的 " + AiState.image-selected + " 张快照原图。" : ""); }
+                                                }
+                                            }
+                                            HorizontalLayout {
+                                                spacing: 12px;
+                                                VerticalLayout { alignment: start; padding-top: 2px; Image { width: 16px; height: 16px; source: @image-url("icons/ban.svg"); colorize: Theme.ink-3; } }
+                                                VerticalLayout {
+                                                    spacing: 3px;
+                                                    Text { text: "不含"; color: Theme.ink; font-size: 14px; font-weight: 600; }
+                                                    Note {
+                                                        width: composer.column - 68px;
+                                                        text: AiState.image-selected > 0
+                                                            ? "以上数据不含窗口标题、网址、文档内容、按键顺序、文件路径和密钥。但快照是整屏图像，图中能看到的标题、网址和文档内容会一起发送。"
+                                                            : "窗口标题、网址、文档内容、按键顺序、文件路径和密钥。";
+                                                    }
+                                                }
+                                            }
+                                            if AiState.preview-missing-count > 0 : VerticalLayout {
+                                                spacing: 8px;
+                                                HorizontalLayout {
+                                                    alignment: LayoutAlignment.start;
+                                                    Action {
+                                                        quiet: true;
+                                                        icon: root.missing-open ? @image-url("icons/chevron-up.svg") : @image-url("icons/chevron-down.svg");
+                                                        text: (root.missing-open ? "收起" : "查看") + "缺失时段（" + AiState.preview-missing-count + "）";
+                                                        clicked => { root.missing-open = !root.missing-open; }
+                                                    }
+                                                }
+                                                if root.missing-open : Rectangle {
+                                                    height: missing-list.preferred-height + 24px;
+                                                    border-radius: 8px;
+                                                    background: Theme.surface-2;
+                                                    missing-list := Note { x: 14px; y: 12px; width: composer.column - 68px; text: AiState.preview-missing; }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+
+                                HorizontalLayout {
+                                    spacing: 16px;
+                                    Text { text: "会使用你自己的 AI 服务额度；结果只保存在本机。"; color: Theme.ink-3; font-size: 13px; vertical-alignment: center; horizontal-stretch: 1; overflow: elide; }
+                                    Action { height: 42px; text: "生成总结"; icon: @image-url("icons/sparkles.svg"); accent: true; enabled: AiState.prepared && AiState.preview-state == 1; clicked => { AiState.send-summary(); } }
+                                }
+                            }
                         }
                     }
                 }
 
                 // ───── Reading a summary ─────
-                if root.view == 4 : VerticalLayout {
+                if root.view == 4 : reading := Rectangle {
                     vertical-stretch: 1;
-                    spacing: 12px;
-                    HorizontalLayout {
-                        spacing: 10px;
+                    VerticalLayout {
                         VerticalLayout {
-                            horizontal-stretch: 1; spacing: 4px; alignment: center;
-                            Text { text: AiState.reader-title; color: Theme.ink; font-size: 19px; font-weight: 600; overflow: elide; }
-                            Text { text: AiState.reader-meta; color: Theme.ink-3; font-size: 12px; wrap: word-wrap; }
-                        }
-                        if AiState.reader-busy != "" : VerticalLayout { alignment: center; Badge { text: AiState.reader-busy; tone: Theme.brand-ink; fill: Theme.brand-soft; } }
-                        if AiState.reader-busy != "" : VerticalLayout { alignment: center; Action { text: "停止"; icon: @image-url("icons/player-pause.svg"); clicked => { AiState.cancel-job(); } } }
-                    }
-                    HorizontalLayout {
-                        spacing: 8px;
-                        Action {
-                            text: "复制全文";
-                            enabled: AiState.conversation != "";
-                            clicked => {
-                                reader.select-all();
-                                reader.copy();
-                                reader.clear-selection();
-                                AiState.status = "已复制全文";
-                            }
-                        }
-                        Action {
-                            quiet: true;
-                            text: AiState.raw-view ? "按排版阅读" : "查看原文";
-                            accessible-label: AiState.raw-view ? "按排版阅读" : "查看可选择的原文";
-                            enabled: AiState.conversation != "";
-                            clicked => { AiState.raw-view = !AiState.raw-view; }
-                        }
-                        if AiState.reader-state == 0 : Action { text: "重新生成"; icon: @image-url("icons/refresh.svg"); enabled: AiState.reader-busy == ""; clicked => { AiState.regenerate(); } }
-                        if AiState.reader-state == 0 : Action { text: AiState.pinned ? "取消保留" : "始终保留"; selected: AiState.pinned; accessible-label: AiState.pinned ? "取消保留，允许自动清理这一版" : "始终保留，不被自动清理"; clicked => { AiState.pin-version(); } }
-                        Rectangle { horizontal-stretch: 1; }
-                        if AiState.reader-state == 0 && !root.narrow-reader : Action { quiet: true; danger: true; text: "清空追问…"; enabled: AiState.has-follow-ups && AiState.reader-busy == ""; clicked => { root.confirm(2); } }
-                        if AiState.reader-state == 0 && !root.narrow-reader : Action { quiet: true; danger: true; text: "删除此版本…"; enabled: AiState.reader-busy == ""; clicked => { root.confirm(1); } }
-                        if AiState.reader-state >= 3 : Action { quiet: true; danger: true; text: "删除此记录…"; clicked => { root.confirm(5); } }
-                    }
-                    // A narrow reader moves the destructive actions to their own row.
-                    if AiState.reader-state == 0 && root.narrow-reader : HorizontalLayout {
-                        spacing: 8px;
-                        alignment: end;
-                        Action { quiet: true; danger: true; text: "清空追问…"; enabled: AiState.has-follow-ups && AiState.reader-busy == ""; clicked => { root.confirm(2); } }
-                        Action { quiet: true; danger: true; text: "删除此版本…"; enabled: AiState.reader-busy == ""; clicked => { root.confirm(1); } }
-                    }
-
-                    if AiState.reader-state == 1 && AiState.reader-error == "" : Callout { tone: 3; title: "排队中"; text: "前面还有任务，轮到这一项时会自动开始。"; }
-                    if AiState.reader-state == 1 && AiState.reader-error != "" : Callout { tone: 3; title: "等待重试"; text: "上次没有成功（" + AiState.reader-error + "），稍后会自动重试。"; }
-                    if AiState.reader-state == 3 : Callout {
-                        tone: 2; title: "生成失败"; text: AiState.reader-error;
-                        HorizontalLayout {
-                            spacing: 8px; alignment: LayoutAlignment.start;
-                            Action { text: "用相同时段重试"; clicked => { AiState.regenerate(); } }
-                            Action { quiet: true; text: "检查 AI 设置"; clicked => { AiState.settings-section = 0; root.open-settings(); } }
-                        }
-                    }
-                    if AiState.reader-state == 4 : Callout {
-                        tone: 1; title: "这个时段没有记录"; text: "没有调用 AI，也没有用到你的额度。";
-                        HorizontalLayout { alignment: LayoutAlignment.start; Action { text: "换个时段"; clicked => { AiState.new-summary(); } } }
-                    }
-                    if AiState.reader-state == 5 : Callout {
-                        title: "已跳过"; text: "计划时间 Timelens 没有运行，这个时段没有自动总结。";
-                        HorizontalLayout { alignment: LayoutAlignment.start; Action { text: "现在补做"; clicked => { AiState.regenerate(); } } }
-                    }
-                    if AiState.reader-state == 6 : Callout {
-                        title: "已取消"; text: "这次生成在完成前停止了。";
-                        HorizontalLayout { alignment: LayoutAlignment.start; Action { text: "重新生成"; clicked => { AiState.regenerate(); } } }
-                    }
-
-                    if AiState.exposed-reasoning != "" : ThinkingBlock {
-                        text: AiState.exposed-reasoning;
-                        active: AiState.reasoning-active;
-                        open <=> root.reasoning-open;
-                    }
-
-                    // Formatted reading; the raw text stays below for selecting and copying.
-                    if root.reader-body && !AiState.raw-view && AiState.conversation != "" : Rectangle {
-                        vertical-stretch: 1;
-                        min-height: 120px;
-                        border-radius: 8px;
-                        border-width: 1px; border-color: Theme.line;
-                        ScrollView {
-                            horizontal-scrollbar-policy: always-off;
-                            VerticalLayout {
-                                alignment: start;
-                                padding: 16px; padding-top: 6px; padding-right: 22px;
-                                for block in AiState.markdown(AiState.conversation) : HorizontalLayout {
-                                    // Blocks sit 10px apart; rows of one table stay together.
-                                    padding-top: block.kind == 8 ? 0px : 10px;
-                                    padding-left: block.indent * 18px + (block.kind == 4 ? 12px : 0px);
-                                    spacing: 8px;
-                                    if block.kind == 4 : Rectangle { width: 3px; border-radius: 1.5px; background: Theme.line-strong; }
-                                    if block.kind == 3 : Text { min-width: 14px; text: block.marker; color: Theme.ink-3; font-size: 15px; vertical-alignment: top; }
-                                    if block.kind == 6 : Rectangle { height: 9px; horizontal-stretch: 1; Rectangle { height: 1px; background: Theme.line; } }
-                                    if block.kind == 5 : Rectangle {
-                                        horizontal-stretch: 1;
-                                        height: code.preferred-height + 20px;
-                                        border-radius: 8px;
-                                        background: Theme.raised;
-                                        code := Text { x: 12px; width: parent.width - 24px; text: block.text; color: Theme.ink; font-family: "Consolas"; font-size: 13px; wrap: word-wrap; }
-                                    }
-                                    // Every row has the same cell count and splits its width
-                                    // evenly (no preferred width, equal stretch), so columns
-                                    // line up across rows whatever the cells hold.
-                                    if block.kind == 7 || block.kind == 8 : Rectangle {
-                                        horizontal-stretch: 1;
-                                        height: row.preferred-height;
-                                        background: block.kind == 7 ? Theme.raised : transparent;
-                                        border-radius: block.kind == 7 ? 6px : 0px;
-                                        row := HorizontalLayout {
-                                            padding-left: 10px; padding-right: 10px; padding-top: 6px; padding-bottom: 6px;
-                                            spacing: 12px;
-                                            for cell in block.cells : Text {
-                                                horizontal-stretch: 1;
-                                                min-width: 0px;
-                                                preferred-width: 0px;
-                                                text: cell;
-                                                wrap: word-wrap;
-                                                color: Theme.ink;
-                                                font-size: 14px;
-                                                font-weight: block.kind == 7 ? 600 : 400;
+                            spacing: 4px;
+                            padding-bottom: 14px;
+                            head := HorizontalLayout {
+                                spacing: 12px;
+                                Text { text: AiState.reader-title; color: Theme.ink; font-size: 22px; font-weight: 600; overflow: elide; vertical-alignment: center; horizontal-stretch: 1; }
+                                if AiState.reader-busy != "" : VerticalLayout { alignment: center; Badge { text: AiState.reader-busy; tone: Theme.brand-ink; fill: Theme.brand-soft; } }
+                                if AiState.reader-busy != "" : VerticalLayout { alignment: center; Action { text: "停止"; icon: @image-url("icons/player-pause.svg"); clicked => { AiState.cancel-job(); } } }
+                                VerticalLayout {
+                                    alignment: center;
+                                    HorizontalLayout {
+                                        spacing: 4px;
+                                        if AiState.conversation != "" : Action {
+                                            quiet: true;
+                                            icon: @image-url("icons/copy.svg");
+                                            text: root.narrow ? "" : "复制";
+                                            accessible-label: "复制全文";
+                                            clicked => {
+                                                raw.select-all();
+                                                raw.copy();
+                                                raw.clear-selection();
+                                                AiState.status = "已复制全文";
                                             }
                                         }
-                                        if block.kind == 8 : Rectangle { y: parent.height - 1px; height: 1px; background: Theme.line; }
+                                        if AiState.conversation != "" : Action {
+                                            quiet: true;
+                                            icon: @image-url("icons/code.svg");
+                                            text: root.narrow ? "" : "原文";
+                                            selected: AiState.raw-view;
+                                            accessible-label: AiState.raw-view ? "按排版阅读" : "查看可选择的原文";
+                                            clicked => { AiState.raw-view = !AiState.raw-view; }
+                                        }
+                                        if AiState.reader-state == 0 : Action { quiet: true; icon: @image-url("icons/refresh.svg"); text: root.narrow ? "" : "重新生成"; accessible-label: "重新生成"; enabled: AiState.reader-busy == ""; clicked => { AiState.regenerate(); } }
+                                        if AiState.reader-state == 0 : Action { quiet: true; icon: @image-url("icons/pin.svg"); text: root.narrow ? "" : AiState.pinned ? "已保留" : "保留"; selected: AiState.pinned; accessible-label: AiState.pinned ? "取消保留，允许自动清理这一版" : "始终保留，不被自动清理"; clicked => { AiState.pin-version(); } }
+                                        if AiState.reader-state == 0 : Action { quiet: true; icon: @image-url("icons/dots.svg"); selected: AiState.reader-menu; accessible-label: "更多操作"; clicked => { AiState.reader-menu = !AiState.reader-menu; } }
+                                        if AiState.reader-state >= 3 : Action { quiet: true; danger: true; icon: @image-url("icons/trash.svg"); text: "删除此记录…"; clicked => { root.confirm(5); } }
                                     }
-                                    if block.kind < 5 : Text {
-                                        horizontal-stretch: 1;
-                                        text: block.text;
-                                        wrap: word-wrap;
-                                        color: block.kind == 4 ? Theme.ink-2 : Theme.ink;
-                                        font-size: block.kind == 1 ? 19px : block.kind == 2 ? 16px : 15px;
-                                        font-weight: block.kind == 1 || block.kind == 2 ? 600 : 400;
+                                }
+                            }
+                            Text { text: AiState.reader-meta; color: Theme.ink-3; font-size: 13px; wrap: word-wrap; }
+                        }
+                        Rule { }
+
+                        // The document: callouts, the reasoning, then the answer and its follow-ups.
+                        if !AiState.raw-view || AiState.conversation == "" : doc := ScrollView {
+                            property <length> page: min(780px, self.visible-width - 16px);
+                            vertical-stretch: 1;
+                            horizontal-scrollbar-policy: always-off;
+                            viewport-width: self.visible-width;
+                            VerticalLayout {
+                                width: doc.visible-width;
+                                HorizontalLayout {
+                                    alignment: center;
+                                    VerticalLayout {
+                                        width: doc.page;
+                                        padding-top: 20px; padding-bottom: 28px; spacing: 0px;
+                                        if AiState.reader-state == 1 && AiState.reader-error == "" : Callout { tone: 3; title: "排队中"; text: "前面还有任务，轮到这一项时会自动开始。"; }
+                                        if AiState.reader-state == 1 && AiState.reader-error != "" : Callout { tone: 3; title: "等待重试"; text: "上次没有成功（" + AiState.reader-error + "），稍后会自动重试。"; }
+                                        if AiState.reader-state == 2 && AiState.conversation == "" && AiState.exposed-reasoning == "" : Note { text: "正在等待回答…"; font-size: 15px; }
+                                        if AiState.reader-state == 3 : Callout {
+                                            tone: 2; title: "生成失败"; text: AiState.reader-error;
+                                            HorizontalLayout {
+                                                spacing: 8px; alignment: LayoutAlignment.start;
+                                                Action { text: "用相同时段重试"; icon: @image-url("icons/refresh.svg"); clicked => { AiState.regenerate(); } }
+                                                Action { quiet: true; text: "检查 AI 设置"; clicked => { AiState.settings-section = 0; root.open-settings(); } }
+                                            }
+                                        }
+                                        if AiState.reader-state == 4 : Callout {
+                                            tone: 1; title: "这个时段没有记录"; text: "没有调用 AI，也没有用到你的额度。";
+                                            HorizontalLayout { alignment: LayoutAlignment.start; Action { text: "换个时段"; clicked => { AiState.new-summary(); } } }
+                                        }
+                                        if AiState.reader-state == 5 : Callout {
+                                            title: "已跳过"; text: "计划时间 Timelens 没有运行，这个时段没有自动总结。";
+                                            HorizontalLayout { alignment: LayoutAlignment.start; Action { text: "现在补做"; clicked => { AiState.regenerate(); } } }
+                                        }
+                                        if AiState.reader-state == 6 : Callout {
+                                            title: "已取消"; text: "这次生成在完成前停止了。";
+                                            HorizontalLayout { alignment: LayoutAlignment.start; Action { text: "重新生成"; clicked => { AiState.regenerate(); } } }
+                                        }
+
+                                        if AiState.exposed-reasoning != "" : ThinkingBlock {
+                                            text: AiState.exposed-reasoning;
+                                            active: AiState.reasoning-active;
+                                            open <=> root.reasoning-open;
+                                        }
+
+                                        for block in AiState.markdown(AiState.conversation) : HorizontalLayout {
+                                            // Rows of one table stay together; headings and turns
+                                            // of the conversation get more room above.
+                                            padding-top: block.kind == 8 ? 0px
+                                                : block.kind == 1 || block.kind == 2 ? 22px
+                                                : block.kind == 9 || block.kind == 11 ? 28px
+                                                : block.kind == 10 ? 18px
+                                                : 12px;
+                                            padding-left: block.indent * 20px + (block.kind == 4 ? 2px : 0px);
+                                            spacing: 10px;
+                                            if block.kind == 4 : Rectangle { width: 3px; border-radius: 1.5px; background: Theme.brand-line; }
+                                            if block.kind == 3 : Text { min-width: 16px; text: block.marker; color: Theme.ink-3; font-size: 15px; vertical-alignment: top; }
+                                            if block.kind == 6 : Rectangle { height: 9px; horizontal-stretch: 1; Rectangle { height: 1px; background: Theme.line; } }
+                                            if block.kind == 5 : Rectangle {
+                                                horizontal-stretch: 1;
+                                                height: code.preferred-height + 24px;
+                                                border-radius: 8px;
+                                                background: Theme.surface-2;
+                                                border-width: 1px; border-color: Theme.line;
+                                                code := Text { x: 14px; width: parent.width - 28px; text: block.text; color: Theme.ink; font-family: "Consolas"; font-size: 13px; wrap: word-wrap; }
+                                            }
+                                            // Every row has the same cell count and splits its width
+                                            // evenly (no preferred width, equal stretch), so columns
+                                            // line up across rows whatever the cells hold.
+                                            if block.kind == 7 || block.kind == 8 : Rectangle {
+                                                horizontal-stretch: 1;
+                                                height: row.preferred-height;
+                                                background: block.kind == 7 ? Theme.surface-3 : transparent;
+                                                border-radius: block.kind == 7 ? 8px : 0px;
+                                                row := HorizontalLayout {
+                                                    padding-left: 12px; padding-right: 12px; padding-top: 8px; padding-bottom: 8px;
+                                                    spacing: 12px;
+                                                    for cell in block.cells : Text {
+                                                        horizontal-stretch: 1;
+                                                        min-width: 0px;
+                                                        preferred-width: 0px;
+                                                        text: cell;
+                                                        wrap: word-wrap;
+                                                        color: block.kind == 7 ? Theme.ink-2 : Theme.ink;
+                                                        font-size: block.kind == 7 ? 13px : 14px;
+                                                        font-weight: block.kind == 7 ? 600 : 400;
+                                                    }
+                                                }
+                                                if block.kind == 8 : Rectangle { y: parent.height - 1px; height: 1px; background: Theme.line; }
+                                            }
+                                            // A follow-up question, as a bubble on the right.
+                                            if block.kind == 9 : Rectangle {
+                                                horizontal-stretch: 1;
+                                                height: asked.preferred-height + 22px;
+                                                accessible-role: text;
+                                                accessible-label: "你的提问：" + block.text;
+                                                Rectangle {
+                                                    x: parent.width - self.width;
+                                                    width: min(natural.preferred-width + 36px, parent.width * 0.8);
+                                                    border-radius: 16px;
+                                                    background: Theme.brand-soft;
+                                                    natural := Text { visible: false; text: block.text; font-size: 15px; }
+                                                    asked := Text { x: 18px; y: 11px; width: parent.width - 36px; text: block.text; color: Theme.ink; font-size: 15px; wrap: word-wrap; }
+                                                }
+                                            }
+                                            if block.kind == 10 : HorizontalLayout {
+                                                horizontal-stretch: 1;
+                                                spacing: 8px;
+                                                Rectangle {
+                                                    width: 24px; height: 24px; border-radius: 12px; background: Theme.brand-soft;
+                                                    Image { width: 14px; height: 14px; source: @image-url("icons/sparkles.svg"); colorize: Theme.brand; }
+                                                }
+                                                Text { text: block.text == "" ? "AI 回答" : "AI " + block.text; color: Theme.ink-2; font-size: 13px; font-weight: 600; vertical-alignment: center; }
+                                            }
+                                            if block.kind == 11 : HorizontalLayout {
+                                                horizontal-stretch: 1;
+                                                spacing: 12px;
+                                                Rectangle { horizontal-stretch: 1; Rectangle { height: 1px; background: Theme.line; } }
+                                                Text { text: block.text; color: Theme.ink-3; font-size: 12px; vertical-alignment: center; }
+                                                Rectangle { horizontal-stretch: 1; Rectangle { height: 1px; background: Theme.line; } }
+                                            }
+                                            if block.kind < 5 : Text {
+                                                horizontal-stretch: 1;
+                                                text: block.text;
+                                                wrap: word-wrap;
+                                                color: block.kind == 4 ? Theme.ink-2 : Theme.ink;
+                                                font-size: block.kind == 1 ? 22px : block.kind == 2 ? 18px : 15px;
+                                                font-weight: block.kind == 1 || block.kind == 2 ? 600 : 400;
+                                            }
+                                        }
+
+                                        if AiState.token-label != "" || AiState.source-label != "" : HorizontalLayout {
+                                            padding-top: 24px;
+                                            spacing: 12px;
+                                            Text { text: AiState.token-label; color: Theme.ink-4; font-size: 12px; }
+                                            Text { text: AiState.source-label; color: Theme.ink-4; font-size: 12px; horizontal-alignment: right; horizontal-stretch: 1; overflow: elide; }
+                                        }
                                     }
                                 }
                             }
                         }
-                    }
-                    reader := TextEdit {
-                        visible: root.reader-body && (AiState.raw-view || AiState.conversation == "");
-                        vertical-stretch: self.visible ? 1 : 0;
-                        min-height: self.visible ? 120px : 0px;
-                        max-height: self.visible ? 100000px : 0px;
-                        text: AiState.conversation;
-                        read-only: true;
-                        wrap: word-wrap;
-                        font-size: 15px;
-                        placeholder-text: AiState.reader-state == 1 ? (AiState.reader-error != "" ? "等待重试…" : "排队中…") : AiState.reader-state == 2 ? "正在等待回答…" : "";
-                        accessible-label: "总结与对话";
-                    }
-                    if !root.reader-body : Rectangle { vertical-stretch: 1; }
+                        // The text as written, to select and copy; also what "复制" copies.
+                        raw := TextEdit {
+                            visible: AiState.raw-view && AiState.conversation != "";
+                            vertical-stretch: self.visible ? 1 : 0;
+                            min-height: self.visible ? 120px : 0px;
+                            max-height: self.visible ? 100000px : 0px;
+                            text: AiState.conversation;
+                            read-only: true;
+                            wrap: word-wrap;
+                            font-size: 15px;
+                            accessible-label: "总结与对话的原文";
+                        }
 
-                    if AiState.token-label != "" || AiState.source-label != "" : HorizontalLayout {
-                        spacing: 12px;
-                        Text { text: AiState.token-label; color: Theme.ink-3; font-size: 12px; }
-                        Text { text: AiState.source-label; color: Theme.ink-3; font-size: 12px; horizontal-alignment: right; horizontal-stretch: 1; overflow: elide; }
-                    }
-
-                    if AiState.reader-state == 0 : Rectangle {
-                        vertical-stretch: 0;
-                        height: follow.preferred-height;
-                        background: Theme.surface;
-                        border-radius: 12px;
-                        border-width: 1px;
-                        border-color: Theme.line;
-                        follow := VerticalLayout {
-                            padding: 12px; spacing: 8px;
-                            HorizontalLayout {
-                                spacing: 6px;
-                                Action { quiet: true; height: 28px; text: "接在：" + AiState.branch-label + (root.branch-open ? " ▴" : " ▾"); accessible-label: "追问接在哪条回答后面，当前为" + AiState.branch-label; clicked => { root.branch-open = !root.branch-open; } }
-                                Rectangle { horizontal-stretch: 1; }
-                                Action { quiet: true; height: 28px; text: "开始新话题"; enabled: AiState.reader-busy == ""; accessible-label: "开始新话题，之后的追问不再带上之前的问答，记录仍保留"; clicked => { AiState.clear-context(); } }
-                            }
-                            if root.branch-open : AiSelect {
-                                model: AiState.branches;
-                                current-index <=> AiState.branch-index;
-                                accessible-label: "追问接在哪条回答后面";
-                                // Stays open: closing here would destroy it mid-selection.
-                                selected => { AiState.choose-branch(self.current-index); }
-                            }
-                            HorizontalLayout {
+                        // Asking more, the way a chat ends.
+                        if AiState.reader-state == 0 : HorizontalLayout {
+                            padding-top: 12px;
+                            Rectangle { horizontal-stretch: 1; }
+                            VerticalLayout {
+                                max-width: 780px;
+                                horizontal-stretch: 1000;
                                 spacing: 8px;
-                                TextEdit {
-                                    height: 64px;
-                                    text <=> AiState.question;
-                                    wrap: word-wrap;
-                                    font-size: 14px;
-                                    placeholder-text: "继续追问，Ctrl+Enter 发送";
-                                    accessible-label: "追问内容";
-                                    key-pressed(event) => {
-                                        if event.text == Key.Return && event.modifiers.control {
-                                            if AiState.question != "" && AiState.reader-busy == "" { AiState.follow-up(); }
-                                            return accept;
-                                        }
-                                        return reject;
-                                    }
+                                HorizontalLayout {
+                                    spacing: 4px;
+                                    Action { quiet: true; height: 30px; icon: @image-url("icons/message-circle.svg"); text: "接在：" + AiState.branch-label; accessible-label: "追问接在哪条回答后面，当前为" + AiState.branch-label; clicked => { root.branch-open = !root.branch-open; } }
+                                    Action { quiet: true; height: 30px; text: "开始新话题"; enabled: AiState.reader-busy == ""; accessible-label: "开始新话题，之后的追问不再带上之前的问答，记录仍保留"; clicked => { AiState.clear-context(); } }
+                                    Rectangle { horizontal-stretch: 1; }
+                                    Text { text: "Ctrl+Enter 发送"; color: Theme.ink-4; font-size: 12px; vertical-alignment: center; }
                                 }
-                                VerticalLayout { alignment: LayoutAlignment.end; Action { text: "发送"; accent: true; enabled: AiState.question != "" && AiState.reader-busy == ""; clicked => { AiState.follow-up(); } } }
+                                if root.branch-open : AiSelect {
+                                    model: AiState.branches;
+                                    current-index <=> AiState.branch-index;
+                                    accessible-label: "追问接在哪条回答后面";
+                                    // Stays open: closing here would destroy it mid-selection.
+                                    selected => { AiState.choose-branch(self.current-index); }
+                                }
+                                HorizontalLayout {
+                                    spacing: 10px;
+                                    TextEdit {
+                                        height: 56px;
+                                        text <=> AiState.question;
+                                        wrap: word-wrap;
+                                        font-size: 15px;
+                                        placeholder-text: "继续追问这段时间…";
+                                        accessible-label: "追问内容";
+                                        key-pressed(event) => {
+                                            if event.text == Key.Return && event.modifiers.control {
+                                                if AiState.question != "" && AiState.reader-busy == "" { AiState.follow-up(); }
+                                                return accept;
+                                            }
+                                            return reject;
+                                        }
+                                    }
+                                    VerticalLayout { alignment: LayoutAlignment.end; Action { height: 40px; text: "发送"; icon: @image-url("icons/arrow-up.svg"); accent: true; enabled: AiState.question != "" && AiState.reader-busy == ""; clicked => { AiState.follow-up(); } } }
+                                }
                             }
+                            Rectangle { horizontal-stretch: 1; }
+                        }
+                    }
+
+                    // The menu of rarer actions, under its button at the header's right end.
+                    if AiState.reader-menu : TouchArea { clicked => { AiState.reader-menu = false; } }
+                    if AiState.reader-menu : Rectangle {
+                        width: 200px;
+                        height: menu.preferred-height;
+                        x: parent.width - self.width;
+                        y: head.height + 6px;
+                        background: Theme.raised;
+                        border-radius: 10px;
+                        border-width: 1px;
+                        border-color: Theme.line-strong;
+                        drop-shadow-blur: 18px;
+                        drop-shadow-offset-y: 6px;
+                        drop-shadow-color: Theme.shadow-strong;
+                        menu := VerticalLayout {
+                            padding: 6px; spacing: 2px;
+                            MenuItem { icon: @image-url("icons/message-circle.svg"); text: "清空追问…"; danger: true; enabled: AiState.has-follow-ups && AiState.reader-busy == ""; clicked => { AiState.reader-menu = false; root.confirm(2); } }
+                            MenuItem { icon: @image-url("icons/trash.svg"); text: "删除此版本…"; danger: true; enabled: AiState.reader-busy == ""; clicked => { AiState.reader-menu = false; root.confirm(1); } }
                         }
                     }
                 }
@@ -863,16 +1056,24 @@ export component AiPanel inherits Rectangle {
                         spacing: 12px;
                         VerticalLayout {
                             horizontal-stretch: 1; spacing: 3px; alignment: center;
-                            SectionTitle { text: "选择快照"; }
-                            Note { text: "点左侧的时间预览，再决定是否加入这次总结。"; font-size: 12px; }
+                            Text { text: "选择快照"; color: Theme.ink; font-size: 22px; font-weight: 600; }
+                            Note { text: "点左侧的时间预览，再决定是否加入这次总结。"; font-size: 13px; }
                         }
                         VerticalLayout { alignment: center; Text { text: "已选 " + AiState.image-selected + " / 20"; color: Theme.ink-2; font-size: 13px; } }
                         VerticalLayout { alignment: center; Action { text: "完成"; accent: true; clicked => { AiState.new-summary(); } } }
                     }
                     Callout { tone: 3; text: "快照可能含屏幕文字和个人信息；只用于这一次请求，追问不会再次发送。"; }
-                    if AiState.image-options.length == 0 : Note { text: "这个时段没有可用的快照。可以在右上角换个时段，或者回去直接生成文字总结。"; }
-                    // Keeps the page at the top when there is nothing to list.
-                    if AiState.image-options.length == 0 : Rectangle { vertical-stretch: 1; }
+                    if AiState.image-options.length == 0 : VerticalLayout {
+                        vertical-stretch: 1;
+                        alignment: center;
+                        spacing: 10px;
+                        HorizontalLayout { alignment: center; HeroMark { icon: @image-url("icons/photo.svg"); } }
+                        Text { text: "这个时段没有可用的快照"; color: Theme.ink; font-size: 16px; font-weight: 600; horizontal-alignment: center; }
+                        Note { text: "可以在右上角换个时段，或者回去直接生成文字总结。"; font-size: 13px; horizontal-alignment: center; }
+                        HorizontalLayout { alignment: center; padding-top: 6px; Action { text: "返回"; clicked => { AiState.new-summary(); } } }
+                        // Sits a little above the middle, where the eye lands.
+                        Rectangle { height: 60px; }
+                    }
                     if AiState.image-options.length > 0 : HorizontalLayout {
                         vertical-stretch: 1;
                         spacing: 14px;
@@ -1313,6 +1514,6 @@ export component AiPanel inherits Rectangle {
             }
         }
 
-        StatusLine { busy: AiState.busy; text: AiState.status; }
+        if AiState.busy || AiState.status != "" : StatusLine { busy: AiState.busy; text: AiState.status; }
     }
 }

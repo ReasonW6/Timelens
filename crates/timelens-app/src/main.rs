@@ -62,7 +62,7 @@ slint::slint! {
              HistoryItem, DayAnchor, Participant, ShareSlice, StackApp, AiState, DataState,
              CollectionState, KeyCell, ButtonHeat, SystemRow, AppIcons, Theme }
         from "ui/main-window.slint";
-    export { AiHistoryRow, AiConnectionRow, MdBlock } from "ui/ai-panel.slint";
+    export { AiHistoryRow, AiConnectionRow, AiStat, MdBlock } from "ui/ai-panel.slint";
 }
 fn main() -> Result<()> {
     let options = Options::parse(env::args_os().skip(1))?;
@@ -760,7 +760,7 @@ fn run_window(
     });
     if !background {
         window.show()?;
-        window_placement::fit_after_show(&window);
+        window_placement::open_main(&window);
     }
     let _repaint_timer = window_chrome::repaint_after_restore(&window);
     #[cfg(debug_assertions)]

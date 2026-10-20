@@ -228,28 +228,82 @@ const STEPS: &[Step] = &[
         ])));
         ai.set_use_provider_index(0);
         ai.set_use_vision(0);
+        ai.set_prepared(true);
+        ai.set_preview_state(1);
+        ai.set_status("".into());
+        ai.set_history(slint::ModelRc::new(slint::VecModel::from(
+            [
+                (
+                    "今天 00:00–13:40",
+                    "手动 · 第 2 版 · deepseek-flash",
+                    0,
+                    true,
+                ),
+                ("今天 00:00–12:10", "手动 · 失败 · deepseek-flash", 2, false),
+                ("10月19日 周一", "每日 · 第 1 版 · deepseek-flash", 0, false),
+                ("10月18日 周日", "每日 · 第 1 版 · deepseek-flash", 0, false),
+                ("10月17日 周六", "每日 · 已跳过 · deepseek-flash", 3, false),
+            ]
+            .into_iter()
+            .enumerate()
+            .map(|(i, (title, detail, state, pinned))| crate::AiHistoryRow {
+                key: format!("q{i}").into(),
+                title: title.into(),
+                detail: detail.into(),
+                state,
+                pinned,
+            })
+            .collect::<Vec<_>>(),
+        )));
         ai.set_page(0);
         ai.set_preview_state(1);
         ai.set_preview_target("DeepSeek · deepseek-flash".into());
-        ai.set_preview_facts(
-            "有记录 34% · 17 个应用 · 缺失 4 段 · 预计 1 次请求 · 0 张快照".into(),
-        );
+        ai.set_preview_stats(slint::ModelRc::new(slint::VecModel::from(
+            [
+                ("34%", "有记录"),
+                ("17", "个应用"),
+                ("4", "段缺失"),
+                ("1", "次请求"),
+                ("0", "张快照"),
+            ]
+            .map(|(value, label)| crate::AiStat {
+                value: value.into(),
+                label: label.into(),
+            })
+            .to_vec(),
+        )));
         ai.set_preview_missing_count(4);
-        ai.set_preview_missing("00:00–09:04 采集器未运行".into());
+        ai.set_preview_missing(
+            "今天 00:00–09:04 · 采集器未运行\n今天 12:10–12:40 · 电脑睡眠\n今天 13:02–13:05 · 记录过多，部分丢失\n今天 15:20–15:31 · 已暂停记录".into(),
+        );
     }),
     ("07d-ai-markdown", |w| {
         let ai = w.global::<AiState>();
         ai.set_page(4);
         ai.set_reader_state(0);
+        ai.set_history_index(0);
         ai.set_reader_title("10月20日 周二 00:00–13:40".into());
+        ai.set_reader_meta(
+            "手动 · 第 2 版 · DeepSeek / deepseek-flash · 模板「Timelens 默认」· 13:42 生成".into(),
+        );
+        ai.set_has_follow_ups(true);
+        ai.set_exposed_reasoning("先看各应用的聚焦时长，再对照按小时的输入趋势……".into());
+        ai.set_token_label("输入 6,214 · 输出 1,083 Token".into());
         ai.set_conversation(
-            "## 简洁总结\n上午主要在 **Zen** 和 Claude 之间切换。\n\n## 主要应用\n| 应用 | 显示时长 | 聚焦时长 | 后台时长 |\n|---|---:|---:|---:|\n| zen | 4h33m | 3h48m | 0.8s |\n| claude | 2h49m | 34m19s | 1h43m |\n| AyuGram（合并分块） | 13m02s | 3m26s | 1h03m |\n\n- 第一条要点\n- 第二条要点"
+            "## 简洁总结\n上午主要在 **Zen** 和 Claude 之间切换，下午集中在代码编辑器里。\n\n## 主要应用\n| 应用 | 显示时长 | 聚焦时长 | 后台时长 |\n|---|---:|---:|---:|\n| zen | 4h33m | 3h48m | 0.8s |\n| claude | 2h49m | 34m19s | 1h43m |\n| AyuGram（合并分块） | 13m02s | 3m26s | 1h03m |\n\n## 要点\n- 09:00–11:30 是一天里最专注的一段，几乎没有切换。\n- 午后切换明显增多，平均每 6 分钟换一次应用。\n\n————————\n你：\n下午为什么切换这么多？\n\nAI：\n下午 14:00 之后同时开着浏览器、聊天和编辑器，**聚焦时长**被拆成很多短段。\n\n> 建议：把需要专注的工作放在上午。"
                 .into(),
         );
     }),
+    ("07dm-ai-menu", |w| {
+        w.global::<AiState>().set_reader_menu(true)
+    }),
     ("07e-ai-failed", |w| {
         let ai = w.global::<AiState>();
+        ai.set_reader_menu(false);
         ai.set_conversation("".into());
+        ai.set_exposed_reasoning("".into());
+        ai.set_token_label("".into());
+        ai.set_history_index(1);
         ai.set_reader_state(3);
         ai.set_reader_error("模型的思考过程用完了最大输出（8192 Token），没来得及写正文。".into());
     }),

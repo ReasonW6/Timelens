@@ -1,6 +1,7 @@
 //! Just enough Markdown for reading AI answers: headings, lists, quotes, code
 //! blocks, rules and tables. Inline marks are dropped, since a Slint text has
-//! one style.
+//! one style. The reader's own follow-up markers (`你：`, `AI：`, a new topic)
+//! become their own blocks, so questions read apart from the answers.
 use std::rc::Rc;
 
 use slint::{ModelRc, SharedString, VecModel};
@@ -16,6 +17,29 @@ const CODE: i32 = 5;
 const RULE: i32 = 6;
 const TABLE_HEAD: i32 = 7;
 const TABLE_ROW: i32 = 8;
+const QUESTION: i32 = 9;
+const SPEAKER: i32 = 10;
+const TOPIC: i32 = 11;
+
+/// The line the reader puts before each follow-up question.
+const QUESTION_RULE: &str = "————————";
+
+/// A follow-up answer's opening line, `AI：` or `AI（回答中…）：`, as the state
+/// it names, if any.
+fn speaker(line: &str) -> Option<&str> {
+    let rest = line.strip_prefix("AI")?.strip_suffix('：')?;
+    if rest.is_empty() {
+        return Some("");
+    }
+    rest.strip_prefix('（')?.strip_suffix('）')
+}
+
+/// The note the reader leaves where a new topic starts.
+fn topic(line: &str) -> Option<&str> {
+    line.strip_prefix("—— ")?
+        .strip_suffix(" ——")
+        .filter(|rest| rest.starts_with("新话题"))
+}
 
 /// The text without emphasis, inline code marks and link targets.
 fn inline(text: &str) -> String {
@@ -147,9 +171,39 @@ pub fn blocks(text: &str) -> Vec<MdBlock> {
             paragraph.clear();
         }
     };
+    let mut question: Option<Vec<&str>> = None;
     let mut lines = text.lines().peekable();
     while let Some(line) = lines.next() {
         let trimmed = line.trim_start();
+        let marker = trimmed.trim_end();
+        let turn = marker == QUESTION_RULE
+            || marker == "你："
+            || speaker(marker).is_some()
+            || topic(marker).is_some();
+        // A question runs, as written, until the next turn of the conversation.
+        if let Some(asked) = &mut question {
+            if !turn {
+                asked.push(line);
+                continue;
+            }
+            let asked = question.take().unwrap_or_default();
+            out.push(block(QUESTION, asked.join("\n").trim().to_owned(), "", 0));
+        }
+        if turn && code.is_none() {
+            flush(&mut paragraph, &mut out);
+            if !rows.is_empty() {
+                table(&rows, &mut out);
+                rows.clear();
+            }
+            if marker == "你：" {
+                question = Some(Vec::new());
+            } else if let Some(state) = speaker(marker) {
+                out.push(block(SPEAKER, state.to_owned(), "", 0));
+            } else if let Some(note) = topic(marker) {
+                out.push(block(TOPIC, note.to_owned(), "", 0));
+            }
+            continue;
+        }
         if trimmed.starts_with("```") {
             match code.take() {
                 Some(lines) => out.push(block(CODE, lines.join("\n"), "", 0)),
@@ -210,6 +264,9 @@ pub fn blocks(text: &str) -> Vec<MdBlock> {
         } else {
             paragraph.push(trimmed);
         }
+    }
+    if let Some(asked) = question {
+        out.push(block(QUESTION, asked.join("\n").trim().to_owned(), "", 0));
     }
     if !rows.is_empty() {
         table(&rows, &mut out);
@@ -328,6 +385,23 @@ mod tests {
             vec![
                 (TABLE_HEAD, "".into(), vec!["A".into()]),
                 (CODE, "code".into(), vec![]),
+            ]
+        );
+    }
+
+    #[test]
+    fn follow_ups_read_as_their_own_turns() {
+        let text = "总结正文\n\n————————\n你：\n下午为什么\n\n切换多？\n\nAI：\n因为**开着**很多窗口。\n\n—— 新话题：之后的追问不带上面的问答 ——\n\n————————\n你：\n# 还有吗\n\nAI（回答中…）：\n";
+        assert_eq!(
+            kinds(text),
+            vec![
+                (PARAGRAPH, "总结正文".into(), "".into()),
+                (QUESTION, "下午为什么\n\n切换多？".into(), "".into()),
+                (SPEAKER, "".into(), "".into()),
+                (PARAGRAPH, "因为开着很多窗口。".into(), "".into()),
+                (TOPIC, "新话题：之后的追问不带上面的问答".into(), "".into()),
+                (QUESTION, "# 还有吗".into(), "".into()),
+                (SPEAKER, "回答中…".into(), "".into()),
             ]
         );
     }
