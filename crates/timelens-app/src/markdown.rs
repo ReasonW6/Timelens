@@ -44,12 +44,38 @@ fn block(kind: i32, text: String, marker: &str, indent: usize) -> MdBlock {
     }
 }
 
-/// A table row's cells, without the outer pipes.
+/// Whether a line has a pipe that is not escaped as `\|`.
+fn piped(line: &str) -> bool {
+    let mut escaped = false;
+    line.chars().any(|c| {
+        let pipe = c == '|' && !escaped;
+        escaped = c == '\\' && !escaped;
+        pipe
+    })
+}
+
+/// A table row's cells, without the outer pipes; `\|` stays inside its cell.
 fn cells(line: &str) -> Vec<String> {
     let line = line.trim();
     let line = line.strip_prefix('|').unwrap_or(line);
-    let line = line.strip_suffix('|').unwrap_or(line);
-    line.split('|')
+    let line = match line.strip_suffix('|') {
+        Some(rest) if !rest.ends_with('\\') => rest,
+        _ => line,
+    };
+    let mut cells = vec![String::new()];
+    let mut chars = line.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '\\' if chars.peek() == Some(&'|') => {
+                chars.next();
+                cells.last_mut().unwrap().push('|');
+            }
+            '|' => cells.push(String::new()),
+            _ => cells.last_mut().unwrap().push(c),
+        }
+    }
+    cells
+        .into_iter()
         .map(|cell| cell.trim().to_string())
         .collect()
 }
@@ -61,24 +87,27 @@ fn divider(cells: &[String]) -> bool {
     })
 }
 
-/// Rows padded to one width, so their columns line up.
+/// Whether a line and the one after it open a table: a header row, then a
+/// divider row with as many cells.
+fn table_start(line: &str, next: Option<&&str>) -> bool {
+    let Some(next) = next else {
+        return false;
+    };
+    let divide = cells(next);
+    piped(line) && divider(&divide) && cells(line).len() == divide.len()
+}
+
+/// The header (first line) and body rows, padded to one width so their
+/// columns line up; the divider (second line) is dropped.
 fn table(lines: &[&str], out: &mut Vec<MdBlock>) {
     let mut rows = lines.iter().map(|line| cells(line)).collect::<Vec<_>>();
-    let head = rows.len() > 1 && divider(&rows[1]);
-    if head {
-        rows.remove(1);
-    }
-    rows.retain(|row| !divider(row));
+    rows.remove(1);
     let width = rows.iter().map(Vec::len).max().unwrap_or(0);
     for (index, mut row) in rows.into_iter().enumerate() {
         row.resize(width, String::new());
         let row = row.iter().map(|cell| SharedString::from(inline(cell)));
         let mut cells = block(
-            if head && index == 0 {
-                TABLE_HEAD
-            } else {
-                TABLE_ROW
-            },
+            if index == 0 { TABLE_HEAD } else { TABLE_ROW },
             String::new(),
             "",
             0,
@@ -111,13 +140,18 @@ pub fn blocks(text: &str) -> Vec<MdBlock> {
             paragraph.clear();
         }
     };
-    for line in text.lines() {
+    let mut lines = text.lines().peekable();
+    while let Some(line) = lines.next() {
         let trimmed = line.trim_start();
         if trimmed.starts_with("```") {
             match code.take() {
                 Some(lines) => out.push(block(CODE, lines.join("\n"), "", 0)),
                 None => {
                     flush(&mut paragraph, &mut out);
+                    if !rows.is_empty() {
+                        table(&rows, &mut out);
+                        rows.clear();
+                    }
                     code = Some(Vec::new());
                 }
             }
@@ -129,8 +163,14 @@ pub fn blocks(text: &str) -> Vec<MdBlock> {
         }
         let indent = (line.len() - trimmed.len()) / 2;
         let trimmed = trimmed.trim_end();
-        if trimmed.starts_with('|') {
+        // A table runs from its header and divider to the first line without a pipe.
+        if rows.is_empty() && table_start(trimmed, lines.peek()) {
             flush(&mut paragraph, &mut out);
+            rows.push(trimmed);
+            rows.extend(lines.next().map(str::trim));
+            continue;
+        }
+        if !rows.is_empty() && piped(trimmed) {
             rows.push(trimmed);
             continue;
         }
@@ -239,6 +279,39 @@ mod tests {
                 (TABLE_ROW, vec!["zen".into(), "4h".into()]),
                 (TABLE_ROW, vec!["claude".into(), "".into()]),
                 (PARAGRAPH, vec![]),
+            ]
+        );
+    }
+
+    #[test]
+    fn tables_need_a_divider_and_keep_their_place() {
+        let rows = |text: &str| {
+            blocks(text)
+                .iter()
+                .map(|b| {
+                    let cells = (0..b.cells.row_count())
+                        .map(|i| b.cells.row_data(i).unwrap().to_string())
+                        .collect::<Vec<_>>();
+                    (b.kind, b.text.to_string(), cells)
+                })
+                .collect::<Vec<_>>()
+        };
+        // Outer pipes are optional; an escaped pipe stays in its cell.
+        assert_eq!(
+            rows("条件 | 结果\n--- | ---\na \\| b | 真"),
+            vec![
+                (TABLE_HEAD, "".into(), vec!["条件".into(), "结果".into()]),
+                (TABLE_ROW, "".into(), vec!["a | b".into(), "真".into()]),
+            ]
+        );
+        // A pipe without a divider row below is ordinary text.
+        assert_eq!(rows("|x| = 3"), vec![(PARAGRAPH, "|x| = 3".into(), vec![])]);
+        // A code block right after a table comes after it.
+        assert_eq!(
+            rows("| A |\n| --- |\n```\ncode\n```"),
+            vec![
+                (TABLE_HEAD, "".into(), vec!["A".into()]),
+                (CODE, "code".into(), vec![]),
             ]
         );
     }
