@@ -25,7 +25,7 @@ use slint::{
     },
 };
 
-use crate::{AiState, AppWindow, CollectionState, DataState};
+use crate::{AiState, AppWindow, CollectionState, DataState, markdown};
 
 static HEADLESS: AtomicBool = AtomicBool::new(false);
 
@@ -289,10 +289,15 @@ const STEPS: &[Step] = &[
         ai.set_has_follow_ups(true);
         ai.set_exposed_reasoning("先看各应用的聚焦时长，再对照按小时的输入趋势……".into());
         ai.set_token_label("输入 6,214 · 输出 1,083 Token".into());
-        ai.set_conversation(
-            "## 简洁总结\n上午主要在 **Zen** 和 Claude 之间切换，下午集中在代码编辑器里。\n\n## 主要应用\n| 应用 | 显示时长 | 聚焦时长 | 后台时长 |\n|---|---:|---:|---:|\n| zen | 4h33m | 3h48m | 0.8s |\n| claude | 2h49m | 34m19s | 1h43m |\n| AyuGram（合并分块） | 13m02s | 3m26s | 1h03m |\n\n## 要点\n- 09:00–11:30 是一天里最专注的一段，几乎没有切换。\n- 午后切换明显增多，平均每 6 分钟换一次应用。\n\n————————\n你：\n下午为什么切换这么多？\n\nAI：\n下午 14:00 之后同时开着浏览器、聊天和编辑器，**聚焦时长**被拆成很多短段。\n\n> 建议：把需要专注的工作放在上午。"
-                .into(),
-        );
+        let answer = "## 简洁总结\n上午主要在 **Zen** 和 Claude 之间切换，下午集中在代码编辑器里。\n\n## 主要应用\n| 应用 | 显示时长 | 聚焦时长 | 后台时长 |\n|---|---:|---:|---:|\n| zen | 4h33m | 3h48m | 0.8s |\n| claude | 2h49m | 34m19s | 1h43m |\n| AyuGram（合并分块） | 13m02s | 3m26s | 1h03m |\n\n## 要点\n- 09:00–11:30 是一天里最专注的一段，几乎没有切换。\n- 午后切换明显增多，平均每 6 分钟换一次应用。";
+        let asked = "下午为什么切换这么多？";
+        let reply = "下午 14:00 之后同时开着浏览器、聊天和编辑器，**聚焦时长**被拆成很多短段。\n\n> 建议：把需要专注的工作放在上午。";
+        let mut blocks = markdown::blocks(answer);
+        blocks.push(markdown::question(asked));
+        blocks.push(markdown::speaker(""));
+        blocks.extend(markdown::blocks(reply));
+        ai.set_reader_blocks(markdown::model(blocks));
+        ai.set_conversation(format!("{answer}\n\n————————\n你：\n{asked}\n\nAI：\n{reply}").into());
     }),
     ("07dm-ai-menu", |w| {
         w.global::<AiState>().set_reader_menu(true)
@@ -301,6 +306,7 @@ const STEPS: &[Step] = &[
         let ai = w.global::<AiState>();
         ai.set_reader_menu(false);
         ai.set_conversation("".into());
+        ai.set_reader_blocks(markdown::model(Vec::new()));
         ai.set_exposed_reasoning("".into());
         ai.set_token_label("".into());
         ai.set_history_index(1);

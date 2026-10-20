@@ -124,9 +124,9 @@ export global AiState {
     in-out property <int> branch-index: 0;
     in-out property <string> branch-label: "最新回答";
     in-out property <string> conversation;
-    // The conversation as Markdown blocks, and whether to show the raw text,
-    // which can be selected, instead.
-    pure callback markdown(string) -> [MdBlock];
+    // The conversation as Markdown blocks, put together from its stored turns,
+    // and whether to show the raw text, which can be selected, instead.
+    in-out property <[MdBlock]> reader-blocks;
     in-out property <bool> raw-view: false;
     // The reader's menu of rarer actions is open.
     in-out property <bool> reader-menu: false;
@@ -452,27 +452,6 @@ component StatTile inherits Rectangle {
 }
 
 // An entry of a small menu.
-component MenuItem inherits Rectangle {
-    in property <string> text;
-    in property <image> icon;
-    in property <bool> danger: false;
-    in property <bool> enabled: true;
-    callback clicked;
-    height: 36px;
-    border-radius: 7px;
-    background: touch.has-hover && root.enabled ? (root.danger ? Theme.danger-soft : Theme.hover-tint) : transparent;
-    accessible-role: button;
-    accessible-label: root.text;
-    accessible-enabled: root.enabled;
-    accessible-action-default => { if root.enabled { root.clicked(); } }
-    HorizontalLayout {
-        padding-left: 10px; padding-right: 12px; spacing: 10px;
-        VerticalLayout { alignment: center; Image { width: 16px; height: 16px; source: root.icon; colorize: !root.enabled ? Theme.ink-4 : root.danger ? Theme.danger : Theme.ink-2; } }
-        Text { text: root.text; font-size: 14px; vertical-alignment: center; color: !root.enabled ? Theme.ink-4 : root.danger ? Theme.danger : Theme.ink; }
-    }
-    touch := TouchArea { enabled: root.enabled; mouse-cursor: pointer; clicked => { root.clicked(); } }
-}
-
 // One step of the getting-started card.
 component GuideStep inherits HorizontalLayout {
     in property <string> number;
@@ -646,7 +625,9 @@ export component AiPanel inherits Rectangle {
                                         OptionRow {
                                             icon: @image-url("icons/plug-connected.svg");
                                             title: "AI 连接";
-                                            detail: AiState.preview-target != "" ? AiState.preview-target : "这次总结使用的服务和模型";
+                                            detail: AiState.preview-target != "" ? AiState.preview-target
+                                                : AiState.use-provider-index >= 0 && AiState.use-provider-index < AiState.providers.length ? AiState.providers[AiState.use-provider-index]
+                                                : "这次总结使用的服务和模型";
                                             if AiState.providers.length > 1 : AiSelect {
                                                 width: 220px;
                                                 model: AiState.providers;
@@ -781,7 +762,9 @@ export component AiPanel inherits Rectangle {
                 }
 
                 // ───── Reading a summary ─────
-                if root.view == 4 : reading := Rectangle {
+                if root.view == 4 : Rectangle {
+                    // The menu flag is global; one left open on another page stays shut here.
+                    init => { AiState.reader-menu = false; }
                     vertical-stretch: 1;
                     VerticalLayout {
                         VerticalLayout {
@@ -870,7 +853,7 @@ export component AiPanel inherits Rectangle {
                                             open <=> root.reasoning-open;
                                         }
 
-                                        for block in AiState.markdown(AiState.conversation) : HorizontalLayout {
+                                        for block in AiState.reader-blocks : HorizontalLayout {
                                             // Rows of one table stay together; headings and turns
                                             // of the conversation get more room above.
                                             padding-top: block.kind == 8 ? 0px
@@ -1039,10 +1022,20 @@ export component AiPanel inherits Rectangle {
                         drop-shadow-blur: 18px;
                         drop-shadow-offset-y: 6px;
                         drop-shadow-color: Theme.shadow-strong;
-                        menu := VerticalLayout {
-                            padding: 6px; spacing: 2px;
-                            MenuItem { icon: @image-url("icons/message-circle.svg"); text: "清空追问…"; danger: true; enabled: AiState.has-follow-ups && AiState.reader-busy == ""; clicked => { AiState.reader-menu = false; root.confirm(2); } }
-                            MenuItem { icon: @image-url("icons/trash.svg"); text: "删除此版本…"; danger: true; enabled: AiState.reader-busy == ""; clicked => { AiState.reader-menu = false; root.confirm(1); } }
+                        // Opens with the keyboard on its first item; Escape closes it.
+                        Timer { interval: 1ms; triggered => { if clear-item.enabled { clear-item.focus(); } else { delete-item.focus(); } self.running = false; } }
+                        FocusScope {
+                            focus-on-click: false;
+                            focus-on-tab-navigation: false;
+                            key-pressed(event) => {
+                                if event.text == Key.Escape { AiState.reader-menu = false; return accept; }
+                                return reject;
+                            }
+                            menu := VerticalLayout {
+                                padding: 6px; spacing: 2px;
+                                clear-item := Action { quiet: true; danger: true; height: 36px; icon: @image-url("icons/message-circle.svg"); text: "清空追问…"; enabled: AiState.has-follow-ups && AiState.reader-busy == ""; clicked => { AiState.reader-menu = false; root.confirm(2); } }
+                                delete-item := Action { quiet: true; danger: true; height: 36px; icon: @image-url("icons/trash.svg"); text: "删除此版本…"; enabled: AiState.reader-busy == ""; clicked => { AiState.reader-menu = false; root.confirm(1); } }
+                            }
                         }
                     }
                 }
