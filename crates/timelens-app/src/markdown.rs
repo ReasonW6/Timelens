@@ -54,25 +54,32 @@ fn piped(line: &str) -> bool {
     })
 }
 
-/// A table row's cells, without the outer pipes; `\|` stays inside its cell.
+/// A table row's cells, without the outer pipes. `\|` is a pipe inside its
+/// cell and `\\` a backslash, so a pipe after an even run of backslashes
+/// still divides cells.
 fn cells(line: &str) -> Vec<String> {
     let line = line.trim();
-    let line = line.strip_prefix('|').unwrap_or(line);
-    let line = match line.strip_suffix('|') {
-        Some(rest) if !rest.ends_with('\\') => rest,
-        _ => line,
-    };
     let mut cells = vec![String::new()];
-    let mut chars = line.chars().peekable();
+    let mut chars = line.chars();
     while let Some(c) = chars.next() {
         match c {
-            '\\' if chars.peek() == Some(&'|') => {
-                chars.next();
-                cells.last_mut().unwrap().push('|');
+            '\\' => {
+                let cell = cells.last_mut().unwrap();
+                match chars.next() {
+                    Some(next @ ('|' | '\\')) => cell.push(next),
+                    next => cell.extend(Some('\\').into_iter().chain(next)),
+                }
             }
             '|' => cells.push(String::new()),
             _ => cells.last_mut().unwrap().push(c),
         }
+    }
+    // Outer pipes leave an empty cell at either end.
+    if line.starts_with('|') {
+        cells.remove(0);
+    }
+    if cells.len() > 1 && cells.last().is_some_and(String::is_empty) {
+        cells.pop();
     }
     cells
         .into_iter()
@@ -97,12 +104,12 @@ fn table_start(line: &str, next: Option<&&str>) -> bool {
     piped(line) && divider(&divide) && cells(line).len() == divide.len()
 }
 
-/// The header (first line) and body rows, padded to one width so their
-/// columns line up; the divider (second line) is dropped.
+/// The header (first line) and body rows, cut or padded to the header's
+/// width so their columns line up; the divider (second line) is dropped.
 fn table(lines: &[&str], out: &mut Vec<MdBlock>) {
     let mut rows = lines.iter().map(|line| cells(line)).collect::<Vec<_>>();
     rows.remove(1);
-    let width = rows.iter().map(Vec::len).max().unwrap_or(0);
+    let width = rows[0].len();
     for (index, mut row) in rows.into_iter().enumerate() {
         row.resize(width, String::new());
         let row = row.iter().map(|cell| SharedString::from(inline(cell)));
@@ -302,6 +309,15 @@ mod tests {
             vec![
                 (TABLE_HEAD, "".into(), vec!["条件".into(), "结果".into()]),
                 (TABLE_ROW, "".into(), vec!["a | b".into(), "真".into()]),
+            ]
+        );
+        // `\\` is a backslash, so the pipe after it still divides; the header
+        // sets the width, so extra body cells are dropped.
+        assert_eq!(
+            rows("| 左 | 右 |\n| --- | --- |\n| a \\\\| b | c |"),
+            vec![
+                (TABLE_HEAD, "".into(), vec!["左".into(), "右".into()]),
+                (TABLE_ROW, "".into(), vec!["a \\".into(), "b".into()]),
             ]
         );
         // A pipe without a divider row below is ordinary text.

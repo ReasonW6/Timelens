@@ -753,7 +753,9 @@ export component AiPanel inherits Rectangle {
                                         background: Theme.raised;
                                         code := Text { x: 12px; width: parent.width - 24px; text: block.text; color: Theme.ink; font-family: "Consolas"; font-size: 13px; wrap: word-wrap; }
                                     }
-                                    // Table rows share column widths, so their cells line up.
+                                    // Every row has the same cell count and splits its width
+                                    // evenly (no preferred width, equal stretch), so columns
+                                    // line up across rows whatever the cells hold.
                                     if block.kind == 7 || block.kind == 8 : Rectangle {
                                         horizontal-stretch: 1;
                                         height: row.preferred-height;
@@ -765,6 +767,7 @@ export component AiPanel inherits Rectangle {
                                             for cell in block.cells : Text {
                                                 horizontal-stretch: 1;
                                                 min-width: 0px;
+                                                preferred-width: 0px;
                                                 text: cell;
                                                 wrap: word-wrap;
                                                 color: Theme.ink;
