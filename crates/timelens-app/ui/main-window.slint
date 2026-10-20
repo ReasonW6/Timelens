@@ -1272,6 +1272,9 @@ export component AppWindow inherits Window {
                                     if root.page == 0 && root.history-query != "" : Note { text: root.history-search-status; font-size: 12px; }
                                     if root.page == 0 : Rectangle {
                                         vertical-stretch: 1;
+                                        // The pinned day header slides up when the next day
+                                        // arrives; keep it off the toolbar above.
+                                        clip: true;
                                         // ↑/↓ step through the activities; End goes back to now.
                                         history-keys := FocusScope {
                                             focus-on-click: false;
@@ -1792,7 +1795,7 @@ export component AppWindow inherits Window {
                                         Rectangle { width: 6px; }
                                         VerticalLayout { alignment: center; Action { text: "AI 设置"; icon: @image-url("icons/settings.svg"); clicked => { root.open-settings(4); } } }
                                     }
-                                    if root.page == 4 : AiPanel { vertical-stretch: 1; open-settings => { root.open-settings(4); } }
+                                    if root.page == 4 : AiPanel { vertical-stretch: 1; narrow-reader: root.narrow; open-settings => { root.open-settings(4); } }
                                 }
                             }
 
@@ -2361,10 +2364,12 @@ export component AppWindow inherits Window {
         title: AiState.confirm-kind == 1 ? "删除这个总结版本？"
             : AiState.confirm-kind == 2 ? "清空这一版的追问？"
             : AiState.confirm-kind == 3 ? "删除这个 AI 连接？"
+            : AiState.confirm-kind == 5 ? "删除这条总结记录？"
             : "删除这个总结模板？";
         explanation: AiState.confirm-kind == 1 ? "会删除这一版的回答、追问和当时发送的数据快照。其他版本和原始活动记录不受影响。"
             : AiState.confirm-kind == 2 ? "会删除这一版下的全部追问和回答，保留最初的总结。"
             : AiState.confirm-kind == 3 ? "会同时删除保存在 Windows 凭据管理器中的密钥。用到它的自动总结会暂停，已有的总结仍然保留。"
+            : AiState.confirm-kind == 5 ? "这条记录没有生成总结，删除后从总结记录中移除。原始活动记录不受影响。"
             : "用到它的自动总结会暂停，已有的总结仍然保留。";
         detail: "此操作无法撤销。";
         accept-text: AiState.confirm-kind == 2 ? "清空" : AiState.confirm-kind == 3 ? "删除连接" : AiState.confirm-kind == 4 ? "删除模板" : "删除";
@@ -2381,6 +2386,7 @@ export component AppWindow inherits Window {
             else if kind == 2 { AiState.clear-conversation(); }
             else if kind == 3 { AiState.delete-provider(); }
             else if kind == 4 { AiState.delete-prompt(); }
+            else if kind == 5 { AiState.delete-job(); }
             if root.settings-open { root.refocus-settings = true; } else { ai-nav.focus(); }
         }
     }

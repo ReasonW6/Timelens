@@ -2,8 +2,9 @@ import { ComboBox, LineEdit, TextEdit, ScrollView, ListView } from "std-widgets.
 import { Theme, Action, Label, Note, SectionTitle, Eyebrow, Rule, CheckBox, StatusLine, Segmented, Segment, Switch, SettingRow, SettingsHeader, SettingsGroup, SettingExpander, Card, Badge, Dot } from "theme.slint";
 
 // One block of a Markdown answer. `kind`: 0 paragraph, 1 title, 2 heading,
-// 3 list item, 4 quote, 5 code, 6 rule; `marker` is the bullet or number.
-export struct MdBlock { kind: int, text: string, marker: string, indent: int }
+// 3 list item, 4 quote, 5 code, 6 rule, 7 table header, 8 table row;
+// `marker` is the bullet or number, `cells` a table row's cells.
+export struct MdBlock { kind: int, text: string, marker: string, indent: int, cells: [string] }
 
 // One row of the summary history: a summary version, or a first summary attempt
 // that has not succeeded. `state`: 0 done, 1 queued or running, 2 failed,
@@ -195,6 +196,8 @@ export global AiState {
     callback follow-up;
     callback pin-version;
     callback delete-version;
+    // Delete a finished record that left no version, such as a failed summary.
+    callback delete-job;
     callback clear-conversation;
     callback clear-context;
     // Save a schedule with what its pickers show; the "timing" variants keep the
@@ -428,6 +431,9 @@ export component AiPanel inherits Rectangle {
     // 0 a new summary, 1 the getting-started card, 4 reading, 6 choosing snapshots.
     private property <int> view: AiState.page == 4 ? 4 : AiState.page == 6 ? 6 : AiState.providers.length == 0 ? 1 : 0;
     private property <bool> show-history: AiState.history.length > 0 || AiState.providers.length > 0;
+    // Set by the window: beside the history list a narrow reader cannot fit
+    // every action on one row.
+    in property <bool> narrow-reader: false;
     private property <bool> reader-body: AiState.conversation != "" || AiState.reader-state <= 2;
     private property <bool> image-in: AiState.image-index >= 0 && AiState.image-checked[AiState.image-index];
 
@@ -568,9 +574,13 @@ export component AiPanel inherits Rectangle {
                         }
 
                         // What will be sent, worked out locally before anything leaves.
-                        Rectangle {
+                        preview-card := Rectangle {
+                            // Wrapped text inside the conditional blocks below is measured
+                            // before the layout gives it a width, so it counts too few lines
+                            // and spills out of the card. Give it the width up front:
+                            // the column's right padding plus this card's own padding.
+                            property <length> text-width: composer.visible-width - 44px;
                             vertical-stretch: 0;
-                            height: preview-body.preferred-height;
                             border-radius: 12px;
                             border-width: 1px;
                             border-color: AiState.preview-state == 1 && AiState.preview-empty ? Theme.warn-line : AiState.preview-state == 2 ? Theme.danger-line : Theme.line;
@@ -587,7 +597,7 @@ export component AiPanel inherits Rectangle {
                                     HorizontalLayout {
                                         spacing: 8px;
                                         VerticalLayout { alignment: start; Image { width: 16px; height: 16px; source: @image-url("icons/alert-triangle.svg"); colorize: Theme.danger; } }
-                                        Text { text: AiState.preview-error; color: Theme.ink-2; font-size: 13px; wrap: word-wrap; horizontal-stretch: 1; }
+                                        Text { width: preview-card.text-width - 24px; text: AiState.preview-error; color: Theme.ink-2; font-size: 13px; wrap: word-wrap; horizontal-stretch: 1; }
                                     }
                                     HorizontalLayout {
                                         spacing: 8px;
@@ -600,19 +610,20 @@ export component AiPanel inherits Rectangle {
                                 }
                                 if AiState.preview-state == 1 : VerticalLayout {
                                     spacing: 12px;
-                                    Text { text: AiState.preview-facts; color: Theme.ink-2; font-size: 13px; wrap: word-wrap; }
-                                    if AiState.preview-empty : Text { text: "这个时段没有记录。继续只会保存一条「无数据」记录，不会调用 AI。"; color: Theme.warn; font-size: 13px; wrap: word-wrap; }
+                                    Text { width: preview-card.text-width; text: AiState.preview-facts; color: Theme.ink-2; font-size: 13px; wrap: word-wrap; }
+                                    if AiState.preview-empty : Text { width: preview-card.text-width; text: "这个时段没有记录。继续只会保存一条「无数据」记录，不会调用 AI。"; color: Theme.warn; font-size: 13px; wrap: word-wrap; }
                                     // One above the other: wrapped text side by side is measured
                                     // too short and spills out of the card.
                                     VerticalLayout {
                                         spacing: 4px;
                                         Eyebrow { text: "包含"; }
-                                        Note { text: "各应用的名称，以及打开、显示、专注和后台时长；窗口数量；空闲、锁屏、睡眠、暂停等系统状态时长；按小时的专注与输入趋势；键盘和鼠标总次数；完整自然日内次数最多的 20 个键位；缺失时段。" + (AiState.image-selected > 0 ? "另附你选的 " + AiState.image-selected + " 张快照原图。" : ""); }
+                                        Note { width: preview-card.text-width; text: "各应用的名称，以及打开、显示、专注和后台时长；窗口数量；空闲、锁屏、睡眠、暂停等系统状态时长；按小时的专注与输入趋势；键盘和鼠标总次数；完整自然日内次数最多的 20 个键位；缺失时段。" + (AiState.image-selected > 0 ? "另附你选的 " + AiState.image-selected + " 张快照原图。" : ""); }
                                     }
                                     VerticalLayout {
                                         spacing: 4px;
                                         Eyebrow { text: "不含"; }
                                         Note {
+                                            width: preview-card.text-width;
                                             text: AiState.image-selected > 0
                                                 ? "以上数据不含窗口标题、网址、文档内容、按键顺序、文件路径和密钥。但快照是整屏图像，图中能看到的标题、网址和文档内容会一起发送。"
                                                 : "窗口标题、网址、文档内容、按键顺序、文件路径和密钥。";
@@ -624,7 +635,7 @@ export component AiPanel inherits Rectangle {
                                             alignment: LayoutAlignment.start;
                                             Action { quiet: true; text: (root.missing-open ? "收起" : "查看") + "缺失时段（" + AiState.preview-missing-count + "）"; clicked => { root.missing-open = !root.missing-open; } }
                                         }
-                                        if root.missing-open : Note { text: AiState.preview-missing; }
+                                        if root.missing-open : Note { width: preview-card.text-width; text: AiState.preview-missing; }
                                     }
                                 }
                             }
@@ -675,8 +686,16 @@ export component AiPanel inherits Rectangle {
                         if AiState.reader-state == 0 : Action { text: "重新生成"; icon: @image-url("icons/refresh.svg"); enabled: AiState.reader-busy == ""; clicked => { AiState.regenerate(); } }
                         if AiState.reader-state == 0 : Action { text: AiState.pinned ? "取消保留" : "始终保留"; selected: AiState.pinned; accessible-label: AiState.pinned ? "取消保留，允许自动清理这一版" : "始终保留，不被自动清理"; clicked => { AiState.pin-version(); } }
                         Rectangle { horizontal-stretch: 1; }
-                        if AiState.reader-state == 0 : Action { quiet: true; danger: true; text: "清空追问…"; enabled: AiState.has-follow-ups && AiState.reader-busy == ""; clicked => { root.confirm(2); } }
-                        if AiState.reader-state == 0 : Action { quiet: true; danger: true; text: "删除此版本…"; enabled: AiState.reader-busy == ""; clicked => { root.confirm(1); } }
+                        if AiState.reader-state == 0 && !root.narrow-reader : Action { quiet: true; danger: true; text: "清空追问…"; enabled: AiState.has-follow-ups && AiState.reader-busy == ""; clicked => { root.confirm(2); } }
+                        if AiState.reader-state == 0 && !root.narrow-reader : Action { quiet: true; danger: true; text: "删除此版本…"; enabled: AiState.reader-busy == ""; clicked => { root.confirm(1); } }
+                        if AiState.reader-state >= 3 : Action { quiet: true; danger: true; text: "删除此记录…"; clicked => { root.confirm(5); } }
+                    }
+                    // A narrow reader moves the destructive actions to their own row.
+                    if AiState.reader-state == 0 && root.narrow-reader : HorizontalLayout {
+                        spacing: 8px;
+                        alignment: end;
+                        Action { quiet: true; danger: true; text: "清空追问…"; enabled: AiState.has-follow-ups && AiState.reader-busy == ""; clicked => { root.confirm(2); } }
+                        Action { quiet: true; danger: true; text: "删除此版本…"; enabled: AiState.reader-busy == ""; clicked => { root.confirm(1); } }
                     }
 
                     if AiState.reader-state == 1 && AiState.reader-error == "" : Callout { tone: 3; title: "排队中"; text: "前面还有任务，轮到这一项时会自动开始。"; }
@@ -711,15 +730,17 @@ export component AiPanel inherits Rectangle {
                     // Formatted reading; the raw text stays below for selecting and copying.
                     if root.reader-body && !AiState.raw-view && AiState.conversation != "" : Rectangle {
                         vertical-stretch: 1;
-                        min-height: 200px;
+                        min-height: 120px;
                         border-radius: 8px;
                         border-width: 1px; border-color: Theme.line;
                         ScrollView {
                             horizontal-scrollbar-policy: always-off;
                             VerticalLayout {
                                 alignment: start;
-                                padding: 16px; padding-right: 22px; spacing: 10px;
+                                padding: 16px; padding-top: 6px; padding-right: 22px;
                                 for block in AiState.markdown(AiState.conversation) : HorizontalLayout {
+                                    // Blocks sit 10px apart; rows of one table stay together.
+                                    padding-top: block.kind == 8 ? 0px : 10px;
                                     padding-left: block.indent * 18px + (block.kind == 4 ? 12px : 0px);
                                     spacing: 8px;
                                     if block.kind == 4 : Rectangle { width: 3px; border-radius: 1.5px; background: Theme.line-strong; }
@@ -732,7 +753,31 @@ export component AiPanel inherits Rectangle {
                                         background: Theme.raised;
                                         code := Text { x: 12px; width: parent.width - 24px; text: block.text; color: Theme.ink; font-family: "Consolas"; font-size: 13px; wrap: word-wrap; }
                                     }
-                                    if block.kind != 5 && block.kind != 6 : Text {
+                                    // Every row has the same cell count and splits its width
+                                    // evenly (no preferred width, equal stretch), so columns
+                                    // line up across rows whatever the cells hold.
+                                    if block.kind == 7 || block.kind == 8 : Rectangle {
+                                        horizontal-stretch: 1;
+                                        height: row.preferred-height;
+                                        background: block.kind == 7 ? Theme.raised : transparent;
+                                        border-radius: block.kind == 7 ? 6px : 0px;
+                                        row := HorizontalLayout {
+                                            padding-left: 10px; padding-right: 10px; padding-top: 6px; padding-bottom: 6px;
+                                            spacing: 12px;
+                                            for cell in block.cells : Text {
+                                                horizontal-stretch: 1;
+                                                min-width: 0px;
+                                                preferred-width: 0px;
+                                                text: cell;
+                                                wrap: word-wrap;
+                                                color: Theme.ink;
+                                                font-size: 14px;
+                                                font-weight: block.kind == 7 ? 600 : 400;
+                                            }
+                                        }
+                                        if block.kind == 8 : Rectangle { y: parent.height - 1px; height: 1px; background: Theme.line; }
+                                    }
+                                    if block.kind < 5 : Text {
                                         horizontal-stretch: 1;
                                         text: block.text;
                                         wrap: word-wrap;
@@ -747,7 +792,7 @@ export component AiPanel inherits Rectangle {
                     reader := TextEdit {
                         visible: root.reader-body && (AiState.raw-view || AiState.conversation == "");
                         vertical-stretch: self.visible ? 1 : 0;
-                        min-height: self.visible ? 200px : 0px;
+                        min-height: self.visible ? 120px : 0px;
                         max-height: self.visible ? 100000px : 0px;
                         text: AiState.conversation;
                         read-only: true;
