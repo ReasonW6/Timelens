@@ -107,6 +107,8 @@ struct UiData {
     picked: Vec<(SnapshotConsent, i64)>,
     /// The version on screen when a delete or clear confirmation opened.
     confirm_version: Option<i64>,
+    /// The versionless record on screen when a delete confirmation opened.
+    confirm_job: Option<i64>,
 }
 impl Default for UiData {
     fn default() -> Self {
@@ -135,6 +137,7 @@ impl Default for UiData {
             preview: None,
             picked: vec![],
             confirm_version: None,
+            confirm_job: None,
         }
     }
 }
@@ -910,6 +913,25 @@ pub fn install(
             Ok(())
         }
     );
+    bind!(on_delete_job, |w: &AppWindow,
+                          d: &mut UiData,
+                          s: &Store,
+                          _: &Commands| {
+        let id = d
+            .confirm_job
+            .take()
+            .ok_or_else(|| anyhow!("请先选择一条记录"))?;
+        if d.job != Some(id) {
+            bail!("显示的记录已经切换，没有执行；请重新操作");
+        }
+        let s = lock(s)?;
+        s.delete_ai_job(id)?;
+        d.job = None;
+        reload(w, d, &s)?;
+        show_reader(w, d, &s)?;
+        w.global::<AiState>().set_status("已删除这条记录".into());
+        Ok(())
+    });
     bind!(
         on_clear_conversation,
         |w: &AppWindow, d: &mut UiData, s: &Store, _: &Commands| {
@@ -942,6 +964,7 @@ pub fn install(
         on_begin_confirm,
         |_: &AppWindow, d: &mut UiData, _: &Store, _: &Commands| {
             d.confirm_version = d.version;
+            d.confirm_job = d.job;
             Ok(())
         }
     );

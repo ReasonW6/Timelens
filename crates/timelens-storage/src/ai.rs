@@ -806,6 +806,17 @@ impl Storage {
         )?;
         Ok(())
     }
+    /// Remove a finished job that left no version, such as a failed summary.
+    pub fn delete_ai_job(&self, id: i64) -> Result<()> {
+        let deleted = self.connection.execute(
+            "DELETE FROM ai_jobs WHERE job_id=?1 AND state NOT IN ('running','queued') AND NOT EXISTS(SELECT 1 FROM ai_versions WHERE ai_versions.job_id=ai_jobs.job_id)",
+            [id],
+        )?;
+        if deleted == 0 {
+            return Err(invalid("这条记录正在运行或已有总结，不能直接删除"));
+        }
+        Ok(())
+    }
     pub fn ai_messages(&self, version: i64) -> Result<Vec<AiMessage>> {
         let mut s=self.connection.prepare("SELECT message_id,parent_id,role,body,reasoning,error_json,usage_json,completed FROM ai_messages WHERE version_id=?1 ORDER BY message_id")?;
         s.query_map([version], |r| {
@@ -1137,6 +1148,19 @@ pub(crate) mod tests {
         assert!(s.claim_ai_job(7200).unwrap().is_none());
         let bytes = fs::read(s.database_path()).unwrap();
         assert!(!bytes.windows(7).any(|w| w == b"partial"));
+    }
+    #[test]
+    fn only_finished_jobs_without_a_version_can_be_deleted() {
+        let (_dir, s) = fixture();
+        let id = s
+            .enqueue_ai_summary("fixture", "default", 1000, 6000, &[], 7000)
+            .unwrap();
+        assert!(s.delete_ai_job(id).is_err());
+        s.claim_ai_job(7000).unwrap();
+        assert!(s.delete_ai_job(id).is_err());
+        s.cancel_ai_job(id, 7100).unwrap();
+        s.delete_ai_job(id).unwrap();
+        assert!(s.ai_job(id).is_err());
     }
     #[test]
     fn changed_model_requires_retest_and_deletion_pauses_referencing_schedule() {

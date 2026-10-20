@@ -220,6 +220,39 @@ const STEPS: &[Step] = &[
         ai.invoke_list_images();
         ai.set_page(6);
     }),
+    // The fixture has no AI connection; these fill the panel's state directly.
+    ("07c-ai-compose", |w| {
+        let ai = w.global::<AiState>();
+        ai.set_providers(slint::ModelRc::new(slint::VecModel::from(vec![
+            "DeepSeek".into(),
+        ])));
+        ai.set_use_provider_index(0);
+        ai.set_use_vision(0);
+        ai.set_page(0);
+        ai.set_preview_state(1);
+        ai.set_preview_target("DeepSeek · deepseek-flash".into());
+        ai.set_preview_facts(
+            "有记录 34% · 17 个应用 · 缺失 4 段 · 预计 1 次请求 · 0 张快照".into(),
+        );
+        ai.set_preview_missing_count(4);
+        ai.set_preview_missing("00:00–09:04 采集器未运行".into());
+    }),
+    ("07d-ai-markdown", |w| {
+        let ai = w.global::<AiState>();
+        ai.set_page(4);
+        ai.set_reader_state(0);
+        ai.set_reader_title("10月20日 周二 00:00–13:40".into());
+        ai.set_conversation(
+            "## 简洁总结\n上午主要在 **Zen** 和 Claude 之间切换。\n\n## 主要应用\n| 应用 | 显示时长 | 聚焦时长 | 后台时长 |\n|---|---:|---:|---:|\n| zen | 4h33m | 3h48m | 0.8s |\n| claude | 2h49m | 34m19s | 1h43m |\n| AyuGram（合并分块） | 13m02s | 3m26s | 1h03m |\n\n- 第一条要点\n- 第二条要点"
+                .into(),
+        );
+    }),
+    ("07e-ai-failed", |w| {
+        let ai = w.global::<AiState>();
+        ai.set_conversation("".into());
+        ai.set_reader_state(3);
+        ai.set_reader_error("模型的思考过程用完了最大输出（8192 Token），没来得及写正文。".into());
+    }),
     ("08-settings-privacy", |w| settings(w, 0)),
     ("09-settings-snapshots", |w| settings(w, 1)),
     ("10-settings-rules", |w| settings(w, 2)),

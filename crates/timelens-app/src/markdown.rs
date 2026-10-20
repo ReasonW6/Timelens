@@ -1,8 +1,9 @@
 //! Just enough Markdown for reading AI answers: headings, lists, quotes, code
-//! blocks and rules. Inline marks are dropped, since a Slint text has one style.
+//! blocks, rules and tables. Inline marks are dropped, since a Slint text has
+//! one style.
 use std::rc::Rc;
 
-use slint::{ModelRc, VecModel};
+use slint::{ModelRc, SharedString, VecModel};
 
 use crate::MdBlock;
 
@@ -13,6 +14,8 @@ const ITEM: i32 = 3;
 const QUOTE: i32 = 4;
 const CODE: i32 = 5;
 const RULE: i32 = 6;
+const TABLE_HEAD: i32 = 7;
+const TABLE_ROW: i32 = 8;
 
 /// The text without emphasis, inline code marks and link targets.
 fn inline(text: &str) -> String {
@@ -37,6 +40,51 @@ fn block(kind: i32, text: String, marker: &str, indent: usize) -> MdBlock {
         text: text.into(),
         marker: marker.into(),
         indent: indent.min(4) as i32,
+        cells: ModelRc::default(),
+    }
+}
+
+/// A table row's cells, without the outer pipes.
+fn cells(line: &str) -> Vec<String> {
+    let line = line.trim();
+    let line = line.strip_prefix('|').unwrap_or(line);
+    let line = line.strip_suffix('|').unwrap_or(line);
+    line.split('|')
+        .map(|cell| cell.trim().to_string())
+        .collect()
+}
+
+/// Whether a row only divides the header from the body, like `|---|:--:|`.
+fn divider(cells: &[String]) -> bool {
+    cells.iter().all(|cell| {
+        !cell.is_empty() && cell.contains('-') && cell.chars().all(|c| matches!(c, '-' | ':'))
+    })
+}
+
+/// Rows padded to one width, so their columns line up.
+fn table(lines: &[&str], out: &mut Vec<MdBlock>) {
+    let mut rows = lines.iter().map(|line| cells(line)).collect::<Vec<_>>();
+    let head = rows.len() > 1 && divider(&rows[1]);
+    if head {
+        rows.remove(1);
+    }
+    rows.retain(|row| !divider(row));
+    let width = rows.iter().map(Vec::len).max().unwrap_or(0);
+    for (index, mut row) in rows.into_iter().enumerate() {
+        row.resize(width, String::new());
+        let row = row.iter().map(|cell| SharedString::from(inline(cell)));
+        let mut cells = block(
+            if head && index == 0 {
+                TABLE_HEAD
+            } else {
+                TABLE_ROW
+            },
+            String::new(),
+            "",
+            0,
+        );
+        cells.cells = Rc::new(VecModel::from_iter(row)).into();
+        out.push(cells);
     }
 }
 
@@ -56,6 +104,7 @@ pub fn blocks(text: &str) -> Vec<MdBlock> {
     let mut out = Vec::new();
     let mut paragraph: Vec<&str> = Vec::new();
     let mut code: Option<Vec<&str>> = None;
+    let mut rows: Vec<&str> = Vec::new();
     let flush = |paragraph: &mut Vec<&str>, out: &mut Vec<MdBlock>| {
         if !paragraph.is_empty() {
             out.push(block(PARAGRAPH, inline(&paragraph.join("\n")), "", 0));
@@ -80,6 +129,15 @@ pub fn blocks(text: &str) -> Vec<MdBlock> {
         }
         let indent = (line.len() - trimmed.len()) / 2;
         let trimmed = trimmed.trim_end();
+        if trimmed.starts_with('|') {
+            flush(&mut paragraph, &mut out);
+            rows.push(trimmed);
+            continue;
+        }
+        if !rows.is_empty() {
+            table(&rows, &mut out);
+            rows.clear();
+        }
         if trimmed.is_empty() {
             flush(&mut paragraph, &mut out);
             continue;
@@ -106,6 +164,9 @@ pub fn blocks(text: &str) -> Vec<MdBlock> {
             paragraph.push(trimmed);
         }
     }
+    if !rows.is_empty() {
+        table(&rows, &mut out);
+    }
     if let Some(lines) = code {
         // An answer still streaming may not have closed its code block yet.
         out.push(block(CODE, lines.join("\n"), "", 0));
@@ -121,6 +182,7 @@ pub fn model(text: &str) -> ModelRc<MdBlock> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use slint::Model as _;
 
     fn kinds(text: &str) -> Vec<(i32, String, String)> {
         blocks(text)
@@ -147,6 +209,36 @@ mod tests {
                 (QUOTE, "提醒".into(), "".into()),
                 (RULE, "".into(), "".into()),
                 (CODE, "let x = 1;".into(), "".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn reads_tables_as_aligned_rows() {
+        let text = "前言
+| 应用 | 时长 |
+|---|:--:|
+| **zen** | 4h |
+| claude |
+结尾";
+        let blocks = blocks(text);
+        let rows = blocks
+            .iter()
+            .map(|b| {
+                let cells = (0..b.cells.row_count())
+                    .map(|i| b.cells.row_data(i).unwrap().to_string())
+                    .collect::<Vec<_>>();
+                (b.kind, cells)
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            rows,
+            vec![
+                (PARAGRAPH, vec![]),
+                (TABLE_HEAD, vec!["应用".into(), "时长".into()]),
+                (TABLE_ROW, vec!["zen".into(), "4h".into()]),
+                (TABLE_ROW, vec!["claude".into(), "".into()]),
+                (PARAGRAPH, vec![]),
             ]
         );
     }
