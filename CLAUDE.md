@@ -70,4 +70,4 @@ UI：`crates/timelens-app/ui/*.slint` 通过 `main.rs` 里的 `slint::slint!` �
 - 规划与决策：`docs/wayfinder/README.md` → `docs/wayfinder/timelens-v1/map.md`（已解决票据、数据/隐私合同；AI 任务合同已由票据 18 取代）。新的阻塞性决策应新建 Wayfinder 票据并从地图链接，不要改写已解决票据的结论；不要依赖 `.scratch/`。
 - 架构决策：`docs/adr/`（0003 已被 0004 取代）。
 - 界面验收与设计：`design-qa.md`、`docs/design/`。
-- README 和文档以简体中文书写。
+- 文档以简体中文书写。README 有两份：默认的英文 `README.md` 和中文 `README.zh-CN.md`，修改时两份同步更新。

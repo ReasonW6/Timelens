@@ -1,12 +1,16 @@
 <p align="center">
-  <img src="crates/timelens-app/assets/brand/timelens-256.png" width="104" alt="Timelens 图标">
+  <img src="crates/timelens-app/assets/brand/timelens-256.png" width="104" alt="Timelens icon">
 </p>
 
 <h1 align="center">Timelens</h1>
 
 <p align="center">
-  <b>本机时间回看</b><br>
-  安静地记下你在 Windows 上把时间花在了哪里。所有数据都留在这台电脑上，加密保存，从不联网。
+  <b>Look back at your time, locally</b><br>
+  Quietly records where your time goes on Windows. Everything stays on this PC, encrypted, and never touches the network.
+</p>
+
+<p align="center">
+  <b>English</b> · <a href="README.zh-CN.md">简体中文</a>
 </p>
 
 <p align="center">
@@ -14,196 +18,200 @@
   <img src="https://img.shields.io/badge/Windows-11-0078D4?logo=windows11&logoColor=white" alt="Windows 11">
   <img src="https://img.shields.io/badge/Rust-1.94-CE422B?logo=rust&logoColor=white" alt="Rust 1.94">
   <img src="https://img.shields.io/badge/UI-Slint-2379F4" alt="Slint">
-  <img src="https://img.shields.io/badge/%E5%AD%98%E5%82%A8-SQLCipher-3B7A57" alt="SQLCipher">
-  <img src="https://img.shields.io/badge/%E7%8A%B6%E6%80%81-%E5%BC%80%E5%8F%91%E4%B8%AD-F2A93B" alt="开发中">
+  <img src="https://img.shields.io/badge/storage-SQLCipher-3B7A57" alt="SQLCipher">
+  <img src="https://img.shields.io/badge/status-in%20development-F2A93B" alt="In development">
 </p>
 
 <p align="center">
-  <img src="docs/images/timeline.png" width="900" alt="Timelens 时间线：按日连续滚动的活动列表，右侧是所选活动的详情">
+  <img src="docs/images/timeline.png" width="900" alt="Timelens timeline: a continuously scrolling day-by-day list of activity, with details of the selected activity on the right">
 </p>
 
 > [!NOTE]
-> Timelens 仍在开发中，还没有正式发布。安装包没有代码签名，Windows SmartScreen 可能会拦截；锁屏、睡眠、多屏、远程桌面等真机场景的[发布矩阵](docs/wayfinder/timelens-v1/performance-validation/milestone-5-physical-matrix.md)也还没跑完。
+> Timelens is still in development and has not been released. The installer is not code-signed, so Windows SmartScreen may block it, and the [release matrix](docs/wayfinder/timelens-v1/performance-validation/milestone-5-physical-matrix.md) for real-hardware scenarios such as lock screen, sleep, multiple monitors and Remote Desktop is not finished yet.
+>
+> The user interface and most project documentation are currently in Simplified Chinese only. Menu names below are given in English with the original Chinese label in parentheses.
 
-## 目录
+## Contents
 
-- [它能做什么](#它能做什么)
-- [隐私承诺](#隐私承诺)
-- [工作原理](#工作原理)
-- [轻量是硬性要求](#轻量是硬性要求)
-- [安装与使用](#安装与使用)
-- [从源码构建](#从源码构建)
-- [项目结构](#项目结构)
-- [文档](#文档)
-- [更新记录](#更新记录)
+- [What it does](#what-it-does)
+- [Privacy promise](#privacy-promise)
+- [How it works](#how-it-works)
+- [Lightweight is a hard requirement](#lightweight-is-a-hard-requirement)
+- [Installation and usage](#installation-and-usage)
+- [Building from source](#building-from-source)
+- [Project layout](#project-layout)
+- [Documentation](#documentation)
+- [Changelog](#changelog)
 
-## 它能做什么
+## What it does
 
-### 🕒 时间线：一天是怎么过的
+### 🕒 Timeline: how your day went
 
-首页是按日连续滚动的时间线。每一行归到这段时间里聚焦最久的应用，中途短暂切过去的应用作为「穿插」并进同一行，不会把一天切成碎片。选中一段活动，右侧会显示这段的聚焦、后台和同屏显示时长、同时显示的其他应用，以及这段时间里的键盘和鼠标次数。
+The home page is a timeline that scrolls continuously day by day. Each row belongs to the application that held focus the longest during that stretch; applications you switched to only briefly are folded into the same row as "interleaved" apps, so the day is not chopped into fragments. Select an activity to see, on the right, its focused, background and on-screen durations, the other applications visible at the same time, and the keyboard and mouse counts for that period.
 
-采集器没运行、记录过多被丢弃这类没记下来的时间，会以「未记录 12 分钟 · 原因」的形式明确列出来，不会悄悄补齐。
+Time that was not recorded — because the collector was not running, or because too many records were dropped — is listed explicitly as "Not recorded 12 min · reason" instead of being silently filled in.
 
-### 📊 统计：任意时段，一目了然
-
-<p align="center">
-  <img src="docs/images/statistics.png" width="900" alt="统计页：聚焦总计、应用数、键盘与鼠标次数、数据覆盖与缺失明细、应用排行">
-</p>
-
-- 选今天、最近几小时、任意日期或时段，也可以看「全部记录」。
-- 聚焦总计、应用数、键盘和鼠标点击次数；每个应用的聚焦占比、打开时长、显示时长和窗口数。
-- **数据覆盖**：显示这段时间里有多少被观察到了。点开可以看到每一段缺失和原因，例如采集器没在运行、你暂停了记录、超过保留期已清理。
-- 一键 **导出 JSON / CSV**，导出内容只有聚合数字，不含应用路径。
-
-### ⌨️ 键位与系统：输入的分布
+### 📊 Statistics: any period at a glance
 
 <p align="center">
-  <img src="docs/images/keyboard.png" width="900" alt="键位与系统：物理键位热度图与鼠标按键热度">
+  <img src="docs/images/statistics.png" width="900" alt="Statistics page: total focus time, number of apps, keyboard and mouse counts, data coverage with missing-time details, and app ranking">
 </p>
 
-物理键位热度图展示每个键按了多少次，鼠标左、中、右键各自统计，另外还有锁屏、睡眠等系统状态的时长，以及自开始使用以来的累计总数。这里只有按键次数，**不记录你打了什么字**。
+- Pick today, the last few hours, any date or time range, or "All records".
+- Total focus time, number of applications, keystrokes and mouse clicks; for each application its share of focus, open time, on-screen time and window count.
+- **Data coverage** shows how much of the period was actually observed. Expand it to see every gap and its reason, e.g. the collector was not running, you paused recording, or data was purged after the retention period.
+- One-click **JSON / CSV export**. Exports contain only aggregate numbers, never application paths.
 
-### 📷 快照：可选的画面回看
-
-Timelens 默认每 5 分钟截取一次当前活动的显示器，压缩成 WebP 后加密存进按天划分的容器，默认保留 7 天、最多占用 1 GiB。可以关掉快照，也可以给某些应用设置「不拍摄快照」；锁屏、安全桌面、远程会话等情况会跳过，并记下跳过的原因。
-
-### 🛡️ 你说了算的规则
+### ⌨️ Keys & system: how your input is distributed
 
 <p align="center">
-  <img src="docs/images/privacy.png" width="900" alt="记录与隐私设置：说明本机记录的内容与从不记录的内容">
+  <img src="docs/images/keyboard.png" width="900" alt="Keys and system page: physical keyboard heatmap and mouse button heatmap">
 </p>
 
-- 随时暂停记录。
-- 可以按应用分别设置「不记录活动」「不记录输入」「不拍摄快照」。
-- 同一个程序换了路径或版本，可以把它们合并显示。
-- 可以删除某个应用的全部历史。
-- 可以设置保留天数和空间上限，到了上限会从最旧的数据开始清理。
-- 一键清空全部数据，同时轮换加密密钥。
+A physical keyboard heatmap shows how many times each key was pressed, left, middle and right mouse buttons are counted separately, and there are durations for system states such as lock screen and sleep, plus lifetime totals since you started using Timelens. Only press counts are kept — **what you type is never recorded**.
 
-## 隐私承诺
+### 📷 Snapshots: optional visual look-back
 
-| Timelens 会记录 | Timelens 永远不会记录 |
+By default Timelens captures the active display every 5 minutes, compresses it to WebP and stores it encrypted in per-day containers, kept for 7 days and capped at 1 GiB. You can turn snapshots off or mark specific applications as "Don't take snapshots". Lock screen, the secure desktop, remote sessions and similar cases are skipped, and the reason for each skip is recorded.
+
+### 🛡️ Rules you control
+
+<p align="center">
+  <img src="docs/images/privacy.png" width="900" alt="Recording and privacy settings: what is recorded locally and what is never recorded">
+</p>
+
+- Pause recording at any time.
+- Per application, choose "Don't record activity", "Don't record input" or "Don't take snapshots".
+- Merge the same program into one entry when its path or version changes.
+- Delete the entire history of an application.
+- Set a retention period and a storage cap; once the cap is reached, the oldest data is purged first.
+- Clear all data with one click, which also rotates the encryption key.
+
+## Privacy promise
+
+| Timelens records | Timelens never records |
 | --- | --- |
-| 你可以切换到的顶层窗口属于哪个应用，以及它显示、聚焦、在后台的时间 | 窗口标题、网址、文档或网页内容 |
-| 每分钟按应用汇总的键盘次数和鼠标按键次数 | 你输入的文字、原始按键顺序 |
-| 每个物理键的每日按下次数 | 剪贴板内容 |
-| 你开启的定时快照（加密保存） | 不在任务栏的辅助进程、服务、纯托盘程序 |
+| Which application each switchable top-level window belongs to, and how long it was on screen, focused or in the background | Window titles, URLs, document or web page contents |
+| Per-minute, per-application keyboard and mouse button counts | The text you type or the raw sequence of keys |
+| Daily press counts for each physical key | Clipboard contents |
+| Scheduled snapshots, if enabled (stored encrypted) | Helper processes, services or tray-only programs that are not on the taskbar |
 
-- **全在本机**：数据库用 SQLCipher 加密，密钥由 Windows DPAPI 绑定到当前用户。Timelens 不发起任何网络请求。
-- **缺什么就说缺什么**：没观察到、被清理、被暂停或被排除的时间都会明确标出，不推测，也不补齐。
-- **数据可以带走**：便携 ZIP 备份可以设置密码。卸载时你可以选择保留或删除数据。
+- **Everything stays local**: the database is encrypted with SQLCipher, and its key is bound to the current Windows user via DPAPI. Timelens makes no network requests at all.
+- **Missing means missing**: time that was not observed, purged, paused or excluded is always marked as such — never guessed or filled in.
+- **Your data is portable**: portable ZIP backups can be password-protected. When uninstalling you can choose to keep or delete your data.
 
-## 工作原理
+## How it works
 
 ```mermaid
 flowchart LR
-    subgraph elevated["提权（安装时一次 UAC）"]
-        C["Timelens.Collector.exe<br/>窄职责采集器"]
-        Q[("32 MiB 带校验<br/>环形缓冲")]
+    subgraph elevated["Elevated (one UAC prompt at install)"]
+        C["Timelens.Collector.exe<br/>narrow-scope collector"]
+        Q[("32 MiB checksummed<br/>ring buffer")]
     end
-    subgraph normal["普通权限"]
-        A["Timelens.exe<br/>托盘 · Slint 界面 · 唯一写入者"]
-        D[("SQLCipher 数据库<br/>DPAPI 封装密钥")]
-        S[("加密快照容器")]
+    subgraph normal["Standard user"]
+        A["Timelens.exe<br/>tray · Slint UI · sole writer"]
+        D[("SQLCipher database<br/>DPAPI-wrapped key")]
+        S[("Encrypted snapshot containers")]
     end
-    W["Windows<br/>窗口事件 · 输入计数"] --> C
+    W["Windows<br/>window events · input counts"] --> C
     C <--> Q
-    C -- "受限命名管道<br/>版本化 Protobuf" --> A
+    C -- "restricted named pipe<br/>versioned Protobuf" --> A
     A --> D
     A --> S
 ```
 
-- **采集器**以最高权限登录任务运行，这样才能观察提权窗口。它只负责观察和转发，不链接数据库、界面或网络代码。主程序暂时不可用时，数据先写进带校验的环形缓冲；缓冲满了会保留最新数据，并生成一段明确的记录缺口。
-- **主程序**以普通权限运行，负责托盘、界面和全部存储。它是数据库唯一的写入者，耗时的查询放到后台线程。
-- **握手**时会核对两端是同一用户、同一会话，PID 是 Windows 返回的真实值，可执行文件名和所在目录也都要对上。提权组件安装在 `C:\Program Files\Timelens`，目录只允许 SYSTEM 和管理员写入。因为没有代码签名，这两道检查就是防止有人用同名程序替换提权组件的安全边界。
+- The **collector** runs as a highest-privilege logon task so it can observe elevated windows. It only observes and forwards; it does not link any database, UI or networking code. When the main app is temporarily unavailable, data goes into a checksummed ring buffer; if the buffer fills up, the newest data is kept and an explicit monitoring gap is recorded.
+- The **main app** runs with standard privileges and owns the tray, the UI and all storage. It is the only writer to the database, and expensive queries run on background threads.
+- During the **handshake** both sides verify they belong to the same user and the same session, that the PID is the real value reported by Windows, and that the executable name and directory match. Elevated components are installed under `C:\Program Files\Timelens`, which only SYSTEM and Administrators can write to. Because the binaries are not code-signed, these two checks are the security boundary that prevents someone from replacing the elevated component with a look-alike.
 
-更完整的推导过程见[架构决策记录](docs/adr)和 [V1 决策地图](docs/wayfinder/timelens-v1/map.md)。
+For the full reasoning, see the [architecture decision records](docs/adr) and the [V1 decision map](docs/wayfinder/timelens-v1/map.md).
 
-## 轻量是硬性要求
+## Lightweight is a hard requirement
 
-| 指标 | 目标 | 最近一次实测（2026-09-05） |
+| Metric | Target | Latest measurement (2026-09-05) |
 | --- | --- | --- |
-| 正常采集平均 CPU | ≤ 1% | 最大 0.0792% |
-| 常驻进程组内存 | ≤ 100 MiB | 峰值工作集 54.15 MiB |
-| 安装包 | ≤ 20 MiB | 9.665 MiB |
-| 30 天非截图数据 | ≤ 100 MiB | 78.17 MiB |
+| Average CPU during normal collection | ≤ 1% | max 0.0792% |
+| Resident process group memory | ≤ 100 MiB | peak working set 54.15 MiB |
+| Installer size | ≤ 20 MiB | 9.665 MiB |
+| 30 days of non-snapshot data | ≤ 100 MiB | 78.17 MiB |
 
-> 上表实测在移除 AI 之前完成，30 天数据量里还包含 90 份 AI 总结。移除 AI 和本地报告之后还没有重新测量，详细方法和完整数据见[里程碑 4、5 报告](docs/wayfinder/timelens-v1/performance-validation/milestone-4-5-report.md)。
+> These measurements were taken before AI was removed, and the 30-day dataset still included 90 AI summaries. They have not been re-measured since AI and local reports were removed. See the [Milestone 4 & 5 report](docs/wayfinder/timelens-v1/performance-validation/milestone-4-5-report.md) for methodology and full data.
 
-## 安装与使用
+## Installation and usage
 
-目前还没有发布安装包，需要[从源码构建](#从源码构建)。安装过程是这样的：
+There is no released installer yet, so you need to [build from source](#building-from-source). Installation works like this:
 
-1. 运行 `Timelens-<版本>-x64-setup.exe`，确认一次 UAC。安装器会注册两个登录任务：主程序以普通权限运行，采集器以最高权限运行。
-2. 首次安装时选择数据位置，默认跟随安装目录，放在其中的 `TimelensData` 文件夹；也可以选 `%LOCALAPPDATA%\Timelens`，或本地固定磁盘上任意一个空文件夹。安装器默认会添加桌面快捷方式，可以取消勾选。
-3. 安装完成后，Timelens 会常驻在托盘里。在「设置 › 常规」里可以开关开机自启。
-4. 升级时直接运行新的安装包，数据位置和自启动设置都会保留。想把已有数据搬进安装目录，可以在「设置 › 数据」里迁移到安装目录下的 `TimelensData`（升级时已准备好这个空文件夹）。
-5. 卸载可以用安装目录里的「卸载 Timelens」快捷方式或系统的「已安装的应用」。卸载时可以选择保留或删除本地数据，你导出的文件不会被删除。
+1. Run `Timelens-<version>-x64-setup.exe` and confirm the UAC prompt once. The installer registers two logon tasks: the main app runs with standard privileges and the collector runs with highest privileges.
+2. On first install, choose where to store data. By default it follows the install directory, in a `TimelensData` folder inside it; you can also choose `%LOCALAPPDATA%\Timelens` or any empty folder on a local fixed disk. A desktop shortcut is added by default and can be unchecked.
+3. After installation Timelens stays in the system tray. Start at sign-in can be toggled under Settings › General (设置 › 常规).
+4. To upgrade, just run the new installer; the data location and startup setting are preserved. To move existing data into the install directory, use Settings › Data (设置 › 数据) to relocate it to `TimelensData` under the install directory (an empty folder is prepared during upgrade).
+5. Uninstall via the "Uninstall Timelens" shortcut in the install directory or from Windows "Installed apps". You can choose to keep or delete local data; files you exported are never deleted.
 
-## 从源码构建
+## Building from source
 
-需要准备：
+Prerequisites:
 
-- [rustup](https://rustup.rs/)。仓库用 `rust-toolchain.toml` 固定了 Rust 1.94.1，会自动安装。
-- 原生 Perl，例如 [Strawberry Perl](https://strawberryperl.com/)。SQLCipher 附带的 OpenSSL 编译时要用；Git for Windows 自带的 Perl 不行。
-- [Inno Setup 7](https://jrsoftware.org/isinfo.php)，只在打安装包时需要。
+- [rustup](https://rustup.rs/). The repository pins Rust 1.94.1 in `rust-toolchain.toml`, which is installed automatically.
+- A native Perl such as [Strawberry Perl](https://strawberryperl.com/), needed to build the OpenSSL bundled with SQLCipher. The Perl shipped with Git for Windows does not work.
+- [Inno Setup 7](https://jrsoftware.org/isinfo.php), only needed to build the installer.
 
 ```powershell
 $env:OPENSSL_SRC_PERL = 'C:\path\to\perl.exe'
 
-# 与 CI 一致的检查
+# Same checks as CI
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test --workspace --release -- --test-threads=2
 
-# 构建并打安装包，产物在 dist\
+# Build and package the installer; output goes to dist\
 cargo build --release -p timelens-app -p timelens-collector
 & 'C:\path\to\ISCC.exe' 'installer\Timelens.iss'
 ```
 
 <details>
-<summary><b>开发调试小抄</b></summary>
+<summary><b>Development cheat sheet</b></summary>
 
-- 主程序是单实例的。本地调试前先退出已安装的 Timelens，再用 `--data-dir <目录>` 指向一份隔离的数据。
-- 采集器自检：`cargo run -p timelens-collector -- --observe-windows-once`，或 `-- --observe-window-events-seconds 10`。
-- 生成合成数据：`cargo run -p timelens-storage --example design_fixture -- <空目录>`。
-- 无头截图：在调试构建里设置 `TIMELENS_QA_CAPTURE=<截图目录>` 和 `TIMELENS_QA_HEADLESS=1`，程序会在内存里依次渲染主要页面并保存截图，不弹窗口，也不影响已安装的 Timelens。本页的配图就是这样生成的。
-- 安装器回归：`Invoke-Pester -Script .\installer\tests\startup.Tests.ps1`（Pester 3.4.0）。
-- `coordinated_clear_removes_offline_collector_artifacts` 需要拿到采集器的单实例锁，已安装的采集器在运行时这项测试会失败。
+- The main app is single-instance. Before debugging locally, quit any installed Timelens and point the app at isolated data with `--data-dir <dir>`.
+- Collector self-check: `cargo run -p timelens-collector -- --observe-windows-once` or `-- --observe-window-events-seconds 10`.
+- Generate synthetic data: `cargo run -p timelens-storage --example design_fixture -- <empty dir>`.
+- Headless screenshots: in a debug build, set `TIMELENS_QA_CAPTURE=<screenshot dir>` and `TIMELENS_QA_HEADLESS=1`. The app renders the main pages in memory one after another and saves screenshots, without opening a window or interfering with an installed Timelens. The images in this README were produced this way.
+- Installer regression tests: `Invoke-Pester -Script .\installer\tests\startup.Tests.ps1` (Pester 3.4.0).
+- `coordinated_clear_removes_offline_collector_artifacts` needs the collector's single-instance lock, so it fails while an installed collector is running.
 
 </details>
 
-## 项目结构
+## Project layout
 
-| 目录 | 职责 |
+| Directory | Responsibility |
 | --- | --- |
-| [`crates/timelens-app`](crates/timelens-app) | `Timelens.exe`：托盘、Slint 界面、唯一的数据库写入者 |
-| [`crates/timelens-collector`](crates/timelens-collector) | `Timelens.Collector.exe`：窄职责的提权采集器，带环形缓冲 |
-| [`crates/timelens-observer`](crates/timelens-observer) | 不读窗口标题的窗口分类、应用身份解析、虚拟桌面查询和输入计数 |
-| [`crates/timelens-ipc`](crates/timelens-ipc) | 版本化、限长的 Protobuf 协议和命名管道双向认证 |
-| [`crates/timelens-storage`](crates/timelens-storage) | DPAPI + SQLCipher + WAL、可恢复的迁移、加密快照、便携备份、损坏恢复 |
-| [`installer`](installer) | Inno Setup 7 脚本、登录任务注册与维护脚本 |
+| [`crates/timelens-app`](crates/timelens-app) | `Timelens.exe`: tray, Slint UI, sole database writer |
+| [`crates/timelens-collector`](crates/timelens-collector) | `Timelens.Collector.exe`: narrow-scope elevated collector with a ring buffer |
+| [`crates/timelens-observer`](crates/timelens-observer) | Window classification without reading titles, application identity resolution, virtual desktop queries and input counting |
+| [`crates/timelens-ipc`](crates/timelens-ipc) | Versioned, length-limited Protobuf protocol and mutual named-pipe authentication |
+| [`crates/timelens-storage`](crates/timelens-storage) | DPAPI + SQLCipher + WAL, recoverable migrations, encrypted snapshots, portable backups, corruption recovery |
+| [`installer`](installer) | Inno Setup 7 script, logon task registration and maintenance scripts |
 
-## 文档
+## Documentation
 
-- [领域术语](CONTEXT.md)：Focus interval、Monitoring gap、Snapshot omission 等词的准确含义
-- [V1 决策地图](docs/wayfinder/timelens-v1/map.md)和 [Wayfinder 归档入口](docs/wayfinder/README.md)：每个产品和架构决定的来龙去脉
-- [架构决策记录](docs/adr)
-- [数据、清理与隐私合同](docs/wayfinder/timelens-v1/data-retention-privacy-contract.md)
-- [界面验收](design-qa.md)和[设计实施记录](docs/design/rebuild-20260905/README.md)
-- 验收报告：[里程碑 2](docs/wayfinder/timelens-v1/performance-validation/milestone-2-report.md) · [里程碑 3](docs/wayfinder/timelens-v1/performance-validation/milestone-3-report.md) · [里程碑 4、5](docs/wayfinder/timelens-v1/performance-validation/milestone-4-5-report.md) · [实机发布矩阵](docs/wayfinder/timelens-v1/performance-validation/milestone-5-physical-matrix.md)
+The documents below are written in Simplified Chinese.
 
-## 更新记录
+- [Domain glossary](CONTEXT.md): precise meanings of terms such as Focus interval, Monitoring gap and Snapshot omission
+- [V1 decision map](docs/wayfinder/timelens-v1/map.md) and [Wayfinder archive index](docs/wayfinder/README.md): the background of every product and architecture decision
+- [Architecture decision records](docs/adr)
+- [Data, retention and privacy contract](docs/wayfinder/timelens-v1/data-retention-privacy-contract.md)
+- [UI acceptance](design-qa.md) and [design implementation notes](docs/design/rebuild-20260905/README.md)
+- Validation reports: [Milestone 2](docs/wayfinder/timelens-v1/performance-validation/milestone-2-report.md) · [Milestone 3](docs/wayfinder/timelens-v1/performance-validation/milestone-3-report.md) · [Milestones 4 & 5](docs/wayfinder/timelens-v1/performance-validation/milestone-4-5-report.md) · [Physical release matrix](docs/wayfinder/timelens-v1/performance-validation/milestone-5-physical-matrix.md)
 
-- **2026-10-21 · 移除本地报告**：本地报告和「统计 › 应用」的实时统计重复，所以不再保存报告。数据覆盖和 JSON / CSV 导出移到「应用」标签，按所选范围实时计算；升级时会删除已经保存的报告。见[票据 19](docs/wayfinder/timelens-v1/issues/19-remove-stored-usage-reports.md)。
-- **2026-10-21 · 移除 AI 总结**：AI 只能看到和统计页相同的聚合数字，所以 AI worker、提供商凭据和 AI 设置一并移除，Timelens 从此不再联网；升级时会删除已有的 AI 总结和对话。见[票据 18](docs/wayfinder/timelens-v1/issues/18-remove-ai-summaries.md)。
-- **2026-10-09 · 时间线改版**：首页改为按日连续滚动，短暂切换作为穿插应用并入同一行；应用统计默认显示全部记录；定时快照会跳过桌面复制返回的只有鼠标的黑帧。
-- **2026-09-06 · Paper 原生界面**：六个主页面和恢复窗口按选定的设计重做，验收过程见[界面验收](design-qa.md)。
-- **2026-09-05 · 里程碑 1–5**：窗口与输入采集、时间线、快照、便携备份恢复、数据迁移和安装维护全部实现。
+## Changelog
 
-当前协议版本为 v4，数据库 schema 为 v15。
+- **2026-10-21 · Local reports removed**: local reports duplicated the live statistics under Statistics › Apps, so reports are no longer stored. Data coverage and JSON / CSV export moved to the Apps tab and are computed live for the selected range; saved reports are deleted on upgrade. See [ticket 19](docs/wayfinder/timelens-v1/issues/19-remove-stored-usage-reports.md).
+- **2026-10-21 · AI summaries removed**: AI could only see the same aggregate numbers as the statistics page, so the AI worker, provider credentials and AI settings were removed together, and Timelens no longer goes online; existing AI summaries and conversations are deleted on upgrade. See [ticket 18](docs/wayfinder/timelens-v1/issues/18-remove-ai-summaries.md).
+- **2026-10-09 · Timeline redesign**: the home page now scrolls continuously by day, with brief switches folded into the same row as interleaved apps; app statistics show all records by default; scheduled snapshots skip cursor-only black frames returned by desktop duplication.
+- **2026-09-06 · Paper-native UI**: the six main pages and the recovery window were rebuilt to the chosen design; see [UI acceptance](design-qa.md) for the review process.
+- **2026-09-05 · Milestones 1–5**: window and input collection, timeline, snapshots, portable backup and restore, data relocation, and installation maintenance are all implemented.
 
-## 许可证
+Current protocol version is v4 and the database schema is v15.
 
-还没有选定开源许可证。在添加 LICENSE 文件之前，本仓库的代码保留所有权利。
+## License
+
+No open-source license has been chosen yet. Until a LICENSE file is added, all rights to the code in this repository are reserved.
