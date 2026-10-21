@@ -120,9 +120,25 @@ begin
   DataDirPage.Add('数据文件夹：');
 end;
 
+function IsSameOrInside(const Path, Parent: string): Boolean;
+var
+  P, Q: string;
+begin
+  P := Lowercase(RemoveBackslashUnlessRoot(Path));
+  Q := Lowercase(RemoveBackslashUnlessRoot(Parent));
+  Result := (P = Q) or (Pos(AddBackslash(Q), P) = 1);
+end;
+
+// Installed into the protected collector directory itself (the default under
+// Program Files), the installation directory cannot hold data.
+function InstallDirHoldsData: Boolean;
+begin
+  Result := not IsSameOrInside(WizardDirValue, ElevatedDir);
+end;
+
 function UseInstallDataDirectory: Boolean;
 begin
-  Result := (WizardForm.PrevAppDir = '') and (DataModePage.SelectedValueIndex = 0);
+  Result := (WizardForm.PrevAppDir = '') and (DataModePage.SelectedValueIndex = 0) and InstallDirHoldsData;
 end;
 
 function UseCustomDataDirectory: Boolean;
@@ -134,15 +150,6 @@ function ShouldSkipPage(PageID: Integer): Boolean;
 begin
   Result := ((PageID = DataModePage.ID) and (WizardForm.PrevAppDir <> '')) or
     ((PageID = DataDirPage.ID) and not UseCustomDataDirectory);
-end;
-
-function IsSameOrInside(const Path, Parent: string): Boolean;
-var
-  P, Q: string;
-begin
-  P := Lowercase(RemoveBackslashUnlessRoot(Path));
-  Q := Lowercase(RemoveBackslashUnlessRoot(Parent));
-  Result := (P = Q) or (Pos(AddBackslash(Q), P) = 1);
 end;
 
 function IsEmptyDirectory(const Path: string): Boolean;
@@ -179,6 +186,12 @@ end;
 
 procedure CurPageChanged(CurPageID: Integer);
 begin
+  if CurPageID = DataModePage.ID then
+  begin
+    DataModePage.CheckListBox.ItemEnabled[0] := InstallDirHoldsData;
+    if not InstallDirHoldsData and (DataModePage.SelectedValueIndex = 0) then
+      DataModePage.SelectedValueIndex := 1;
+  end;
   if (CurPageID = DataDirPage.ID) and (Trim(DataDirPage.Values[0]) = '') then
     if IsSameOrInside(WizardDirValue, ElevatedDir) then
       DataDirPage.Values[0] := ExtractFileDrive(WizardDirValue) + '\TimelensData'

@@ -563,10 +563,26 @@ impl Storage {
                     "middle_clicks",
                     "right_clicks",
                 ];
+                // A `range` record, then gaps and applications, so the CSV keeps
+                // the same coverage as the JSON even when no application ran.
                 let mut out =
                     String::from("\u{feff}record_type,started_utc_ms,ended_utc_ms,covered_ms,");
                 out.push_str(&keys.join(","));
-                out.push_str("\r\n");
+                out.push_str(",category,reason\r\n");
+                let blank = ",".repeat(keys.len() - 1);
+                out.push_str(&format!(
+                    "range,{},{},{},{blank},,\r\n",
+                    range.0, range.1, covered_ms
+                ));
+                for gap in &gaps {
+                    out.push_str(&format!(
+                        "gap,{},{},,{blank},{},{}\r\n",
+                        gap.started_utc_ms,
+                        gap.ended_utc_ms,
+                        csv_cell(gap.data_class.clone()),
+                        csv_cell(gap.reason.clone())
+                    ));
+                }
                 for app in &apps {
                     out.push_str(&format!(
                         "application,{},{},{},",
@@ -585,7 +601,7 @@ impl Storage {
                             .collect::<Vec<_>>()
                             .join(","),
                     );
-                    out.push_str("\r\n");
+                    out.push_str(",,\r\n");
                 }
                 out.into_bytes()
             }
@@ -670,6 +686,15 @@ mod tests {
             .unwrap();
         let text = fs::read_to_string(csv).unwrap();
         assert!(text.contains("covered_ms") && !text.contains("private"));
+        let (_, gaps) = source.data_coverage(1000, 6000).unwrap();
+        let apps = source.timeline_snapshot(1000, 6000).unwrap().applications;
+        let rows = text.lines().collect::<Vec<_>>();
+        assert_eq!(rows.len(), 2 + gaps.len() + apps.len());
+        assert!(rows[1].starts_with("range,1000,6000,"));
+        assert_eq!(
+            rows.iter().filter(|row| row.starts_with("gap,")).count(),
+            gaps.len()
+        );
         let mut zip = ZipArchive::new(File::open(&archive).unwrap()).unwrap();
         let plain = read_entry(&mut zip, "database.sqlite3", None, MAX_DB).unwrap();
         assert_eq!(&plain[..16], b"SQLite format 3\0");

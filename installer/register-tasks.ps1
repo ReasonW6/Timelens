@@ -199,9 +199,11 @@ if ($UserDataDirectory) {
     if ($DataDirectory) { throw 'An isolated install cannot also choose a user data directory.' }
     $userData = Initialize-UserDataDirectory -Path $UserDataDirectory
     Invoke-CoreAsUser -Arguments ('--set-data-location "' + $userData + '"')
-} elseif (-not $DataDirectory -and -not (Test-Path -LiteralPath (Join-Path $resolvedInstallDir 'TimelensData'))) {
+} elseif (-not $DataDirectory -and $resolvedElevatedDir -ine $resolvedInstallDir -and
+    -not (Test-Path -LiteralPath (Join-Path $resolvedInstallDir 'TimelensData'))) {
     # The user cannot create folders in the protected installation directory, so
     # an empty TimelensData is prepared for moving existing data there from the app's data settings.
+    # Installed into the collector's own directory, there is nowhere the data may go.
     [void] (Initialize-UserDataDirectory -Path (Join-Path $resolvedInstallDir 'TimelensData'))
 }
 

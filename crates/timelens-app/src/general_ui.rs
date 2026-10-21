@@ -1,6 +1,8 @@
 use crate::{AppWindow, startup};
 use slint::ComponentHandle;
 use std::{
+    cell::Cell,
+    rc::Rc,
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -75,14 +77,23 @@ pub fn install(window: &AppWindow, task: Option<String>) {
             request(&window, &read_task, None, &read_busy, &read_sender);
         }
     });
+    // A change asked for while a re-read runs waits for it instead of being lost.
+    let pending = Rc::new(Cell::new(None));
     let weak = window.as_weak();
     let change_task = task.clone();
     let change_busy = Arc::clone(&busy);
     let change_sender = sender.clone();
+    let change_pending = Rc::clone(&pending);
     window.on_startup_changed(move |enabled| {
         if let Some(window) = weak.upgrade()
             && window.get_startup_available()
         {
+            if change_busy.load(Ordering::Acquire) {
+                change_pending.set(Some(enabled));
+                window.set_startup_busy(true);
+                window.set_startup_status("等待管理员确认…".into());
+                return;
+            }
             request(
                 &window,
                 &change_task,
@@ -102,7 +113,18 @@ pub fn install(window: &AppWindow, task: Option<String>) {
             busy.store(false, Ordering::Release);
             window.set_startup_busy(false);
             match update.state {
+                Ok(state)
+                    if pending
+                        .get()
+                        .is_some_and(|enabled| enabled != state.enabled) =>
+                {
+                    pending.set(None);
+                    window.set_startup_enabled(state.enabled);
+                    window.set_startup_available(true);
+                    request(&window, &task, Some(!state.enabled), &busy, &sender);
+                }
                 Ok(state) => {
+                    pending.set(None);
                     window.set_startup_enabled(state.enabled);
                     window.set_startup_available(true);
                     let message = update.message.unwrap_or_else(|| {
@@ -118,6 +140,7 @@ pub fn install(window: &AppWindow, task: Option<String>) {
                     window.set_startup_status(message.into());
                 }
                 Err(error) => {
+                    pending.set(None);
                     window.set_startup_available(false);
                     window.set_startup_status(error.into());
                 }
