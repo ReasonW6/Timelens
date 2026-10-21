@@ -15,7 +15,7 @@ use std::{
 };
 
 use chrono::{Datelike, Local, NaiveDate, TimeZone, Timelike};
-use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
+use slint::{ComponentHandle, Image, Model, ModelRc, SharedString, VecModel};
 use timelens_storage::{Storage, TimelineSnapshot};
 
 use crate::{
@@ -710,10 +710,60 @@ fn patch(model: &VecModel<HistoryItem>, items: Vec<HistoryItem>) {
     for (index, item) in items.into_iter().enumerate() {
         if inserted.contains(&index) {
             model.insert(index, item);
-        } else if model.row_data(index).as_ref() != Some(&item) {
+        } else if model
+            .row_data(index)
+            .is_none_or(|old| !same_item(&old, &item))
+        {
             model.set_row_data(index, item);
         }
     }
+}
+
+/// Whether a row shows the same as before. Setting a row anyway restarts its
+/// animations, and the window would repaint for nothing after every refresh.
+/// Derived equality cannot tell: a rebuilt list is a new model, unequal to the
+/// old one however alike, and Slint never finds two empty images equal.
+fn same_item(a: &HistoryItem, b: &HistoryItem) -> bool {
+    let HistoryItem {
+        kind,
+        key,
+        height,
+        title,
+        subtitle,
+        time,
+        duration,
+        icon,
+        tint,
+        stack,
+        more,
+        shares,
+        rail_top,
+        rail_bottom,
+    } = a;
+    *kind == b.kind
+        && *key == b.key
+        && *height == b.height
+        && *title == b.title
+        && *subtitle == b.subtitle
+        && *time == b.time
+        && *duration == b.duration
+        && same_image(icon, &b.icon)
+        && *tint == b.tint
+        && same_rows(stack, &b.stack, |a, b| {
+            a.name == b.name && a.tint == b.tint && same_image(&a.icon, &b.icon)
+        })
+        && *more == b.more
+        && same_rows(shares, &b.shares, |a, b| a == b)
+        && *rail_top == b.rail_top
+        && *rail_bottom == b.rail_bottom
+}
+
+fn same_image(a: &Image, b: &Image) -> bool {
+    a == b || (a.size().width == 0 && b.size().width == 0)
+}
+
+fn same_rows<T>(a: &ModelRc<T>, b: &ModelRc<T>, same: impl Fn(&T, &T) -> bool) -> bool {
+    a.row_count() == b.row_count() && a.iter().zip(b.iter()).all(|(a, b)| same(&a, &b))
 }
 
 #[cfg(test)]
@@ -1304,6 +1354,24 @@ mod tests {
 
     fn keys(model: &VecModel<HistoryItem>) -> Vec<String> {
         model.iter().map(|item| item.key.to_string()).collect()
+    }
+
+    #[test]
+    fn rebuilt_rows_without_icons_or_new_lists_count_as_unchanged() {
+        let built = || HistoryItem {
+            stack: ModelRc::new(VecModel::from(vec![StackApp {
+                name: "Edge".into(),
+                ..Default::default()
+            }])),
+            shares: ModelRc::new(VecModel::from(vec![ShareSlice {
+                ratio: 1.0,
+                ..Default::default()
+            }])),
+            ..row("a", "A")
+        };
+        assert!(same_item(&built(), &built()));
+        assert!(!same_item(&built(), &row("a", "A")));
+        assert!(!same_item(&built(), &HistoryItem { more: 1, ..built() }));
     }
 
     #[test]

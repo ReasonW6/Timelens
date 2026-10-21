@@ -533,23 +533,25 @@ impl Storage {
         Ok(())
     }
 
-    pub fn export_report(
+    /// Exports the statistics of a range: each application's time and input,
+    /// and what the range is missing.
+    pub fn export_range(
         &self,
-        report_id: i64,
+        range: (i64, i64),
+        generated_utc_ms: i64,
         destination: &Path,
         format: ExportFormat,
-        include_paths: bool,
     ) -> Result<()> {
-        let report = self.load_local_report(report_id)?;
-        let apps=report.applications.iter().map(|app|{
-            let mut item=serde_json::json!({"name":app.display_name,"opened_ms":app.opened_ms,"displayed_ms":app.displayed_ms,"focused_ms":app.focused_ms,"background_ms":app.background_ms,"windows":app.window_count,"keyboard":app.keyboard_count,"left_clicks":app.left_click_count,"middle_clicks":app.middle_click_count,"right_clicks":app.right_click_count});
-            if include_paths {let path=self.connection.query_row("SELECT executable_path FROM application_metadata_revisions WHERE application_identity=? ORDER BY effective_utc_ms DESC LIMIT 1",params![app.identity],|r|r.get::<_,Option<String>>(0)).optional()?.flatten().unwrap_or_default();item["executable_path"]=path.into();}Ok(item)
-        }).collect::<Result<Vec<_>>>()?;
-        let value = serde_json::json!({"format_version":1,"rules_version":report.rules_version,"started_utc_ms":report.range_started_utc_ms,"ended_utc_ms":report.range_ended_utc_ms,"generated_utc_ms":report.generated_utc_ms,"covered_ms":report.covered_ms,"applications":apps,"gaps":report.gaps.iter().map(|g|serde_json::json!({"category":g.data_class,"reason":g.reason,"started_utc_ms":g.started_utc_ms,"ended_utc_ms":g.ended_utc_ms})).collect::<Vec<_>>()});
+        let timeline = self.timeline_snapshot(range.0, range.1)?;
+        let (covered_ms, gaps) = self.data_coverage(range.0, range.1)?;
+        let apps=timeline.applications.iter().map(|app|{
+            serde_json::json!({"name":app.display_name,"opened_ms":app.opened_ms,"displayed_ms":app.displayed_ms,"focused_ms":app.focused_ms,"background_ms":app.background_ms,"windows":app.window_count,"keyboard":app.keyboard_count,"left_clicks":app.left_click_count,"middle_clicks":app.middle_click_count,"right_clicks":app.right_click_count})
+        }).collect::<Vec<_>>();
+        let value = serde_json::json!({"format_version":2,"started_utc_ms":range.0,"ended_utc_ms":range.1,"generated_utc_ms":generated_utc_ms,"covered_ms":covered_ms,"applications":apps,"gaps":gaps.iter().map(|g|serde_json::json!({"category":g.data_class,"reason":g.reason,"started_utc_ms":g.started_utc_ms,"ended_utc_ms":g.ended_utc_ms})).collect::<Vec<_>>()});
         let bytes = match format {
             ExportFormat::Json => json(&value)?,
             ExportFormat::Csv => {
-                let mut keys = vec![
+                let keys = [
                     "name",
                     "opened_ms",
                     "displayed_ms",
@@ -561,21 +563,30 @@ impl Storage {
                     "middle_clicks",
                     "right_clicks",
                 ];
-                if include_paths {
-                    keys.push("executable_path");
-                }
-                let mut out = String::from(
-                    "\u{feff}record_type,rules_version,started_utc_ms,ended_utc_ms,covered_ms,",
-                );
+                // A `range` record, then gaps and applications, so the CSV keeps
+                // the same coverage as the JSON even when no application ran.
+                let mut out =
+                    String::from("\u{feff}record_type,started_utc_ms,ended_utc_ms,covered_ms,");
                 out.push_str(&keys.join(","));
-                out.push_str("\r\n");
+                out.push_str(",category,reason\r\n");
+                let blank = ",".repeat(keys.len() - 1);
+                out.push_str(&format!(
+                    "range,{},{},{},{blank},,\r\n",
+                    range.0, range.1, covered_ms
+                ));
+                for gap in &gaps {
+                    out.push_str(&format!(
+                        "gap,{},{},,{blank},{},{}\r\n",
+                        gap.started_utc_ms,
+                        gap.ended_utc_ms,
+                        csv_cell(gap.data_class.clone()),
+                        csv_cell(gap.reason.clone())
+                    ));
+                }
                 for app in &apps {
                     out.push_str(&format!(
-                        "application,{},{},{},{},",
-                        report.rules_version,
-                        report.range_started_utc_ms,
-                        report.range_ended_utc_ms,
-                        report.covered_ms
+                        "application,{},{},{},",
+                        range.0, range.1, covered_ms
                     ));
                     out.push_str(
                         &keys
@@ -590,7 +601,7 @@ impl Storage {
                             .collect::<Vec<_>>()
                             .join(","),
                     );
-                    out.push_str("\r\n");
+                    out.push_str(",,\r\n");
                 }
                 out.into_bytes()
             }
@@ -662,30 +673,27 @@ mod tests {
                 },
             )
             .unwrap();
-        let report = source.generate_local_report(1000, 6000, 7000).unwrap();
-        let exported = folder.path().join("report.json");
+        let exported = folder.path().join("statistics.json");
         source
-            .export_report(report.id, &exported, ExportFormat::Json, false)
+            .export_range((1000, 6000), 7000, &exported, ExportFormat::Json)
             .unwrap();
         let text = fs::read_to_string(exported).unwrap();
         assert!(!text.contains("identity"));
         assert!(!text.contains("private"));
-        // Packaged applications have no executable path.
+        let csv = folder.path().join("statistics.csv");
         source
-            .connection
-            .execute(
-                "UPDATE application_metadata_revisions SET executable_path = NULL",
-                [],
-            )
+            .export_range((1000, 6000), 7000, &csv, ExportFormat::Csv)
             .unwrap();
-        let with_paths = folder.path().join("report-with-paths.csv");
-        source
-            .export_report(report.id, &with_paths, ExportFormat::Csv, true)
-            .unwrap();
-        assert!(
-            fs::read_to_string(with_paths)
-                .unwrap()
-                .contains("executable_path")
+        let text = fs::read_to_string(csv).unwrap();
+        assert!(text.contains("covered_ms") && !text.contains("private"));
+        let (_, gaps) = source.data_coverage(1000, 6000).unwrap();
+        let apps = source.timeline_snapshot(1000, 6000).unwrap().applications;
+        let rows = text.lines().collect::<Vec<_>>();
+        assert_eq!(rows.len(), 2 + gaps.len() + apps.len());
+        assert!(rows[1].starts_with("range,1000,6000,"));
+        assert_eq!(
+            rows.iter().filter(|row| row.starts_with("gap,")).count(),
+            gaps.len()
         );
         let mut zip = ZipArchive::new(File::open(&archive).unwrap()).unwrap();
         let plain = read_entry(&mut zip, "database.sqlite3", None, MAX_DB).unwrap();
@@ -752,7 +760,7 @@ mod tests {
         }
         c.pragma_update(None, "user_version", LATEST_SCHEMA_VERSION)
             .unwrap();
-        c.execute_batch("CREATE TRIGGER malicious AFTER INSERT ON applications BEGIN DELETE FROM local_reports; END;").unwrap();
+        c.execute_batch("CREATE TRIGGER malicious AFTER INSERT ON applications BEGIN DELETE FROM system_intervals; END;").unwrap();
         assert!(validate_schema(&c, LATEST_SCHEMA_VERSION).is_err());
         assert_eq!(csv_cell("=RUN()".into()), "\"'=RUN()\"");
     }

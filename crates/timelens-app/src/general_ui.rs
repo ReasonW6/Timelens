@@ -1,13 +1,14 @@
 use crate::{AppWindow, startup};
-use slint::{ComponentHandle, Timer, TimerMode};
+use slint::ComponentHandle;
 use std::{
+    cell::Cell,
+    rc::Rc,
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
         mpsc,
     },
     thread,
-    time::Duration,
 };
 
 struct Update {
@@ -28,32 +29,40 @@ fn request(
     if busy.swap(true, Ordering::AcqRel) {
         return;
     }
-    window.set_startup_busy(true);
-    window.set_startup_status(
-        if enabled.is_some() {
-            "等待管理员确认…"
-        } else {
-            "正在读取启动设置…"
-        }
-        .into(),
-    );
+    // Opening the page re-reads the setting each time. Once a state is shown it
+    // stays put meanwhile, so the switch and its status line do not flicker.
+    if enabled.is_some() || window.get_startup_status().is_empty() {
+        window.set_startup_busy(true);
+        window.set_startup_status(
+            if enabled.is_some() {
+                "等待管理员确认…"
+            } else {
+                "正在读取启动设置…"
+            }
+            .into(),
+        );
+    }
     let sender = sender.clone();
+    let weak = window.as_weak();
     thread::spawn(move || {
         let message = enabled.map(|enabled| match startup::set(&task, enabled) {
             Ok(()) => if enabled {
                 "已开启开机自启动"
             } else {
-                "已关闭开机自启动，当前记录继续运行"
+                // The page's note already says recording goes on; the same
+                // words as a later re-read keep the line from changing.
+                "已关闭开机自启动"
             }
             .to_owned(),
             Err(error) => format!("{error:#}"),
         });
         let state = startup::read(&task).map_err(|error| format!("{error:#}"));
         let _ = sender.send(Update { state, message });
+        let _ = weak.upgrade_in_event_loop(|window| window.invoke_startup_ready());
     });
 }
 
-pub fn install(window: &AppWindow, task: Option<String>) -> Timer {
+pub fn install(window: &AppWindow, task: Option<String>) {
     let (sender, receiver) = mpsc::channel::<Update>();
     let busy = Arc::new(AtomicBool::new(false));
     if task.is_none() {
@@ -68,14 +77,23 @@ pub fn install(window: &AppWindow, task: Option<String>) -> Timer {
             request(&window, &read_task, None, &read_busy, &read_sender);
         }
     });
+    // A change asked for while a re-read runs waits for it instead of being lost.
+    let pending = Rc::new(Cell::new(None));
     let weak = window.as_weak();
     let change_task = task.clone();
     let change_busy = Arc::clone(&busy);
     let change_sender = sender.clone();
+    let change_pending = Rc::clone(&pending);
     window.on_startup_changed(move |enabled| {
         if let Some(window) = weak.upgrade()
             && window.get_startup_available()
         {
+            if change_busy.load(Ordering::Acquire) {
+                change_pending.set(Some(enabled));
+                window.set_startup_busy(true);
+                window.set_startup_status("等待管理员确认…".into());
+                return;
+            }
             request(
                 &window,
                 &change_task,
@@ -87,8 +105,7 @@ pub fn install(window: &AppWindow, task: Option<String>) -> Timer {
     });
     request(window, &task, None, &busy, &sender);
     let weak = window.as_weak();
-    let timer = Timer::default();
-    timer.start(TimerMode::Repeated, Duration::from_millis(100), move || {
+    window.on_startup_ready(move || {
         let Some(window) = weak.upgrade() else {
             return;
         };
@@ -96,7 +113,18 @@ pub fn install(window: &AppWindow, task: Option<String>) -> Timer {
             busy.store(false, Ordering::Release);
             window.set_startup_busy(false);
             match update.state {
+                Ok(state)
+                    if pending
+                        .get()
+                        .is_some_and(|enabled| enabled != state.enabled) =>
+                {
+                    pending.set(None);
+                    window.set_startup_enabled(state.enabled);
+                    window.set_startup_available(true);
+                    request(&window, &task, Some(!state.enabled), &busy, &sender);
+                }
                 Ok(state) => {
+                    pending.set(None);
                     window.set_startup_enabled(state.enabled);
                     window.set_startup_available(true);
                     let message = update.message.unwrap_or_else(|| {
@@ -112,11 +140,11 @@ pub fn install(window: &AppWindow, task: Option<String>) -> Timer {
                     window.set_startup_status(message.into());
                 }
                 Err(error) => {
+                    pending.set(None);
                     window.set_startup_available(false);
                     window.set_startup_status(error.into());
                 }
             }
         }
     });
-    timer
 }

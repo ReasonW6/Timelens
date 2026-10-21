@@ -14,9 +14,8 @@ pub use relocation::RelocationStep;
 pub use timeline_series::TimelineSeries;
 
 pub use milestone3::{
-    LocalReport, LocalReportApplication, LocalReportGap, LocalReportSnapshotReason,
-    SnapshotDeletion, SnapshotDisplay, SnapshotImage, SnapshotMissingReason, SnapshotPolicy,
-    SnapshotSlot, SnapshotStoreRequest, SnapshotTrigger,
+    CoverageGap, SnapshotDeletion, SnapshotDisplay, SnapshotImage, SnapshotMissingReason,
+    SnapshotPolicy, SnapshotSlot, SnapshotStoreRequest, SnapshotTrigger,
 };
 
 use std::{
@@ -59,7 +58,7 @@ const BACKUP_FILE: &str = "timelens.sqlite3.migration-backup";
 const KEY_MAGIC: &[u8; 8] = b"TLKEY\0\0\x01";
 const KEY_BYTES: usize = 32;
 const DPAPI_ENTROPY: &[u8] = b"Timelens local data key v1";
-const LATEST_SCHEMA_VERSION: i64 = 14;
+const LATEST_SCHEMA_VERSION: i64 = 15;
 
 #[derive(Debug, thiserror::Error)]
 pub enum StorageError {
@@ -230,7 +229,6 @@ pub struct RetentionReport {
     pub activity_items: u64,
     pub input_items: u64,
     pub snapshot_items: u64,
-    pub report_items: u64,
     pub released_bytes: u64,
 }
 
@@ -896,23 +894,14 @@ impl Storage {
             .map(|days| now_utc_ms.saturating_sub(i64::from(days) * 86_400_000));
         // Every timeline record removed below ends before the latest cutoff used.
         let mut pruned_before = activity_cutoff;
-        let milestone3 = self.apply_milestone3_retention(now_utc_ms, activity_cutoff)?;
-        outcome.report.snapshot_items = milestone3.snapshot_items;
-        outcome.report.report_items = milestone3.report_items;
-        outcome.report.released_bytes = milestone3.released_bytes;
+        let snapshots = self.apply_snapshot_day_retention(now_utc_ms)?;
+        outcome.report.snapshot_items = snapshots.snapshot_items;
+        outcome.report.released_bytes = snapshots.released_bytes;
         if let Some(cutoff) = activity_cutoff {
             outcome.merge(self.cleanup_before(cutoff, "retention_time")?);
         }
 
         let mut compacted = false;
-        while self
-            .exceeds_size_limit(policy.max_bytes, &mut compacted, || self.has_local_report())?
-            && self.clean_oldest_local_report()?
-        {
-            outcome.report.report_items = outcome.report.report_items.saturating_add(1);
-            compacted = false;
-        }
-
         while self.exceeds_size_limit(policy.max_bytes, &mut compacted, || {
             Ok(oldest_detail_timestamp(&self.connection)?.is_some())
         })? {
@@ -1131,10 +1120,6 @@ impl Storage {
             Transaction::new_unchecked(&self.connection, TransactionBehavior::Exclusive)?;
         let tables = [
             "system_intervals",
-            "local_report_snapshot_reasons",
-            "local_report_gaps",
-            "local_report_applications",
-            "local_reports",
             "snapshot_slot_days",
             "snapshot_slots",
             "snapshot_container_records",
@@ -1222,6 +1207,16 @@ impl Storage {
             .execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")?;
         Ok(())
     }
+
+    /// Gives back memory that only speeds up reading: cached views and
+    /// SQLite's page cache. Both fill again on the next read.
+    pub fn release_memory(&self) -> Result<()> {
+        self.timeline_cache
+            .borrow_mut()
+            .clear(self.connection.total_changes());
+        self.connection.execute_batch("PRAGMA shrink_memory;")?;
+        Ok(())
+    }
 }
 
 #[derive(Default)]
@@ -1265,10 +1260,6 @@ impl CleanupOutcome {
             .report
             .snapshot_items
             .saturating_add(other.report.snapshot_items);
-        self.report.report_items = self
-            .report
-            .report_items
-            .saturating_add(other.report.report_items);
         self.report.released_bytes = self
             .report
             .released_bytes
@@ -1277,9 +1268,7 @@ impl CleanupOutcome {
     }
 
     fn has_database_cleanup(&self) -> bool {
-        self.report.activity_items > 0
-            || self.report.input_items > 0
-            || self.report.report_items > 0
+        self.report.activity_items > 0 || self.report.input_items > 0
     }
 
     fn has_any_cleanup(&self) -> bool {
@@ -1849,6 +1838,16 @@ const MIGRATIONS: &[Migration] = &[
         DROP TABLE IF EXISTS ai_settings;
         DROP TABLE IF EXISTS ai_prompts;
         DROP TABLE IF EXISTS ai_profiles;
+    ",
+    },
+    // The statistics show any range live, so stored usage reports went too.
+    Migration {
+        version: 15,
+        sql: "
+        DROP TABLE IF EXISTS local_report_snapshot_reasons;
+        DROP TABLE IF EXISTS local_report_gaps;
+        DROP TABLE IF EXISTS local_report_applications;
+        DROP TABLE IF EXISTS local_reports;
     ",
     },
 ];
@@ -3115,6 +3114,36 @@ mod tests {
     }
 
     #[test]
+    fn upgrade_drops_stored_usage_reports() {
+        let directory = tempfile::tempdir().unwrap();
+        let database_path = directory.path().join(DATABASE_FILE);
+        let backup_path = directory.path().join(BACKUP_FILE);
+        let key = load_or_create_key(&directory.path().join(KEY_FILE)).unwrap();
+        let connection =
+            migrate_database(&database_path, &backup_path, &key, &MIGRATIONS[..14]).unwrap();
+        connection
+            .execute_batch(
+                "INSERT INTO local_reports VALUES(1,1000,6000,7000,2,5000,0,1,0,0,0,0,0,0);
+                 INSERT INTO local_report_applications VALUES(1,0,'path:c:\\editor.exe','Editor',5000,5000,5000,0,1,0,0,0,0);",
+            )
+            .unwrap();
+        drop(connection);
+
+        let upgraded = Storage::open(directory.path()).unwrap();
+        assert_eq!(upgraded.schema_version().unwrap(), LATEST_SCHEMA_VERSION);
+        let report_tables: i64 = upgraded
+            .connection
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_schema WHERE name LIKE 'local\\_report%' ESCAPE '\\'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(report_tables, 0);
+        upgraded.verify_integrity().unwrap();
+    }
+
+    #[test]
     fn upgrades_schema_two_with_batch_content_checksums() {
         let directory = tempfile::tempdir().unwrap();
         let database_path = directory.path().join(DATABASE_FILE);
@@ -3142,10 +3171,6 @@ mod tests {
         upgraded
             .connection
             .prepare("SELECT result, missing_reason FROM snapshot_slots")
-            .unwrap();
-        upgraded
-            .connection
-            .prepare("SELECT covered_ms, rules_version FROM local_reports")
             .unwrap();
         let timeline_indexes: i64 = upgraded
             .connection
@@ -4092,10 +4117,7 @@ mod tests {
 
         let report = storage.apply_retention(1_700_000_000_000).unwrap();
 
-        assert_eq!(
-            report.report_items + report.activity_items + report.input_items,
-            0
-        );
+        assert_eq!(report.activity_items + report.input_items, 0);
         assert!(free_pages() > 0);
     }
 

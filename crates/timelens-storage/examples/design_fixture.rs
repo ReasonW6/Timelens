@@ -288,12 +288,12 @@ fn main() -> FixtureResult<()> {
         gap_start,
         gap_end,
     )?;
-    let report = storage.generate_local_report(start, end, now.timestamp_millis())?;
-    if report.covered_ms != 523 * MINUTE_MS as u64
-        || report.snapshot_success_count != 1
-        || report.applications.len() != 4
+    let (covered_ms, _) = storage.data_coverage(start, end)?;
+    if covered_ms != 523 * MINUTE_MS as u64
+        || storage.count_snapshot_slots(start, end)?.0 != 1
+        || storage.timeline_snapshot(start, end)?.applications.len() != 4
     {
-        return Err("stored report does not match the synthetic day".into());
+        return Err("stored data does not match the synthetic day".into());
     }
     storage.verify_integrity()?;
     storage.checkpoint()?;
@@ -329,7 +329,6 @@ fn main() -> FixtureResult<()> {
         })).collect::<Vec<_>>(),
         "snapshot_slot_id": snapshot_id,
         "snapshot_is_synthetic": true,
-        "local_report_id": report.id,
         "collection_paused": true,
         "snapshots_enabled": false,
         "verified_from_storage": true

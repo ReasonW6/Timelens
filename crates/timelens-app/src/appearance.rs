@@ -3,10 +3,9 @@
 use std::{
     fs,
     path::{Path, PathBuf},
-    time::Duration,
 };
 
-use slint::{ComponentHandle, Timer, TimerMode};
+use slint::ComponentHandle;
 use windows::{
     Win32::System::Registry::{HKEY_CURRENT_USER, RRF_RT_REG_DWORD, RegGetValueW},
     core::w,
@@ -72,9 +71,9 @@ fn show(window: &AppWindow, dark: bool) {
     }
 }
 
-/// Applies the saved choice, saves new ones, and follows the system while the
-/// choice is to follow it.
-pub fn install(window: &AppWindow, control: PathBuf) -> Timer {
+/// Applies the saved choice and saves new ones. The tray calls
+/// [`follow_system`] when the system's settings change.
+pub fn install(window: &AppWindow, control: PathBuf) {
     let theme = window.global::<Theme>();
     theme.set_mode(load(&control));
     show(window, dark(theme.get_mode(), system_dark()));
@@ -90,19 +89,13 @@ pub fn install(window: &AppWindow, control: PathBuf) -> Timer {
             window.set_action_status(format!("主题设置未能保存：{error}").into());
         }
     });
+}
 
-    // Slint does not pass on the system's settings-change message; reading the
-    // setting once a second costs next to nothing.
-    let weak = window.as_weak();
-    let timer = Timer::default();
-    timer.start(TimerMode::Repeated, Duration::from_secs(1), move || {
-        if let Some(window) = weak.upgrade()
-            && window.global::<Theme>().get_mode() == 0
-        {
-            show(&window, system_dark());
-        }
-    });
-    timer
+/// Takes up the system's light or dark mode while the choice is to follow it.
+pub fn follow_system(window: &AppWindow) {
+    if window.global::<Theme>().get_mode() == 0 {
+        show(window, system_dark());
+    }
 }
 
 #[cfg(test)]

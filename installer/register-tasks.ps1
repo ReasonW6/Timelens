@@ -96,8 +96,8 @@ function Set-InstallPathAcl {
     ))
     Set-Acl -LiteralPath $Path -AclObject $acl
 
-    # The Data folder keeps its own grant to the user, and its dataset is not walked.
-    $children = @(Get-ChildItem -LiteralPath $Path -Force | Where-Object Name -ine 'Data')
+    # The data folders keep their own grant to the user, and their datasets are not walked.
+    $children = @(Get-ChildItem -LiteralPath $Path -Force | Where-Object Name -notin $InstallDataFolders)
     $nested = @($children | Where-Object PSIsContainer | ForEach-Object { Get-ChildItem -LiteralPath $_.FullName -Force -Recurse })
     $children + $nested | ForEach-Object {
         $childAcl = Get-Acl -LiteralPath $_.FullName
@@ -125,7 +125,7 @@ try {
 }
 
 # Creates the chosen directory and lets the signed-in user write to it. Inside the
-# installation directory only its Data folder may hold data, and never anything
+# installation directory only its TimelensData folder (or the earlier Data) may hold data, and never anything
 # under the protected collector directory.
 function Initialize-UserDataDirectory {
     param([Parameter(Mandatory)][string] $Path)
@@ -138,8 +138,9 @@ function Initialize-UserDataDirectory {
     }
     $within = { param($Parent) $data -ieq $Parent -or $data.StartsWith($Parent + '\', [StringComparison]::OrdinalIgnoreCase) }
     if (& $within $resolvedElevatedDir) { throw 'The data directory cannot be inside the protected collector directory.' }
-    if ((& $within $resolvedInstallDir) -and $data -ine (Join-Path $resolvedInstallDir 'Data')) {
-        throw 'Inside the installation directory only its Data folder can hold data.'
+    $installData = $InstallDataFolders | ForEach-Object { Join-Path $resolvedInstallDir $_ }
+    if ((& $within $resolvedInstallDir) -and $data -notin $installData) {
+        throw 'Inside the installation directory only its TimelensData folder can hold data.'
     }
     $current = $data
     while ($current) {
@@ -198,6 +199,12 @@ if ($UserDataDirectory) {
     if ($DataDirectory) { throw 'An isolated install cannot also choose a user data directory.' }
     $userData = Initialize-UserDataDirectory -Path $UserDataDirectory
     Invoke-CoreAsUser -Arguments ('--set-data-location "' + $userData + '"')
+} elseif (-not $DataDirectory -and $resolvedElevatedDir -ine $resolvedInstallDir -and
+    -not (Test-Path -LiteralPath (Join-Path $resolvedInstallDir 'TimelensData'))) {
+    # The user cannot create folders in the protected installation directory, so
+    # an empty TimelensData is prepared for moving existing data there from the app's data settings.
+    # Installed into the collector's own directory, there is nowhere the data may go.
+    [void] (Initialize-UserDataDirectory -Path (Join-Path $resolvedInstallDir 'TimelensData'))
 }
 
 function New-ProductLogonTrigger([string] $Name) {

@@ -50,6 +50,13 @@ export global CollectionState {
     callback opened;
     callback choose(int);
     callback action(int);
+    // A finished action's result is waiting to be applied.
+    callback updates-ready;
+    // The tray menu and tooltip follow these three.
+    callback menu-changed;
+    changed busy => { menu-changed(); }
+    changed paused => { menu-changed(); }
+    changed resume-label => { menu-changed(); }
 }
 
 // A heat color stays readable under its label.
@@ -266,9 +273,9 @@ export component CollectionPanel inherits Rectangle {
                     border-color: Theme.danger-line;
                     SettingExpander {
                         title: CollectionState.app-index >= 0 ? "删除「" + CollectionState.app-name + "」的全部历史" : "删除所选应用的全部历史";
-                        description: "同时删除引用它的本地报告。此操作无法撤销。";
+                        description: "此操作无法撤销。";
                         icon: @image-url("icons/trash.svg");
-                        Note { text: CollectionState.impact != "" ? CollectionState.impact : "先在上方选择一个应用，这里会显示受影响的窗口与报告。"; color: Theme.ink-2; }
+                        Note { text: CollectionState.impact != "" ? CollectionState.impact : "先在上方选择一个应用，这里会显示受影响的窗口。"; color: Theme.ink-2; }
                         Note { text: "匿名累计总数和无法归属应用的每日键位总数会保留，快照图片与外部文件也会保留。"; font-size: 12px; }
                         HorizontalLayout {
                             Action {

@@ -3,19 +3,29 @@
 //!
 //! The system caption stays in charge of dragging, snap layouts, resize borders
 //! and the window menu; only its colors change. Older systems ignore the request.
-use std::time::Duration;
+use std::{
+    cell::RefCell,
+    sync::atomic::{AtomicBool, Ordering},
+    time::Duration,
+};
 
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
-use slint::{ComponentHandle, Timer, TimerMode};
+use slint::{ComponentHandle, Timer};
 
 use crate::AppWindow;
 use windows::Win32::{
-    Foundation::{COLORREF, HWND},
+    Foundation::{COLORREF, HWND, LPARAM, LRESULT, WPARAM},
     Graphics::Dwm::{
         DWMWA_BORDER_COLOR, DWMWA_CAPTION_COLOR, DWMWA_TEXT_COLOR, DWMWA_USE_IMMERSIVE_DARK_MODE,
         DwmSetWindowAttribute,
     },
-    UI::WindowsAndMessaging::{IsIconic, SW_RESTORE, SW_SHOW, SetForegroundWindow, ShowWindow},
+    UI::{
+        Shell::{DefSubclassProc, SetWindowSubclass},
+        WindowsAndMessaging::{
+            IsIconic, IsWindowVisible, SW_RESTORE, SW_SHOW, SetForegroundWindow, ShowWindow,
+            WM_SHOWWINDOW, WM_SIZE,
+        },
+    },
 };
 
 /// The canvas color at the window's top edge, the title bar text and the
@@ -50,6 +60,7 @@ fn native_handle(window: &slint::Window) -> Option<HWND> {
 /// Show, restore and activate the main window after an explicit user request.
 pub fn show_and_activate(window: &AppWindow) -> Result<(), slint::PlatformError> {
     window.show()?;
+    hook(window);
     window.window().set_minimized(false);
     crate::window_placement::open_main(window);
     if let Some(hwnd) = native_handle(window.window()) {
@@ -68,22 +79,80 @@ pub fn show_and_activate(window: &AppWindow) -> Result<(), slint::PlatformError>
     Ok(())
 }
 
+struct Watch {
+    window: slint::Weak<AppWindow>,
+    shown: bool,
+    changed: Box<dyn Fn(bool)>,
+}
+
+thread_local! {
+    static WATCH: RefCell<Option<Watch>> = const { RefCell::new(None) };
+}
+static HOOKED: AtomicBool = AtomicBool::new(false);
+
+/// Calls `changed` on the UI thread whenever the main window starts or stops
+/// being seen: shown, hidden, minimized or restored. Nothing polls for it; the
+/// native window reports it once [`hook`] has run after its first show.
+///
 /// Windows discards a software window's pixels while it is minimized or hidden,
 /// but Slint 1.17's software renderer still trusts the buffer it gets back on
 /// restore and repaints only what changed, leaving the rest transparent. After
 /// every restore, invalidate the whole window: once at once, and once more after
 /// the first frames, in case the cleared buffer arrives after the first repaint.
-pub fn repaint_after_restore(window: &AppWindow) -> Timer {
-    let weak = window.as_weak();
-    let mut away = false;
-    let timer = Timer::default();
-    timer.start(TimerMode::Repeated, Duration::from_millis(40), move || {
-        let Some(window) = weak.upgrade() else {
+pub fn watch(window: &AppWindow, changed: impl Fn(bool) + 'static) {
+    WATCH.with(|watch| {
+        *watch.borrow_mut() = Some(Watch {
+            window: window.as_weak(),
+            shown: false,
+            changed: Box::new(changed),
+        });
+    });
+}
+
+/// Listens to the native main window, which exists only once it is shown.
+pub fn hook(window: &AppWindow) {
+    let Some(hwnd) = native_handle(window.window()) else {
+        return;
+    };
+    if !HOOKED.swap(true, Ordering::AcqRel) {
+        let _ = unsafe { SetWindowSubclass(hwnd, Some(subclass), 1, 0) };
+    }
+    // The show that created the native window came before the hook.
+    seen_changed();
+}
+
+unsafe extern "system" fn subclass(
+    hwnd: HWND,
+    message: u32,
+    w: WPARAM,
+    l: LPARAM,
+    _id: usize,
+    _data: usize,
+) -> LRESULT {
+    if message == WM_SHOWWINDOW || message == WM_SIZE {
+        // Look once the message is done and the window has its new state.
+        let _ = slint::invoke_from_event_loop(seen_changed);
+    }
+    unsafe { DefSubclassProc(hwnd, message, w, l) }
+}
+
+fn seen_changed() {
+    WATCH.with(|watch| {
+        let mut watch = watch.borrow_mut();
+        let Some(watch) = watch.as_mut() else {
             return;
         };
-        let native = window.window();
-        let hidden = !native.is_visible() || native.is_minimized();
-        if away && !hidden {
+        let Some(window) = watch.window.upgrade() else {
+            return;
+        };
+        let shown = native_handle(window.window()).is_some_and(|hwnd| unsafe {
+            IsWindowVisible(hwnd).as_bool() && !IsIconic(hwnd).as_bool()
+        });
+        if shown == watch.shown {
+            return;
+        }
+        watch.shown = shown;
+        if shown {
             invalidate(&window);
             let weak = window.as_weak();
             Timer::single_shot(Duration::from_millis(250), move || {
@@ -92,9 +161,8 @@ pub fn repaint_after_restore(window: &AppWindow) -> Timer {
                 }
             });
         }
-        away = hidden;
+        (watch.changed)(shown);
     });
-    timer
 }
 
 fn invalidate(window: &AppWindow) {

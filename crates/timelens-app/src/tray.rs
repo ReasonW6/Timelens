@@ -62,6 +62,8 @@ enum Event {
     Quit,
     QuitReady,
     QuitFailed(String),
+    /// A system setting such as the light or dark theme changed.
+    SettingChanged,
 }
 fn wide(text: &str) -> Vec<u16> {
     text.encode_utf16().chain(Some(0)).collect()
@@ -82,6 +84,9 @@ fn emit(event: Event) {
             }
             _ => {
                 let _ = sink.sender.send(event);
+                let _ = sink
+                    .window
+                    .upgrade_in_event_loop(|w| w.invoke_tray_events_ready());
             }
         }
     }
@@ -225,6 +230,7 @@ unsafe extern "system" fn procedure(hwnd: HWND, message: u32, w: WPARAM, l: LPAR
         WM_TIMECHANGE | WM_SETTINGCHANGE => {
             crate::snapshot::wake_scheduler();
             crate::history::invalidate();
+            emit(Event::SettingChanged);
             unsafe { DefWindowProcW(hwnd, message, w, l) }
         }
         WM_QUERYENDSESSION => 1,
@@ -380,7 +386,7 @@ pub fn install(
     w: &AppWindow,
     storage: Arc<Mutex<timelens_storage::Storage>>,
     control: std::path::PathBuf,
-) -> Result<slint::Timer> {
+) -> Result<()> {
     let (sender, receiver) = mpsc::channel();
     *EVENTS.lock().map_err(|_| anyhow!("托盘锁不可用"))? = Some(EventSink {
         sender,
@@ -449,93 +455,96 @@ pub fn install(
         }
         slint::CloseRequestResponse::KeepWindowShown
     });
+    let quitting = std::rc::Rc::new(std::cell::Cell::new(false));
     let weak = w.as_weak();
-    let timer = slint::Timer::default();
-    let mut quitting = false;
-    timer.start(
-        slint::TimerMode::Repeated,
-        std::time::Duration::from_millis(200),
-        move || {
-            let Some(w) = weak.upgrade() else {
-                return;
-            };
-            while let Ok(event) = receiver.try_recv() {
-                match event {
-                    Event::Open => unreachable!("activation bypasses polling"),
-                    Event::SetPaused(paused) => {
-                        let state = w.global::<CollectionState>();
-                        if !quitting && !state.get_busy() {
-                            state.set_paused(paused);
-                            state.invoke_action(0);
-                        }
-                    }
-                    Event::PauseFor(minutes) => {
-                        if !quitting {
-                            w.global::<CollectionState>().invoke_pause_for(minutes);
-                        }
-                    }
-                    Event::Capture => {
-                        if !quitting {
-                            w.invoke_snapshot_capture_now();
-                        }
-                    }
-                    Event::Quit => {
-                        if quitting {
-                            continue;
-                        }
-                        quitting = true;
-                        crate::collector_task::suspend();
-                        w.set_action_status("正在保存并退出 Timelens…".into());
-                        let storage = Arc::clone(&storage);
-                        thread::spawn(move || {
-                            let result: Result<()> = crate::snapshot::run_heavy_task(|| {
-                                let stop = {
-                                    let s = storage
-                                        .lock()
-                                        .map_err(|_| anyhow!("storage lock poisoned"))?;
-                                    s.control_directory().join("collector-stop.request")
-                                };
-                                std::fs::write(&stop, b"stop")?;
-                                let start = std::time::Instant::now();
-                                loop {
-                                    if let Ok(_collector) =
-                                        timelens_ipc::SingleInstanceGuard::acquire_collector()
-                                    {
-                                        break;
-                                    }
-                                    if start.elapsed() > std::time::Duration::from_secs(15) {
-                                        return Err(anyhow!("采集器未能完成停止，请重试"));
-                                    }
-                                    thread::sleep(std::time::Duration::from_millis(50));
-                                }
-                                let _ = std::fs::remove_file(stop);
-                                storage
-                                    .lock()
-                                    .map_err(|_| anyhow!("storage lock poisoned"))?
-                                    .checkpoint()?;
-                                Ok(())
-                            });
-                            match result {
-                                Ok(()) => emit(Event::QuitReady),
-                                Err(e) => emit(Event::QuitFailed(e.to_string())),
-                            }
-                        });
-                    }
-                    Event::QuitReady => {
-                        SHUTDOWN_READY.store(true, std::sync::atomic::Ordering::Release);
-                        let _ = slint::quit_event_loop();
-                    }
-                    Event::QuitFailed(error) => {
-                        quitting = false;
-                        crate::collector_task::resume();
-                        w.set_action_status(format!("退出未完成：{error}").into());
+    let menu_quitting = std::rc::Rc::clone(&quitting);
+    w.global::<CollectionState>().on_menu_changed(move || {
+        if let Some(w) = weak.upgrade() {
+            collection_menu(&w, menu_quitting.get());
+        }
+    });
+    let weak = w.as_weak();
+    w.on_tray_events_ready(move || {
+        let Some(w) = weak.upgrade() else {
+            return;
+        };
+        while let Ok(event) = receiver.try_recv() {
+            match event {
+                Event::Open => unreachable!("activation bypasses this queue"),
+                Event::SetPaused(paused) => {
+                    let state = w.global::<CollectionState>();
+                    if !quitting.get() && !state.get_busy() {
+                        state.set_paused(paused);
+                        state.invoke_action(0);
                     }
                 }
+                Event::PauseFor(minutes) => {
+                    if !quitting.get() {
+                        w.global::<CollectionState>().invoke_pause_for(minutes);
+                    }
+                }
+                Event::Capture => {
+                    if !quitting.get() {
+                        w.invoke_snapshot_capture_now();
+                    }
+                }
+                Event::Quit => {
+                    if quitting.get() {
+                        continue;
+                    }
+                    quitting.set(true);
+                    crate::collector_task::suspend();
+                    w.set_action_status("正在保存并退出 Timelens…".into());
+                    let storage = Arc::clone(&storage);
+                    thread::spawn(move || {
+                        let result: Result<()> = crate::snapshot::run_heavy_task(|| {
+                            let stop = {
+                                let s = storage
+                                    .lock()
+                                    .map_err(|_| anyhow!("storage lock poisoned"))?;
+                                s.control_directory().join("collector-stop.request")
+                            };
+                            std::fs::write(&stop, b"stop")?;
+                            let start = std::time::Instant::now();
+                            loop {
+                                if let Ok(_collector) =
+                                    timelens_ipc::SingleInstanceGuard::acquire_collector()
+                                {
+                                    break;
+                                }
+                                if start.elapsed() > std::time::Duration::from_secs(15) {
+                                    return Err(anyhow!("采集器未能完成停止，请重试"));
+                                }
+                                thread::sleep(std::time::Duration::from_millis(50));
+                            }
+                            let _ = std::fs::remove_file(stop);
+                            storage
+                                .lock()
+                                .map_err(|_| anyhow!("storage lock poisoned"))?
+                                .checkpoint()?;
+                            Ok(())
+                        });
+                        match result {
+                            Ok(()) => emit(Event::QuitReady),
+                            Err(e) => emit(Event::QuitFailed(e.to_string())),
+                        }
+                    });
+                }
+                Event::QuitReady => {
+                    SHUTDOWN_READY.store(true, std::sync::atomic::Ordering::Release);
+                    let _ = slint::quit_event_loop();
+                }
+                Event::QuitFailed(error) => {
+                    quitting.set(false);
+                    crate::collector_task::resume();
+                    w.set_action_status(format!("退出未完成：{error}").into());
+                }
+                Event::SettingChanged => crate::appearance::follow_system(&w),
             }
-            collection_menu(&w, quitting);
-        },
-    );
-    Ok(timer)
+        }
+        collection_menu(&w, quitting.get());
+    });
+    Ok(())
 }
 
 #[cfg(test)]

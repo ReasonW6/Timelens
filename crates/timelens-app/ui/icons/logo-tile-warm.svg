@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
+  <!-- logo-tile.svg at dusk, shown once time has been turned back. -->
+  <defs>
+    <linearGradient id="tile" x1="6" y1="4" x2="58" y2="60" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ff9a6b"/>
+      <stop offset="0.55" stop-color="#c2468e"/>
+      <stop offset="1" stop-color="#5b3cc4"/>
+    </linearGradient>
+  </defs>
+  <rect x="2" y="2" width="60" height="60" rx="15" fill="url(#tile)"/>
+  <circle cx="32" cy="32" r="17" fill="none" stroke="#ffffff" stroke-opacity="0.3" stroke-width="6"/>
+  <circle cx="32" cy="32" r="5" fill="#ffffff"/>
+</svg>

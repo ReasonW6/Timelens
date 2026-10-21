@@ -306,7 +306,11 @@ fn publish(window: &AppWindow, state: &mut HistoryState) {
         window.set_action_status("这一天没有记录".into());
     }
     state.paging.layout = layout;
-    window.set_history_positions(ModelRc::new(VecModel::from(positions)));
+    // Replaced only when changed, like the rows: see `same_item`.
+    let positions = ModelRc::new(VecModel::from(positions));
+    if !same_rows(&window.get_history_positions(), &positions, |a, b| a == b) {
+        window.set_history_positions(positions);
+    }
     if let Some(model) = &state.paging.model {
         patch(model, shown);
     } else {
@@ -314,7 +318,23 @@ fn publish(window: &AppWindow, state: &mut HistoryState) {
         window.set_history(ModelRc::from(Rc::clone(&model)));
         state.paging.model = Some(model);
     }
-    window.set_day_anchors(ModelRc::new(VecModel::from(anchors)));
+    let current = window.get_day_anchors();
+    let anchors = ModelRc::new(VecModel::from(
+        anchors
+            .into_iter()
+            .enumerate()
+            .map(|(index, anchor)| match current.row_data(index) {
+                Some(old) if same_rows(&old.shares, &anchor.shares, |a, b| a == b) => DayAnchor {
+                    shares: old.shares,
+                    ..anchor
+                },
+                _ => anchor,
+            })
+            .collect::<Vec<_>>(),
+    ));
+    if !same_rows(&current, &anchors, |a, b| a == b) {
+        window.set_day_anchors(anchors);
+    }
     window.set_history_selected(state.selected.clone().unwrap_or_default().into());
     describe(window, state, &query);
     let wanted = needed(state, -window.get_history_scroll(), height);

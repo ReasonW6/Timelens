@@ -201,10 +201,10 @@ const STEPS: &[Step] = &[
         w.global::<CollectionState>().set_page(1);
         w.global::<CollectionState>().invoke_action(7);
     }),
-    ("06-stats", |w| {
-        w.set_stats_tab(2);
-        w.invoke_navigate(3);
-        w.invoke_report_generate();
+    ("06-stats-gaps", |w| {
+        w.set_stats_tab(0);
+        w.set_app_detail_open(false);
+        w.set_apps_gaps_open(true);
     }),
     ("08-settings-privacy", |w| settings(w, 0)),
     ("09-settings-snapshots", |w| settings(w, 1)),
