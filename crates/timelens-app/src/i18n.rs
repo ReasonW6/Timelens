@@ -328,7 +328,8 @@ const STORAGE_DETAILS: [&str; 46] = [
     "图片哈希无效",
 ];
 
-fn localize(text: &str) -> Cow<'_, str> {
+/// A storage error as it reads in the current language.
+pub fn localize(text: &str) -> Cow<'_, str> {
     let cjk = |c: char| ('\u{4e00}'..='\u{9fff}').contains(&c);
     if current() == Language::ZhCn || !text.chars().any(cjk) {
         return Cow::Borrowed(text);

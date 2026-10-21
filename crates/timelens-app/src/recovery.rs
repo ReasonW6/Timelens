@@ -70,7 +70,8 @@ pub fn open(data: Result<PathBuf>, control: &Path, force: bool) -> Result<Storag
             .to_string()
             .into(),
     );
-    window.set_detail(detail.into());
+    // Storage explains its failures in Simplified Chinese.
+    window.set_detail(crate::i18n::localize(&detail).as_ref().into());
     window.set_upgrade(upgrade);
     let candidate = Arc::new(Mutex::new(None::<Storage>));
     let candidate_for_updates = Arc::clone(&candidate);
