@@ -55,7 +55,7 @@ cargo test --workspace --release -- --test-threads=2
 
 UI：`crates/timelens-app/ui/*.slint` 通过 `main.rs` 里的 `slint::slint!` 引入；各页面的 Rust 绑定分散在 `*_ui.rs`（`timeline_ui`、`collection_ui`、`data_ui`、`general_ui`）。
 
-安装器（`installer/`）：Inno Setup 7 脚本 + 注册 Limited/Highest 两个登录任务的 PowerShell 脚本。提权组件安装在 `Common Files\Timelens` 并收紧 ACL；因为没有代码签名，这个目录权限与握手中的对端路径校验是防止提权替换的安全边界，修改安装路径或握手逻辑时要一并考虑。
+安装器（`installer/`）：Inno Setup 7 脚本 + 注册 Limited/Highest 两个登录任务的 PowerShell 脚本。提权组件安装在 `C:\Program Files\Timelens` 并收紧 ACL；因为没有代码签名，这个目录权限与握手中的对端路径校验是防止提权替换的安全边界，修改安装路径或握手逻辑时要一并考虑。
 
 ## 必须遵守的产品约束
 

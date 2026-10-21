@@ -172,7 +172,7 @@ impl Storage {
         }
         // Staging inside the destination needs write access only to it, so an
         // empty directory prepared under a read-only parent (such as the
-        // installer's Data folder) works too.
+        // installer's TimelensData folder) works too.
         let result = self.relocate_into(&destination, publish, &mut progress);
         if result.is_err() && created {
             let _ = fs::remove_dir(&destination);

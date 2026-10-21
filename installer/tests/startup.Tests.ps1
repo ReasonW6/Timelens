@@ -127,3 +127,33 @@ Describe 'Startup choice during upgrades' {
         (New-ProductLogonTrigger 'Collector').Enabled | Should Be $false
     }
 }
+
+Describe 'Installation directory contents' {
+    . (Join-Path $installer 'path-safety.ps1')
+    $uninstallShortcut = [string][char]0x5378 + [char]0x8f7d + ' Timelens.lnk'
+    function New-InstallFolder {
+        $dir = Join-Path $TestDrive ([Guid]::NewGuid().ToString('N'))
+        [void] (New-Item -ItemType Directory -Path $dir)
+        Set-Content -LiteralPath (Join-Path $dir 'Timelens.exe') ''
+        Set-Content -LiteralPath (Join-Path $dir $uninstallShortcut) ''
+        return $dir
+    }
+    It 'accepts the uninstall shortcut and the data folders without walking their datasets' {
+        $dir = New-InstallFolder
+        foreach ($name in @('TimelensData', 'Data')) {
+            [void] (New-Item -ItemType Directory -Path (Join-Path $dir $name))
+            Set-Content -LiteralPath (Join-Path $dir "$name\timelens.db") ''
+        }
+        Assert-InstallDirectory $dir | Should Be $dir
+    }
+    It 'rejects unrelated files' {
+        $dir = New-InstallFolder
+        Set-Content -LiteralPath (Join-Path $dir 'notes.lnk') ''
+        { Assert-InstallDirectory $dir } | Should Throw
+    }
+    It 'rejects a data folder that is a file' {
+        $dir = New-InstallFolder
+        Set-Content -LiteralPath (Join-Path $dir 'TimelensData') ''
+        { Assert-InstallDirectory $dir } | Should Throw
+    }
+}
