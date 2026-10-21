@@ -1,7 +1,7 @@
 use crate::{AppWindow, DataState, SnapshotUiState};
 use anyhow::{Context, Result, anyhow, bail};
 use chrono::TimeZone;
-use slint::{ComponentHandle, Timer, TimerMode};
+use slint::ComponentHandle;
 use std::{
     cell::RefCell,
     fs,
@@ -250,7 +250,7 @@ pub fn install(
     w: &AppWindow,
     storage: Arc<Mutex<Storage>>,
     snapshots: Rc<RefCell<SnapshotUiState>>,
-) -> Timer {
+) {
     let stage = Arc::new(Mutex::new(None::<PreparedRestore>));
     let ui_storage = Arc::clone(&storage);
     if let Ok(s) = lock(&storage) {
@@ -318,6 +318,7 @@ pub fn install(
         }
         let storage = storage.clone();
         let sender = sender.clone();
+        let wake = w.as_weak();
         let stage = stage.clone();
         g.set_busy(true);
         g.set_status("".into());
@@ -459,6 +460,7 @@ pub fn install(
                                         {
                                             shown = (fraction, Instant::now());
                                             let _ = sender.send(Update::Progress(fraction, label));
+                                            updates_ready(&wake);
                                         }
                                     },
                                 )?;
@@ -485,11 +487,11 @@ pub fn install(
             })();
             let update = result.unwrap_or_else(|e| Update::Failed(e.to_string()));
             let _ = sender.send(update);
+            updates_ready(&wake);
         });
     });
     let weak = w.as_weak();
-    let timer = Timer::default();
-    timer.start(TimerMode::Repeated, Duration::from_millis(200), move || {
+    w.global::<DataState>().on_updates_ready(move || {
         let Some(w) = weak.upgrade() else {
             return;
         };
@@ -557,5 +559,9 @@ pub fn install(
             }
         }
     });
-    timer
+}
+
+/// Wakes the UI thread to apply what a worker sent.
+fn updates_ready(window: &slint::Weak<AppWindow>) {
+    let _ = window.upgrade_in_event_loop(|w| w.global::<DataState>().invoke_updates_ready());
 }

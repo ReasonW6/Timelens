@@ -1207,6 +1207,16 @@ impl Storage {
             .execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")?;
         Ok(())
     }
+
+    /// Gives back memory that only speeds up reading: cached views and
+    /// SQLite's page cache. Both fill again on the next read.
+    pub fn release_memory(&self) -> Result<()> {
+        self.timeline_cache
+            .borrow_mut()
+            .clear(self.connection.total_changes());
+        self.connection.execute_batch("PRAGMA shrink_memory;")?;
+        Ok(())
+    }
 }
 
 #[derive(Default)]

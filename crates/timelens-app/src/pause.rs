@@ -77,12 +77,15 @@ pub fn resume_label(until: i64, now_ms: i64) -> String {
 }
 
 /// Wires `CollectionState.pause-for` and resumes recording when a pause ends.
-pub fn install(window: &AppWindow, control: PathBuf) -> Timer {
+/// The countdown only ticks while a timed pause is set.
+pub fn install(window: &AppWindow, control: PathBuf) -> Rc<Timer> {
     let until = Rc::new(Cell::new(load(&control)));
+    let timer = Rc::new(Timer::default());
 
     let weak = window.as_weak();
     let chosen = Rc::clone(&until);
     let chosen_control = control.clone();
+    let countdown = Rc::clone(&timer);
     window
         .global::<CollectionState>()
         .on_pause_for(move |minutes| {
@@ -98,10 +101,14 @@ pub fn install(window: &AppWindow, control: PathBuf) -> Timer {
             save(&chosen_control, end);
             state.set_paused(true);
             state.invoke_action(0);
+            if end.is_some() {
+                countdown.restart();
+            }
         });
 
+    let paused = until.get().is_some();
     let weak = window.as_weak();
-    let timer = Timer::default();
+    let ticking = Rc::downgrade(&timer);
     timer.start(TimerMode::Repeated, Duration::from_secs(1), move || {
         let Some(window) = weak.upgrade() else {
             return;
@@ -129,7 +136,15 @@ pub fn install(window: &AppWindow, control: PathBuf) -> Timer {
         if state.get_resume_label() != label.as_str() {
             state.set_resume_label(label.into());
         }
+        if until.get().is_none()
+            && let Some(timer) = ticking.upgrade()
+        {
+            timer.stop();
+        }
     });
+    if !paused {
+        timer.stop();
+    }
     timer
 }
 

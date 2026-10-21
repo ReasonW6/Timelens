@@ -925,6 +925,8 @@ export component AppWindow inherits Window {
     // 0 follows the system, 1 light, 2 dark.
     callback theme-mode-selected(int);
     callback startup-changed(bool);
+    callback startup-ready;
+    callback tray-events-ready;
     callback snapshot-row-selected(int);
     // Select the nearest snapshot with an image before (-1) or after (1) the
     // given one; false when there is none.

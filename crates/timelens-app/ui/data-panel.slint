@@ -28,6 +28,8 @@ export global DataState {
     in-out property <string> move-step;
     in-out property <string> move-message;
     callback action(int);
+    // A running action's progress or result is waiting to be applied.
+    callback updates-ready;
 }
 
 // Storage, backup and maintenance, as settings sections. The page that

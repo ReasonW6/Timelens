@@ -423,7 +423,7 @@ fn run_window(
         )
     };
     // Before the first frame, so the window opens in the chosen look.
-    let _appearance_timer = appearance::install(&window, control_directory.clone());
+    appearance::install(&window, control_directory.clone());
     let _pause_timer = pause::install(&window, control_directory.clone());
     window.set_storage_status(storage_status.into());
     window.set_collector_status("等待受信采集器事件…".into());
@@ -579,20 +579,18 @@ fn run_window(
     refresh_timeline(&window, &storage, &ui_state)?;
     history::refresh(&window, &storage, &history_state)?;
 
-    let _data_timer =
-        data_ui::install(&window, Arc::clone(&storage), Rc::clone(&snapshot_ui_state));
+    data_ui::install(&window, Arc::clone(&storage), Rc::clone(&snapshot_ui_state));
     #[cfg(debug_assertions)]
     let tray_wanted = !qa::headless();
     #[cfg(not(debug_assertions))]
     let tray_wanted = true;
     // Headless QA shows no tray icon, and its tray window would answer for the
     // installed core.
-    let _tray_timer = tray_wanted
-        .then(|| tray::install(&window, Arc::clone(&storage), control_directory.clone()))
-        .transpose()?;
-    let _general_timer = general_ui::install(&window, collector_task);
-    let _collection_timer =
-        collection_ui::install(&window, Arc::clone(&storage), Rc::clone(&ui_state))?;
+    if tray_wanted {
+        tray::install(&window, Arc::clone(&storage), control_directory.clone())?;
+    }
+    general_ui::install(&window, collector_task);
+    collection_ui::install(&window, Arc::clone(&storage), Rc::clone(&ui_state))?;
 
     let weak = window.as_weak();
     let timer_storage = Arc::clone(&storage);
@@ -601,14 +599,15 @@ fn run_window(
     let timer_busy = Arc::clone(&action_busy);
     let timer_history = Rc::clone(&history_state);
     let mut ui_refresh = ui_refresh::UiRefresh::new(Instant::now());
-    let timer = Timer::default();
+    let timer = Rc::new(Timer::default());
     let mut recovery_shown = false;
     let mut data_generation = data_ui::data_generation();
     let started = Instant::now();
     let mut collector_seen: Option<Instant> = None;
     // The native window exists only once shown, possibly later from the tray.
     let mut chrome_applied = false;
-    timer.start(TimerMode::Repeated, Duration::from_millis(200), move || {
+    let interval = |shown| if shown { SHOWN_TICK } else { HIDDEN_TICK };
+    timer.start(TimerMode::Repeated, interval(!background), move || {
         let Some(window) = weak.upgrade() else {
             return;
         };
@@ -724,11 +723,31 @@ fn run_window(
             }
         }
     });
+    // Hidden, the timer only keeps channels drained and state current.
+    let shown_timer = Rc::downgrade(&timer);
+    let weak = window.as_weak();
+    let release_storage = Arc::clone(&storage);
+    window_chrome::watch(&window, move |shown| {
+        if let Some(timer) = shown_timer.upgrade() {
+            timer.set_interval(interval(shown));
+        }
+        if !shown {
+            let weak = weak.clone();
+            let storage = Arc::clone(&release_storage);
+            Timer::single_shot(RELEASE_AFTER, move || {
+                if let Some(window) = weak.upgrade()
+                    && (!window.window().is_visible() || window.window().is_minimized())
+                {
+                    release_hidden_memory(&storage);
+                }
+            });
+        }
+    });
     if !background {
         window.show()?;
+        window_chrome::hook(&window);
         window_placement::open_main(&window);
     }
-    let _repaint_timer = window_chrome::repaint_after_restore(&window);
     #[cfg(debug_assertions)]
     let _qa_timer = qa::install(&window);
     slint::run_event_loop_until_quit()?;
@@ -759,6 +778,33 @@ fn batch_rejection(error: timelens_storage::StorageError) -> BatchRejection {
         BatchRejection::permanent(error.to_string())
     } else {
         BatchRejection::transient(error.to_string())
+    }
+}
+
+/// How often the UI timer runs while the main window can be seen, and while it
+/// is hidden or minimized.
+const SHOWN_TICK: Duration = Duration::from_millis(200);
+const HIDDEN_TICK: Duration = Duration::from_secs(10);
+
+/// How long the main window stays out of sight before memory it no longer
+/// needs goes back to the system.
+const RELEASE_AFTER: Duration = Duration::from_secs(30);
+
+/// Drops read caches and returns free heap pages, then trims the working set,
+/// so pages nobody touches while the window is out of sight leave physical
+/// memory. Showing the window reads and pages in what it needs again.
+fn release_hidden_memory(storage: &Arc<Mutex<Storage>>) {
+    use windows_sys::Win32::System::{
+        Memory::{GetProcessHeap, HeapCompact},
+        Threading::{GetCurrentProcess, SetProcessWorkingSetSize},
+    };
+    // A long task holds the lock; its caches go next time.
+    if let Ok(storage) = storage.try_lock() {
+        let _ = storage.release_memory();
+    }
+    unsafe {
+        HeapCompact(GetProcessHeap(), 0);
+        SetProcessWorkingSetSize(GetCurrentProcess(), usize::MAX, usize::MAX);
     }
 }
 

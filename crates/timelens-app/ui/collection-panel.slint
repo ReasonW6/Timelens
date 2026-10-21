@@ -50,6 +50,13 @@ export global CollectionState {
     callback opened;
     callback choose(int);
     callback action(int);
+    // A finished action's result is waiting to be applied.
+    callback updates-ready;
+    // The tray menu and tooltip follow these three.
+    callback menu-changed;
+    changed busy => { menu-changed(); }
+    changed paused => { menu-changed(); }
+    changed resume-label => { menu-changed(); }
 }
 
 // A heat color stays readable under its label.
