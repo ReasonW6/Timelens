@@ -273,8 +273,7 @@ impl Storage {
             .map(|id| Ok((id.clone(), self.application_display_name(&id)?)))
             .collect()
     }
-    pub fn application_deletion_impact(&self, identity: &str) -> Result<(u64, u64)> {
-        let mut reports = BTreeSet::new();
+    pub fn application_deletion_impact(&self, identity: &str) -> Result<u64> {
         let mut windows = 0;
         for member in self.merged_members(identity)? {
             windows += self
@@ -285,9 +284,8 @@ impl Storage {
                     |r| r.get::<_, i64>(0),
                 )?
                 .max(0) as u64;
-            reports.extend(self.connection.prepare("SELECT report_id FROM local_report_applications WHERE application_identity=?")?.query_map([&member],|r|r.get::<_,i64>(0))?.collect::<rusqlite::Result<Vec<_>>>()?);
         }
-        Ok((windows, reports.len() as u64))
+        Ok(windows)
     }
     pub fn delete_application_history(&self, identity: &str) -> Result<u64> {
         self.timeline_cache
@@ -298,7 +296,6 @@ impl Storage {
         let mut rows = 0;
         for member in members {
             let range=tx.query_row("SELECT MIN(opened_utc_ms),MAX(COALESCE(closed_utc_ms,?2)) FROM window_instances WHERE application_identity=?1",params![member,unix_time_ms()],|r|Ok((r.get::<_,Option<i64>>(0)?,r.get::<_,Option<i64>>(1)?)))?;
-            tx.execute("DELETE FROM local_reports WHERE report_id IN (SELECT report_id FROM local_report_applications WHERE application_identity=?)",[&member])?;
             rows+=tx.execute("DELETE FROM window_state_intervals WHERE window_instance_id IN (SELECT instance_id FROM window_instances WHERE application_identity=?)",[&member])? as u64;
             for (table, column) in [
                 ("window_instances", "application_identity"),
@@ -521,16 +518,14 @@ mod tests {
         );
     }
     #[test]
-    fn explicit_app_deletion_removes_derived_artifacts_and_keeps_rules() {
+    fn explicit_app_deletion_removes_history_and_keeps_rules() {
         let (_dir, s) = fixtures::storage();
-        let report = s.generate_local_report(1000, 6000, 7000).unwrap();
         let id = "path:c:\\private\\editor.exe";
         let mut p = s.collection_policy().unwrap();
         p.input.insert(id.into());
         s.set_collection_policy(p).unwrap();
-        assert_eq!(s.application_deletion_impact(id).unwrap(), (1, 1));
+        assert_eq!(s.application_deletion_impact(id).unwrap(), 1);
         s.delete_application_history(id).unwrap();
-        assert!(s.load_local_report(report.id).is_err());
         assert!(
             s.timeline_snapshot(1000, 6000)
                 .unwrap()

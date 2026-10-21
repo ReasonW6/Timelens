@@ -51,11 +51,11 @@ cargo test --workspace --release -- --test-threads=2
 
 - `timelens-ipc`：版本化、限长的 Protobuf 协议（`prost` 手写 `#[derive(Message)]`，无 .proto/build 脚本）和命名管道互认证。握手校验同用户、同会话、真实 PID、固定可执行文件名和对端目录。协议版本 `PROTOCOL_VERSION` 在 `lib.rs`，改线格式时需同步升级。
 - `timelens-observer`：不读取窗口标题的窗口分类、应用身份解析、虚拟桌面查询和输入计数。
-- `timelens-storage`：DPAPI 封装数据密钥 + SQLCipher + WAL。迁移是 `lib.rs` 中按版本递增的 `MIGRATIONS` 数组（部分 SQL 通过 `include_str!` 引入 `*-schema.sql`），`LATEST_SCHEMA_VERSION` 需随之更新；迁移失败会从加密备份恢复。`timeline_cache.rs` 是纯内存的视图缓存（Projection，可丢弃重建）。其余：`collection.rs` 采集数据写入、`milestone3.rs` 快照与本地报告、`snapshot_container.rs` 加密快照容器、`portable.rs` 便携备份、`recovery.rs` 损坏恢复、`relocation.rs` 数据迁移位置。
+- `timelens-storage`：DPAPI 封装数据密钥 + SQLCipher + WAL。迁移是 `lib.rs` 中按版本递增的 `MIGRATIONS` 数组（部分 SQL 通过 `include_str!` 引入 `*-schema.sql`），`LATEST_SCHEMA_VERSION` 需随之更新；迁移失败会从加密备份恢复。`timeline_cache.rs` 是纯内存的视图缓存（Projection，可丢弃重建）。其余：`collection.rs` 采集数据写入、`milestone3.rs` 快照与数据覆盖、`snapshot_container.rs` 加密快照容器、`portable.rs` 便携备份、`recovery.rs` 损坏恢复、`relocation.rs` 数据迁移位置。
 
 UI：`crates/timelens-app/ui/*.slint` 通过 `main.rs` 里的 `slint::slint!` 引入；各页面的 Rust 绑定分散在 `*_ui.rs`（`timeline_ui`、`collection_ui`、`data_ui`、`general_ui`）。
 
-安装器（`installer/`）：Inno Setup 7 脚本 + 注册 Limited/Highest 两个登录任务的 PowerShell 脚本。提权组件安装在 `Common Files\Timelens` 并收紧 ACL；因为没有代码签名，这个目录权限与握手中的对端路径校验是防止提权替换的安全边界，修改安装路径或握手逻辑时要一并考虑。
+安装器（`installer/`）：Inno Setup 7 脚本 + 注册 Limited/Highest 两个登录任务的 PowerShell 脚本。提权组件安装在 `C:\Program Files\Timelens` 并收紧 ACL；因为没有代码签名，这个目录权限与握手中的对端路径校验是防止提权替换的安全边界，修改安装路径或握手逻辑时要一并考虑。
 
 ## 必须遵守的产品约束
 

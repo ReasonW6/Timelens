@@ -319,7 +319,7 @@ mod tests {
         assert!(s.is_quarantined());
         assert!(
             s.connection
-                .execute("DELETE FROM local_reports", [])
+                .execute("DELETE FROM system_intervals", [])
                 .is_err()
         );
         assert!(s.ensure_writable().is_err());

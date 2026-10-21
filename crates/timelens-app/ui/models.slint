@@ -8,7 +8,6 @@ export struct SegmentRow { offset: float, width: float, kind: int, tint: color }
 // `note` says why a stretch has no image; `badge` names the display when
 // several are captured.
 export struct SnapshotRow { identity: string, time: string, display: string, result: string, success: bool, thumb: image, checked: bool, note: string, badge: string }
-export struct ReportAppRow { name: string, summary: string, focused: string, icon: image, tint: color, ratio: float }
 
 // The home history. `kind`: 0 day header, 1 morning/afternoon label, 2 activity,
 // 3 break or note, 4 recording gap, 5 the note closing the list. Day headers use

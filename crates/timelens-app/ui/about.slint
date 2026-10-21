@@ -40,6 +40,8 @@ component LensMark inherits Rectangle {
 
 export component AboutPage inherits VerticalLayout {
     in property <string> version;
+    // Off while the window is hidden: the clock stops and nothing redraws.
+    in property <bool> live: true;
     callback check-updates;
     callback open-project;
 
@@ -48,7 +50,7 @@ export component AboutPage inherits VerticalLayout {
     // When the last tap and the rewind began, on the animation clock.
     private property <duration> tap-at: -1s;
     private property <duration> rewind-at: -1s;
-    private property <duration> now: animation-tick();
+    private property <duration> now: root.live ? animation-tick() : 0ms;
     // One slow turn every eight seconds, as a clock's hand would.
     private property <angle> drift: Math.mod(root.now / 1ms, 8000) / 8000 * 360deg;
     // Each tap adds a quick turn, and the rewind runs three turns backwards.

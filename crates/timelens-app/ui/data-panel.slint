@@ -19,7 +19,6 @@ export global DataState {
     in-out property <bool> restore-ready: false;
     in-out property <bool> replace-confirmed: false;
     in-out property <string> restore-info;
-    in-out property <bool> export-paths: false;
     in-out property <string> current-directory;
     in-out property <string> destination;
     in-out property <bool> recovery-needed: false;
@@ -29,13 +28,13 @@ export global DataState {
     in-out property <string> move-step;
     in-out property <string> move-message;
     callback action(int);
+    // A running action's progress or result is waiting to be applied.
+    callback updates-ready;
 }
 
-// Storage, backup, export and maintenance, as settings sections. The page that
+// Storage, backup and maintenance, as settings sections. The page that
 // hosts it provides scrolling and the retention and clearing sections.
 export component DataPanel inherits VerticalLayout {
-    // The timeline's range in words, which exports cover.
-    in property <string> export-range;
     // The cipher and schema in use, in words.
     in property <string> storage-status;
     spacing: 10px;
@@ -70,7 +69,7 @@ export component DataPanel inherits VerticalLayout {
     SettingsGroup {
         SettingExpander {
             title: "创建便携备份";
-            description: "ZIP 包含活动、输入、设置、排除规则和本地报告；登录任务不进入备份。";
+            description: "ZIP 包含活动、输入、设置和排除规则；登录任务不进入备份。";
             icon: @image-url("icons/database.svg");
             expanded <=> DataState.backup-open;
             CheckBox { font-size: 13px; text: "包含快照图片"; checked <=> DataState.snapshots; enabled: !DataState.busy; }
@@ -139,23 +138,6 @@ export component DataPanel inherits VerticalLayout {
                 Action { text: "用此备份替换当前数据…"; danger: true; enabled: !DataState.busy && DataState.restore-ready; clicked => { DataState.restore-confirm = 1; } }
                 Rectangle { horizontal-stretch: 1; }
             }
-        }
-    }
-
-    Rectangle { height: 10px; }
-    SettingsHeader { text: "导出"; }
-    SettingsGroup {
-        SettingRow {
-            title: "导出时间线当前范围";
-            description: "将导出：" + root.export-range + "。想导出其他时段，先在时间线上选好范围。";
-            icon: @image-url("icons/download.svg");
-        }
-        HorizontalLayout {
-            padding-left: 60px; padding-right: 16px; padding-bottom: 14px; spacing: 8px;
-            CheckBox { font-size: 13px; text: "包含应用的本地路径"; checked <=> DataState.export-paths; enabled: !DataState.busy; }
-            Rectangle { horizontal-stretch: 1; }
-            Action { text: "导出 JSON…"; enabled: !DataState.busy; clicked => { DataState.action(5); } }
-            Action { text: "导出 CSV…"; enabled: !DataState.busy; clicked => { DataState.action(6); } }
         }
     }
 

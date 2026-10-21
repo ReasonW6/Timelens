@@ -34,7 +34,7 @@ AllowUNCPath=no
 UninstallDisplayIcon={app}\Timelens.exe
 SetupIconFile=..\crates\timelens-app\assets\brand\timelens.ico
 ; Everything that runs elevated (collector, uninstaller, maintenance scripts) lives
-; under Common Files, whose ancestors only administrators can rename. The chosen
+; under Program Files ({commonpf64}), whose ancestors only administrators can rename. The chosen
 ; installation directory then holds only ordinary-privilege programs and may be
 ; any folder on a fixed local disk.
 UninstallFilesDir={commonpf64}\{#ProductName}
@@ -50,8 +50,19 @@ Source: "path-safety.ps1"; DestDir: "{commonpf64}\{#ProductName}\internal"; Flag
 Source: "register-tasks.ps1"; DestDir: "{commonpf64}\{#ProductName}\internal"; Flags: ignoreversion
 Source: "unregister-tasks.ps1"; DestDir: "{commonpf64}\{#ProductName}\internal"; Flags: ignoreversion
 
+[Tasks]
+Name: "desktopicon"; Description: "添加桌面快捷方式"; GroupDescription: "快捷方式："
+
 [Icons]
 Name: "{autoprograms}\{#ProductName}"; Filename: "{app}\Timelens.exe"
+Name: "{autodesktop}\{#ProductName}"; Filename: "{app}\Timelens.exe"; Tasks: desktopicon
+; The uninstaller itself stays under Program Files with the other elevated files;
+; the installation directory gets a shortcut to it, a name path-safety.ps1 accepts.
+Name: "{app}\卸载 Timelens"; Filename: "{uninstallexe}"
+
+[UninstallDelete]
+; Only the folder prepared for the dataset, once the dataset is gone or moved.
+Type: dirifempty; Name: "{app}\TimelensData"
 
 #if DataDirectory == ""
 ; The core already runs in the background from its logon task; this only shows
@@ -95,22 +106,28 @@ end;
 procedure InitializeWizard;
 begin
   DataModePage := CreateInputOptionPage(wpSelectDir,
-    '数据存放位置', '选择 Timelens 保存活动记录、快照和报告的位置。',
+    '数据存放位置', '选择 Timelens 保存活动记录和快照的位置。',
     '数据加密保存在这台电脑上。如果这个 Windows 用户已有 Timelens 数据，会继续使用原来的位置。以后也可以在 设置 → 数据 中迁移。',
     True, False);
-  DataModePage.Add('当前用户的应用数据目录（AppData\Local\Timelens，推荐）');
+  DataModePage.Add('跟随安装目录（安装目录下的 TimelensData 文件夹，推荐）');
+  DataModePage.Add('当前用户的应用数据目录（AppData\Local\Timelens）');
   DataModePage.Add('自定义位置');
   DataModePage.SelectedValueIndex := 0;
   DataDirPage := CreateInputDirPage(DataModePage.ID,
     '自定义数据位置', '选择一个空文件夹保存数据。',
-    '安装目录里只能使用其中的 Data 文件夹。安装器会创建该文件夹，并授予当前用户写入权限。',
+    '安装目录里只能使用其中的 TimelensData 文件夹。安装器会创建该文件夹，并授予当前用户写入权限。',
     False, '');
   DataDirPage.Add('数据文件夹：');
 end;
 
+function UseInstallDataDirectory: Boolean;
+begin
+  Result := (WizardForm.PrevAppDir = '') and (DataModePage.SelectedValueIndex = 0);
+end;
+
 function UseCustomDataDirectory: Boolean;
 begin
-  Result := (WizardForm.PrevAppDir = '') and (DataModePage.SelectedValueIndex = 1);
+  Result := (WizardForm.PrevAppDir = '') and (DataModePage.SelectedValueIndex = 2);
 end;
 
 function ShouldSkipPage(PageID: Integer): Boolean;
@@ -147,9 +164,17 @@ begin
   end;
 end;
 
+function InstallDataDirectory: string;
+begin
+  Result := AddBackslash(RemoveBackslashUnlessRoot(WizardDirValue)) + 'TimelensData';
+end;
+
 function DataDirectoryValue: string;
 begin
-  Result := RemoveBackslashUnlessRoot(ExpandFileName(Trim(DataDirPage.Values[0])));
+  if UseInstallDataDirectory then
+    Result := InstallDataDirectory
+  else
+    Result := RemoveBackslashUnlessRoot(ExpandFileName(Trim(DataDirPage.Values[0])));
 end;
 
 procedure CurPageChanged(CurPageID: Integer);
@@ -158,7 +183,7 @@ begin
     if IsSameOrInside(WizardDirValue, ElevatedDir) then
       DataDirPage.Values[0] := ExtractFileDrive(WizardDirValue) + '\TimelensData'
     else
-      DataDirPage.Values[0] := AddBackslash(WizardDirValue) + 'Data';
+      DataDirPage.Values[0] := InstallDataDirectory;
 end;
 
 function DataDirectoryProblem: string;
@@ -175,12 +200,13 @@ begin
     Result := '数据文件夹不能放在云同步目录里。'
   else if IsSameOrInside(Path, ElevatedDir) then
     Result := '数据文件夹不能放在受保护的采集器目录（' + ElevatedDir + '）里。'
-  else if IsSameOrInside(Path, AppDir) and (CompareText(Path, AddBackslash(AppDir) + 'Data') <> 0) then
-    Result := '安装目录里只能使用 ' + AddBackslash(AppDir) + 'Data 文件夹。'
+  else if IsSameOrInside(Path, AppDir) and (CompareText(Path, InstallDataDirectory) <> 0) then
+    Result := '安装目录里只能使用 ' + InstallDataDirectory + ' 文件夹。'
   else if FileExists(Path) then
     Result := '所选路径是一个文件，请选择文件夹。'
   else if DirExists(Path) and not IsEmptyDirectory(Path) then
-    Result := '请选择空文件夹或新文件夹。Timelens 不会合并已有文件。';
+    Result := Path + ' 里已有文件。请选择空文件夹或新文件夹，Timelens 不会合并已有文件。' +
+      '如果这是以前保留的数据，选择应用数据目录即可继续使用原来的位置。';
 end;
 #endif
 
@@ -201,7 +227,7 @@ begin
     Result := False;
   end;
 #if DataDirectory == ""
-  if CurPageID = DataDirPage.ID then
+  if (CurPageID = DataDirPage.ID) or ((CurPageID = DataModePage.ID) and UseInstallDataDirectory) then
   begin
     Problem := DataDirectoryProblem;
     if Problem <> '' then
@@ -262,7 +288,7 @@ begin
     AddQuotes(ElevatedDir + '\internal\register-tasks.ps1') +
     ' -InstallDir ' + AddQuotes(ExpandConstant('{app}')) + ' -StartNow' + MaintenanceArguments;
 #if DataDirectory == ""
-  if UseCustomDataDirectory then
+  if UseInstallDataDirectory or UseCustomDataDirectory then
     Parameters := Parameters + ' -UserDataDirectory ' + AddQuotes(DataDirectoryValue);
 #endif
   if not Exec(PowerShellPath, Parameters, '', SW_HIDE, ewWaitUntilTerminated, ResultCode) or

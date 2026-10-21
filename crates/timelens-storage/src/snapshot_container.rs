@@ -715,7 +715,6 @@ impl Storage {
         Ok(SnapshotRetentionOutcome {
             snapshot_items: count as u64,
             released_bytes: released,
-            ..Default::default()
         })
     }
 
@@ -1161,10 +1160,20 @@ pub(crate) mod tests {
             fs::remove_file(storage.snapshot_directory().join(name)).unwrap();
         }
         storage.connection.execute_batch("DROP TABLE snapshot_slot_days; DROP TABLE snapshot_container_records; DROP TABLE snapshot_containers; PRAGMA user_version=12;").unwrap();
-        // Schema 12 still held the AI tables that a later migration drops.
+        // Schema 12 still held the AI tables and stored usage reports that later
+        // migrations drop.
         storage
             .connection
             .execute_batch(include_str!("ai-schema.sql"))
+            .unwrap();
+        let reports = crate::MIGRATIONS
+            .iter()
+            .find(|m| m.version == 9)
+            .unwrap()
+            .sql;
+        storage
+            .connection
+            .execute_batch(&reports[reports.find("CREATE TABLE local_reports").unwrap()..])
             .unwrap();
         storage.checkpoint().unwrap();
         originals

@@ -1,7 +1,7 @@
-use crate::{AppWindow, DataState, SnapshotUiState, UiState};
+use crate::{AppWindow, DataState, SnapshotUiState};
 use anyhow::{Context, Result, anyhow, bail};
 use chrono::TimeZone;
-use slint::{ComponentHandle, Timer, TimerMode};
+use slint::ComponentHandle;
 use std::{
     cell::RefCell,
     fs,
@@ -14,7 +14,7 @@ use std::{
 use timelens_ipc::{
     COLLECTOR_RESET_PAUSED_FILE, COLLECTOR_RESET_REQUEST_FILE, SingleInstanceGuard,
 };
-use timelens_storage::{BackupOptions, ExportFormat, PreparedRestore, RelocationStep, Storage};
+use timelens_storage::{BackupOptions, PreparedRestore, RelocationStep, Storage};
 
 static DATA_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 pub fn data_generation() -> u64 {
@@ -45,8 +45,8 @@ pub fn choose_named(save: bool, extension: &str, name: Option<&str>) -> Result<O
             "Timelens 备份",
         ),
         "webp" => ("WebP 图片", "选择图片", "导出快照", "Timelens 快照"),
-        "json" => ("JSON 文件", "选择文件", "导出报告", "Timelens 报告"),
-        "csv" => ("CSV 表格", "选择文件", "导出报告", "Timelens 报告"),
+        "json" => ("JSON 文件", "选择文件", "导出统计", "Timelens 统计"),
+        "csv" => ("CSV 表格", "选择文件", "导出统计", "Timelens 统计"),
         _ => (
             "Timelens 文件",
             "选择文件",
@@ -249,9 +249,8 @@ enum Update {
 pub fn install(
     w: &AppWindow,
     storage: Arc<Mutex<Storage>>,
-    timeline: Rc<RefCell<UiState>>,
     snapshots: Rc<RefCell<SnapshotUiState>>,
-) -> Timer {
+) {
     let stage = Arc::new(Mutex::new(None::<PreparedRestore>));
     let ui_storage = Arc::clone(&storage);
     if let Ok(s) = lock(&storage) {
@@ -283,11 +282,6 @@ pub fn install(
         .to_string();
         let images = g.get_snapshots();
         let confirm = g.get_replace_confirmed();
-        let paths = g.get_export_paths();
-        let range = {
-            let t = timeline.borrow();
-            (t.range_started_utc_ms, t.range_ended_utc_ms)
-        };
         let slot = snapshots.borrow().selected_slot_id;
         // An exported snapshot is named after when it was taken.
         let slot_name = snapshots
@@ -324,6 +318,7 @@ pub fn install(
         }
         let storage = storage.clone();
         let sender = sender.clone();
+        let wake = w.as_weak();
         let stage = stage.clone();
         g.set_busy(true);
         g.set_status("".into());
@@ -423,29 +418,6 @@ pub fn install(
                             Ok(Update::Done("数据集已恢复。".into()))
                         })
                     }
-                    5 | 6 => {
-                        let Some(path) =
-                            choose_file(true, if action == 5 { "json" } else { "csv" })?
-                        else {
-                            return Ok(Update::Canceled);
-                        };
-                        crate::snapshot::run_heavy_task(|| {
-                            let s = lock(&storage)?;
-                            let report =
-                                s.generate_local_report(range.0, range.1, crate::unix_time_ms())?;
-                            s.export_report(
-                                report.id,
-                                &path,
-                                if action == 5 {
-                                    ExportFormat::Json
-                                } else {
-                                    ExportFormat::Csv
-                                },
-                                paths,
-                            )?;
-                            Ok(Update::Done(format!("报告已导出到 {}", path.display())))
-                        })
-                    }
                     7 => {
                         let id = slot.context("请先在快照面板选择一张可用图片")?;
                         let Some(path) = choose_named(true, "webp", slot_name.as_deref())? else {
@@ -488,6 +460,7 @@ pub fn install(
                                         {
                                             shown = (fraction, Instant::now());
                                             let _ = sender.send(Update::Progress(fraction, label));
+                                            updates_ready(&wake);
                                         }
                                     },
                                 )?;
@@ -514,11 +487,11 @@ pub fn install(
             })();
             let update = result.unwrap_or_else(|e| Update::Failed(e.to_string()));
             let _ = sender.send(update);
+            updates_ready(&wake);
         });
     });
     let weak = w.as_weak();
-    let timer = Timer::default();
-    timer.start(TimerMode::Repeated, Duration::from_millis(200), move || {
+    w.global::<DataState>().on_updates_ready(move || {
         let Some(w) = weak.upgrade() else {
             return;
         };
@@ -582,5 +555,9 @@ pub fn install(
             }
         }
     });
-    timer
+}
+
+/// Wakes the UI thread to apply what a worker sent.
+fn updates_ready(window: &slint::Weak<AppWindow>) {
+    let _ = window.upgrade_in_event_loop(|w| w.global::<DataState>().invoke_updates_ready());
 }

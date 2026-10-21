@@ -2,6 +2,8 @@
 # their directory must prevent an ordinary user from renaming it or granting
 # themselves deletion of its children. The user-chosen directory only holds
 # ordinary-privilege programs and may live under any fixed-disk folder.
+$InstallDataFolders = @('TimelensData', 'Data')
+
 function Assert-InstallDirectory([string] $Path, [switch] $RequireProtectedAncestors) {
     $full = [IO.Path]::GetFullPath($Path).TrimEnd('\')
     $root = [IO.Path]::GetPathRoot($full)
@@ -33,19 +35,23 @@ function Assert-InstallDirectory([string] $Path, [switch] $RequireProtectedAnces
     }
     if (Test-Path -LiteralPath $full) {
         if ((Get-Item -LiteralPath $full -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'The installation directory cannot be a link.' }
-        # The ordinary-privilege directory may hold the user's dataset in its Data
-        # folder. Only that folder itself is checked; its contents belong to the user.
+        # The ordinary-privilege directory may hold the user's dataset in its
+        # TimelensData folder (Data before it). Only those folders themselves are
+        # checked; their contents belong to the user.
         $children = @(Get-ChildItem -LiteralPath $full -Force)
-        $data = $children | Where-Object { $_.Name -ieq 'Data' -and -not $RequireProtectedAncestors }
-        if ($data -and (-not $data.PSIsContainer -or ($data.Attributes -band [IO.FileAttributes]::ReparsePoint))) {
-            throw 'The Data folder in the installation directory must be a plain directory.'
+        $data = @($children | Where-Object { $_.Name -in $InstallDataFolders -and -not $RequireProtectedAncestors })
+        foreach ($folder in $data) {
+            if (-not $folder.PSIsContainer -or ($folder.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+                throw "The $($folder.Name) folder in the installation directory must be a plain directory."
+            }
         }
-        $children = @($children | Where-Object { $_ -ne $data })
+        $children = @($children | Where-Object { $_ -notin $data })
         $nested = @($children | Where-Object { $_.PSIsContainer -and -not ($_.Attributes -band [IO.FileAttributes]::ReparsePoint) } | ForEach-Object { Get-ChildItem -LiteralPath $_.FullName -Force -Recurse })
         foreach ($item in $children + $nested) {
             if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Installation files cannot be links.' }
             $relative = $item.FullName.Substring($full.Length + 1)
-            if ($relative -notmatch '^(Timelens(?:\.Collector|\.AI)?\.exe|unins\d+\.(exe|dat|msg)|internal(?:\\(register-tasks|unregister-tasks|maintenance|path-safety)\.ps1)?)$') {
+            # The .lnk is the localized uninstall shortcut to the uninstaller under Program Files.
+            if ($relative -notmatch '^(Timelens(?:\.Collector|\.AI)?\.exe|\u5378\u8f7d Timelens\.lnk|unins\d+\.(exe|dat|msg)|internal(?:\\(register-tasks|unregister-tasks|maintenance|path-safety)\.ps1)?)$') {
                 throw "The selected directory contains unrelated files. Select a dedicated Timelens folder: $relative"
             }
         }

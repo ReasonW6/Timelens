@@ -1,12 +1,11 @@
 use crate::{AppWindow, ButtonHeat, CollectionState, KeyCell, SystemRow, UiState};
 use anyhow::{Context, Result, anyhow};
 use chrono::TimeZone;
-use slint::{ComponentHandle, ModelRc, Timer, TimerMode, VecModel};
+use slint::{ComponentHandle, ModelRc, VecModel};
 use std::{
     cell::RefCell,
     rc::Rc,
     sync::{Arc, Mutex, mpsc},
-    time::Duration,
 };
 use timelens_storage::Storage;
 #[derive(Default)]
@@ -108,10 +107,8 @@ fn select(w: &AppWindow, d: &Data, s: &Storage, index: i32) -> Result<()> {
     g.set_activity(p.activity.contains(id));
     g.set_input(p.input.contains(id));
     g.set_snapshots(s.snapshot_exclusions()?.contains(id));
-    let (windows, reports) = s.application_deletion_impact(id)?;
-    g.set_impact(
-        format!("将删除「{name}」的 {windows} 个窗口实例和 {reports} 份本地报告。").into(),
-    );
+    let windows = s.application_deletion_impact(id)?;
+    g.set_impact(format!("将删除「{name}」的 {windows} 个窗口实例。").into());
     g.set_delete_confirmed(false);
     g.set_merge_confirmed(false);
     g.set_merge_index(-1);
@@ -141,7 +138,7 @@ pub fn install(
     w: &AppWindow,
     storage: Arc<Mutex<Storage>>,
     timeline: Rc<RefCell<UiState>>,
-) -> Result<Timer> {
+) -> Result<()> {
     let data = Rc::new(RefCell::new(Data::default()));
     let (sender, receiver) = mpsc::channel::<(i32, String, Result<Option<String>, String>)>();
     refresh(w, &mut data.borrow_mut(), &*lock(&storage)?)?;
@@ -247,6 +244,7 @@ pub fn install(
         let merge_confirmed = g.get_merge_confirmed();
         let storage = worker_storage.clone();
         let sender = sender.clone();
+        let wake = w.as_weak();
         g.set_busy(true);
         std::thread::spawn(move || {
             let result: Result<Option<String>> = (|| {
@@ -319,11 +317,13 @@ pub fn install(
                 })
             })();
             let _ = sender.send((action, name, result.map_err(|e| e.to_string())));
+            let _ = wake.upgrade_in_event_loop(|w| {
+                w.global::<CollectionState>().invoke_updates_ready();
+            });
         });
     });
     let weak = w.as_weak();
-    let timer = Timer::default();
-    timer.start(TimerMode::Repeated, Duration::from_millis(200), move || {
+    w.global::<CollectionState>().on_updates_ready(move || {
         let Some(w) = weak.upgrade() else {
             return;
         };
@@ -391,7 +391,7 @@ pub fn install(
             }
         }
     });
-    Ok(timer)
+    Ok(())
 }
 /// The local dates a range touches, both included, and whether it covers them
 /// whole; `None` stands for all records.

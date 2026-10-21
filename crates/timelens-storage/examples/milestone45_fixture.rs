@@ -106,7 +106,6 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut policy = storage.collection_policy()?;
     policy.paused = mode == "ui" || mode == "idle";
     storage.set_collection_policy(policy)?;
-    storage.generate_local_report(start, end, now)?;
     storage.verify_integrity()?;
     storage.checkpoint()?;
     println!(

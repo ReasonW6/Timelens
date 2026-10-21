@@ -1,5 +1,5 @@
 use crate::{AppWindow, startup};
-use slint::{ComponentHandle, Timer, TimerMode};
+use slint::ComponentHandle;
 use std::{
     sync::{
         Arc,
@@ -7,7 +7,6 @@ use std::{
         mpsc,
     },
     thread,
-    time::Duration,
 };
 
 struct Update {
@@ -42,6 +41,7 @@ fn request(
         );
     }
     let sender = sender.clone();
+    let weak = window.as_weak();
     thread::spawn(move || {
         let message = enabled.map(|enabled| match startup::set(&task, enabled) {
             Ok(()) => if enabled {
@@ -56,10 +56,11 @@ fn request(
         });
         let state = startup::read(&task).map_err(|error| format!("{error:#}"));
         let _ = sender.send(Update { state, message });
+        let _ = weak.upgrade_in_event_loop(|window| window.invoke_startup_ready());
     });
 }
 
-pub fn install(window: &AppWindow, task: Option<String>) -> Timer {
+pub fn install(window: &AppWindow, task: Option<String>) {
     let (sender, receiver) = mpsc::channel::<Update>();
     let busy = Arc::new(AtomicBool::new(false));
     if task.is_none() {
@@ -93,8 +94,7 @@ pub fn install(window: &AppWindow, task: Option<String>) -> Timer {
     });
     request(window, &task, None, &busy, &sender);
     let weak = window.as_weak();
-    let timer = Timer::default();
-    timer.start(TimerMode::Repeated, Duration::from_millis(100), move || {
+    window.on_startup_ready(move || {
         let Some(window) = weak.upgrade() else {
             return;
         };
@@ -124,5 +124,4 @@ pub fn install(window: &AppWindow, task: Option<String>) -> Timer {
             }
         }
     });
-    timer
 }
