@@ -1,12 +1,27 @@
 //! Keep an initially shown native window inside its monitor's work area.
 use slint::{ComponentHandle, PhysicalPosition, PhysicalSize, Timer, Window};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use windows::Win32::{
     Foundation::{POINT, RECT},
     Graphics::Gdi::{GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromPoint},
 };
 
+/// Whether the main window has opened once in this run; later shows keep the
+/// size the user left it at.
+static OPENED: AtomicBool = AtomicBool::new(false);
+
 pub fn fit_after_show<T: ComponentHandle + 'static>(component: &T) {
+    after_show(component, false);
+}
+
+/// Like [`fit_after_show`], but the main window's first show in a run also
+/// grows it to most of the monitor.
+pub fn open_main<T: ComponentHandle + 'static>(component: &T) {
+    after_show(component, true);
+}
+
+fn after_show<T: ComponentHandle + 'static>(component: &T, main: bool) {
     // Headless QA keeps its requested viewport whatever the host monitor is.
     #[cfg(debug_assertions)]
     if crate::qa::headless() {
@@ -19,12 +34,13 @@ pub fn fit_after_show<T: ComponentHandle + 'static>(component: &T) {
         if let Some(component) = weak.upgrade()
             && component.window().is_visible()
         {
-            fit_available_space(component.window());
+            let grow = main && !OPENED.swap(true, Ordering::Relaxed);
+            fit_available_space(component.window(), grow);
         }
     });
 }
 
-fn fit_available_space(window: &Window) {
+fn fit_available_space(window: &Window, grow: bool) {
     if window.is_maximized() || window.is_fullscreen() {
         return;
     }
@@ -45,12 +61,29 @@ fn fit_available_space(window: &Window) {
     if !unsafe { GetMonitorInfoW(monitor, &mut info) }.as_bool() {
         return;
     }
-    if let Some((position, size)) =
-        fitted_geometry(position, size, info.rcWork, window.scale_factor())
-    {
+    let scale = window.scale_factor();
+    let size = if grow {
+        opening_size(size, info.rcWork, scale)
+    } else {
+        size
+    };
+    // A grown window is centered even when it already fits where it is.
+    if let Some((position, size)) = fitted_geometry(position, size, info.rcWork, scale, grow) {
         window.set_size(size);
         window.set_position(position);
     }
+}
+
+/// Most of the work area, up to a logical size past which lines only get
+/// longer, and never smaller than the window already is.
+fn opening_size(size: PhysicalSize, work: RECT, scale: f32) -> PhysicalSize {
+    let share = |available: i32, part: f32, limit: f32| {
+        (available.max(0) as f32 * part).min(limit * scale) as u32
+    };
+    PhysicalSize::new(
+        size.width.max(share(work.right - work.left, 0.84, 1760.0)),
+        size.height.max(share(work.bottom - work.top, 0.88, 1100.0)),
+    )
 }
 
 fn fitted_geometry(
@@ -58,6 +91,7 @@ fn fitted_geometry(
     size: PhysicalSize,
     work: RECT,
     scale: f32,
+    center: bool,
 ) -> Option<(PhysicalPosition, PhysicalSize)> {
     let width = work.right.checked_sub(work.left)?;
     let height = work.bottom.checked_sub(work.top)?;
@@ -74,7 +108,7 @@ fn fitted_geometry(
             <= i64::from(work.right)
         && i64::from(position.y) + i64::from(size.height) + i64::from(frame_height)
             <= i64::from(work.bottom);
-    if fits {
+    if fits && !center {
         return None;
     }
     let size = PhysicalSize::new(
@@ -107,9 +141,41 @@ mod tests {
                 PhysicalPosition::new(345, 338),
                 PhysicalSize::new(1440, 900),
                 work,
-                1.0
+                1.0,
+                false
             )
             .is_none()
+        );
+    }
+
+    #[test]
+    fn opens_large_and_centered_but_not_past_the_limit() {
+        let work = RECT {
+            left: 0,
+            top: 0,
+            right: 1920,
+            bottom: 1040,
+        };
+        let size = opening_size(PhysicalSize::new(1440, 900), work, 1.0);
+        assert_eq!(size, PhysicalSize::new(1612, 915));
+        let (position, fitted) =
+            fitted_geometry(PhysicalPosition::new(0, 0), size, work, 1.0, true).unwrap();
+        assert_eq!(fitted, size);
+        assert_eq!(position, PhysicalPosition::new(146, 38));
+        // A wide monitor stops at the limit; a window already larger stays so.
+        let wide = RECT {
+            left: 0,
+            top: 0,
+            right: 3840,
+            bottom: 2100,
+        };
+        assert_eq!(
+            opening_size(PhysicalSize::new(1440, 900), wide, 1.0),
+            PhysicalSize::new(1760, 1100)
+        );
+        assert_eq!(
+            opening_size(PhysicalSize::new(2000, 1200), wide, 1.0),
+            PhysicalSize::new(2000, 1200)
         );
     }
 
@@ -139,7 +205,7 @@ mod tests {
                 1.5,
             ),
         ] {
-            let (position, fitted) = fitted_geometry(position, size, work, scale).unwrap();
+            let (position, fitted) = fitted_geometry(position, size, work, scale, false).unwrap();
             assert!(position.x >= work.left && position.y >= work.top);
             assert!(position.x + fitted.width as i32 + (16.0 * scale).ceil() as i32 <= work.right);
             assert!(

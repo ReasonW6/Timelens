@@ -1795,7 +1795,7 @@ export component AppWindow inherits Window {
                                         Rectangle { width: 6px; }
                                         VerticalLayout { alignment: center; Action { text: "AI 设置"; icon: @image-url("icons/settings.svg"); clicked => { root.open-settings(4); } } }
                                     }
-                                    if root.page == 4 : AiPanel { vertical-stretch: 1; narrow-reader: root.narrow; open-settings => { root.open-settings(4); } }
+                                    if root.page == 4 : AiPanel { vertical-stretch: 1; narrow: root.narrow; rail: root.rail; open-settings => { root.open-settings(4); } }
                                 }
                             }
 

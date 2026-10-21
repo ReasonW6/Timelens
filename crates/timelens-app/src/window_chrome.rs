@@ -51,7 +51,7 @@ fn native_handle(window: &slint::Window) -> Option<HWND> {
 pub fn show_and_activate(window: &AppWindow) -> Result<(), slint::PlatformError> {
     window.show()?;
     window.window().set_minimized(false);
-    crate::window_placement::fit_after_show(window);
+    crate::window_placement::open_main(window);
     if let Some(hwnd) = native_handle(window.window()) {
         unsafe {
             // SW_SHOW preserves a maximized window. Only a minimized native

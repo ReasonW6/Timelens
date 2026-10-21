@@ -1,6 +1,7 @@
 use crate::{
-    AiConnectionRow, AiHistoryRow, AiState, AppWindow, UiState,
+    AiConnectionRow, AiHistoryRow, AiStat, AiState, AppWindow, UiState,
     ai::{AiCommand, AiEvent, AiService},
+    markdown,
 };
 use anyhow::{Result, anyhow, bail};
 use chrono::{DateTime, Datelike, Local, NaiveDate, TimeZone, Timelike};
@@ -152,6 +153,17 @@ fn new_id() -> String {
 fn strings(values: impl IntoIterator<Item = String>) -> ModelRc<SharedString> {
     ModelRc::new(VecModel::from(
         values.into_iter().map(Into::into).collect::<Vec<_>>(),
+    ))
+}
+fn stats(values: Vec<(String, &str)>) -> ModelRc<AiStat> {
+    ModelRc::new(VecModel::from(
+        values
+            .into_iter()
+            .map(|(value, label)| AiStat {
+                value: value.into(),
+                label: label.into(),
+            })
+            .collect::<Vec<_>>(),
     ))
 }
 /// Whether a list already shows these values. Replacing a ComboBox model resets
@@ -344,8 +356,6 @@ pub fn install(
 ) -> Result<Installed> {
     let data = Rc::new(RefCell::new(UiData::default()));
     let sender = service.sender;
-    w.global::<AiState>()
-        .on_markdown(|text| crate::markdown::model(&text));
     reset_dataset_ui(w, &mut data.borrow_mut(), &*lock(&storage)?)?;
     macro_rules! bind {
         ($callback:ident,$body:expr) => {{
@@ -591,6 +601,8 @@ pub fn install(
             .ok_or_else(|| anyhow!("请选择 AI 连接"))?;
         d.use_profile = Some(p.id.clone());
         show_use(w, d);
+        // The last preview named the previous connection.
+        w.global::<AiState>().set_preview_target("".into());
         invalidate(w, d);
         Ok(())
     });
@@ -1262,7 +1274,7 @@ fn poll_preview(w: &AppWindow, d: &mut UiData) {
     match result {
         Ok(p) => {
             g.set_preview_target(p.target.into());
-            g.set_preview_facts(p.facts.into());
+            g.set_preview_stats(stats(p.stats));
             g.set_preview_empty(p.empty);
             g.set_preview_missing(p.missing.into());
             g.set_preview_missing_count(p.missing_count);
@@ -1273,6 +1285,7 @@ fn poll_preview(w: &AppWindow, d: &mut UiData) {
         Err(e) => {
             d.prepared = None;
             g.set_prepared(false);
+            g.set_preview_target("".into());
             g.set_preview_fix(e.downcast_ref::<Blocked>().map_or(0, |b| b.fix));
             g.set_preview_error(e.to_string().into());
             g.set_preview_state(2);
@@ -1289,7 +1302,8 @@ struct PreviewAsk {
 /// What a new summary would send, as the preview shows it.
 struct Preview {
     target: String,
-    facts: String,
+    /// Figures and what they count, as the preview's tiles show them.
+    stats: Vec<(String, &'static str)>,
     empty: bool,
     missing: String,
     missing_count: i32,
@@ -1327,17 +1341,13 @@ fn prepare_preview(s: &Storage, ask: &PreviewAsk) -> Result<Preview> {
     let empty = !envelope.available && ask.images == 0;
     let share = envelope.covered_ms as f64 * 100.0 / (end - start) as f64;
     let requests = if empty {
-        "不会调用 AI".to_owned()
+        0
+    } else if chunks.is_empty() {
+        1
     } else {
-        format!(
-            "预计 {} 次请求",
-            if chunks.is_empty() {
-                1
-            } else {
-                chunks.len() + 1
-            }
-        )
+        chunks.len() + 1
     };
+    let requests = (requests.to_string(), "次请求");
     let now = crate::unix_time_ms();
     let mut missing = envelope
         .missing
@@ -1356,12 +1366,13 @@ fn prepare_preview(s: &Storage, ask: &PreviewAsk) -> Result<Preview> {
     }
     Ok(Preview {
         target: format!("{} · {}", p.name, p.model.id),
-        facts: format!(
-            "有记录 {share:.0}% · {} 个应用 · 缺失 {} 段 · {requests} · {} 张快照",
-            envelope.applications.len(),
-            envelope.missing.len(),
-            ask.images
-        ),
+        stats: vec![
+            (format!("{share:.0}%"), "有记录"),
+            (envelope.applications.len().to_string(), "个应用"),
+            (envelope.missing.len().to_string(), "段缺失"),
+            requests,
+            (ask.images.to_string(), "张快照"),
+        ],
         empty,
         missing: missing.join("\n"),
         missing_count: envelope.missing.len() as i32,
@@ -2172,6 +2183,7 @@ fn clear_reader(w: &AppWindow) {
     g.set_reader_error("".into());
     g.set_reader_busy("".into());
     g.set_conversation("".into());
+    g.set_reader_blocks(markdown::model(Vec::new()));
     g.set_exposed_reasoning("".into());
     g.set_reasoning_active(false);
     g.set_token_label("".into());
@@ -2191,6 +2203,7 @@ fn show_version(w: &AppWindow, d: &mut UiData, s: &Storage, id: i64) -> Result<(
         d.leaf = messages.last().map(|m| m.id);
     }
     let mut text = v.answer.clone();
+    let mut blocks = markdown::blocks(&v.answer);
     let mut reasoning = v.reasoning.clone();
     let mut usage = v.usage.clone();
     let mut add_reasoning = |more: &str| {
@@ -2203,17 +2216,24 @@ fn show_version(w: &AppWindow, d: &mut UiData, s: &Storage, id: i64) -> Result<(
     };
     for m in s.ai_branch(id, d.leaf)? {
         match m.role.as_str() {
-            "clear_context" => text.push_str("\n\n—— 新话题：之后的追问不带上面的问答 ——"),
+            "clear_context" => {
+                text.push_str("\n\n—— 新话题：之后的追问不带上面的问答 ——");
+                blocks.push(markdown::topic("新话题：之后的追问不带上面的问答"));
+            }
             "user" => {
                 text.push_str("\n\n————————\n你：\n");
                 text.push_str(&m.body);
+                blocks.push(markdown::question(&m.body));
             }
             _ => {
-                text.push_str("\n\nAI：\n");
-                text.push_str(&m.body);
+                let mut body = m.body.clone();
                 if let Some(e) = &m.error {
-                    text.push_str(&format!("\n（回答没有完成：{}）", failure_text(Some(e))));
+                    body.push_str(&format!("\n（回答没有完成：{}）", failure_text(Some(e))));
                 }
+                text.push_str("\n\nAI：\n");
+                text.push_str(&body);
+                blocks.push(markdown::speaker(""));
+                blocks.extend(markdown::blocks(&body));
             }
         }
         add_reasoning(&m.reasoning);
@@ -2225,12 +2245,15 @@ fn show_version(w: &AppWindow, d: &mut UiData, s: &Storage, id: i64) -> Result<(
         match s.ai_job(job) {
             Ok(job) if job.state == "queued" || job.state == "running" => {
                 let running = job.state == "running";
-                text.push_str(if running {
-                    "\n\nAI（回答中…）：\n"
+                let state = if running {
+                    "回答中…"
                 } else {
-                    "\n\nAI（排队中…）：\n"
-                });
+                    "排队中…"
+                };
+                text.push_str(&format!("\n\nAI（{state}）：\n"));
                 text.push_str(&job.body);
+                blocks.push(markdown::speaker(state));
+                blocks.extend(markdown::blocks(&job.body));
                 add_reasoning(&job.reasoning);
                 busy = if running { "回答中…" } else { "排队中" };
                 thinking = running && job.body.is_empty() && !job.reasoning.is_empty();
@@ -2297,6 +2320,7 @@ fn show_version(w: &AppWindow, d: &mut UiData, s: &Storage, id: i64) -> Result<(
     g.set_pinned(v.pinned);
     g.set_has_follow_ups(!messages.is_empty());
     g.set_conversation(text.into());
+    g.set_reader_blocks(markdown::model(blocks));
     g.set_exposed_reasoning(reasoning.into());
     g.set_reasoning_active(thinking);
     g.set_token_label(usage_label(&usage).into());
@@ -2378,6 +2402,7 @@ fn show_job(w: &AppWindow, d: &mut UiData, s: &Storage, id: i64) -> Result<()> {
     g.set_pinned(false);
     g.set_has_follow_ups(false);
     g.set_reasoning_active(state == 2 && job.body.is_empty());
+    g.set_reader_blocks(markdown::model(markdown::blocks(&job.body)));
     g.set_conversation(job.body.into());
     g.set_exposed_reasoning(job.reasoning.into());
     g.set_token_label(usage_label(&job.usage).into());
@@ -2514,7 +2539,7 @@ fn reset_dataset_ui(w: &AppWindow, d: &mut UiData, s: &Storage) -> Result<()> {
     g.set_image_previewed(false);
     g.set_image_detail("".into());
     g.set_preview_target("".into());
-    g.set_preview_facts("".into());
+    g.set_preview_stats(stats(vec![]));
     g.set_preview_missing("".into());
     g.set_preview_missing_count(0);
     g.set_preview_empty(false);
@@ -2549,11 +2574,10 @@ fn reset_dataset_ui(w: &AppWindow, d: &mut UiData, s: &Storage) -> Result<()> {
         Some((start, end)) => set_range(w, d, start, end),
         None => invalidate(w, d),
     }
+    // The getting-started card already says what an empty list needs.
     g.set_status(
-        if d.profiles.is_empty() {
-            "先在设置中添加一个 AI 连接。总结和对话只保存在本机。"
-        } else if d.profiles.iter().any(ProviderProfile::is_tested) {
-            "总结和对话只保存在本机。"
+        if d.profiles.is_empty() || d.profiles.iter().any(ProviderProfile::is_tested) {
+            ""
         } else {
             "AI 连接需要先通过测试才能生成总结。"
         }

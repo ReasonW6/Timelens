@@ -1,6 +1,8 @@
 //! Just enough Markdown for reading AI answers: headings, lists, quotes, code
 //! blocks, rules and tables. Inline marks are dropped, since a Slint text has
-//! one style.
+//! one style. The reader puts a conversation together from its stored turns
+//! with [`question`], [`speaker`] and [`topic`], so text that only looks like a
+//! turn stays text.
 use std::rc::Rc;
 
 use slint::{ModelRc, SharedString, VecModel};
@@ -16,6 +18,9 @@ const CODE: i32 = 5;
 const RULE: i32 = 6;
 const TABLE_HEAD: i32 = 7;
 const TABLE_ROW: i32 = 8;
+const QUESTION: i32 = 9;
+const SPEAKER: i32 = 10;
+const TOPIC: i32 = 11;
 
 /// The text without emphasis, inline code marks and link targets.
 fn inline(text: &str) -> String {
@@ -222,8 +227,23 @@ pub fn blocks(text: &str) -> Vec<MdBlock> {
     out
 }
 
-pub fn model(text: &str) -> ModelRc<MdBlock> {
-    Rc::new(VecModel::from(blocks(text))).into()
+/// A follow-up question, shown as written.
+pub fn question(text: &str) -> MdBlock {
+    block(QUESTION, text.trim().to_owned(), "", 0)
+}
+
+/// The start of a follow-up answer; `state` names one still coming.
+pub fn speaker(state: &str) -> MdBlock {
+    block(SPEAKER, state.to_owned(), "", 0)
+}
+
+/// Where a new topic starts.
+pub fn topic(note: &str) -> MdBlock {
+    block(TOPIC, note.to_owned(), "", 0)
+}
+
+pub fn model(blocks: Vec<MdBlock>) -> ModelRc<MdBlock> {
+    Rc::new(VecModel::from(blocks)).into()
 }
 
 #[cfg(test)]
@@ -328,6 +348,17 @@ mod tests {
             vec![
                 (TABLE_HEAD, "".into(), vec!["A".into()]),
                 (CODE, "code".into(), vec![]),
+            ]
+        );
+    }
+
+    #[test]
+    fn text_that_looks_like_a_turn_stays_text() {
+        assert_eq!(
+            kinds("你：\nAI：\n```\nAI（回答中…）：\n```"),
+            vec![
+                (PARAGRAPH, "你：\nAI：".into(), "".into()),
+                (CODE, "AI（回答中…）：".into(), "".into()),
             ]
         );
     }
