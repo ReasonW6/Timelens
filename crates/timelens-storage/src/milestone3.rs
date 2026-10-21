@@ -6,7 +6,7 @@ use std::{
     ptr::{null, null_mut},
 };
 
-use rusqlite::{OptionalExtension, Transaction, TransactionBehavior, params};
+use rusqlite::{OptionalExtension, params};
 use windows_sys::Win32::Security::Cryptography::{
     BCRYPT_AES_ALGORITHM, BCRYPT_ALG_HANDLE, BCRYPT_AUTHENTICATED_CIPHER_MODE_INFO,
     BCRYPT_AUTHENTICATED_CIPHER_MODE_INFO_VERSION, BCRYPT_CHAINING_MODE, BCRYPT_KEY_HANDLE,
@@ -15,13 +15,12 @@ use windows_sys::Win32::Security::Cryptography::{
     BCryptHash, BCryptOpenAlgorithmProvider, BCryptSetProperty,
 };
 
-use super::{Result, Storage, StorageError, TimelineApplication, to_sql_u64};
+use super::{Result, Storage, StorageError, to_sql_u64};
 
 const SNAPSHOT_DIRECTORY: &str = "snapshots";
 const SNAPSHOT_MAGIC: &[u8; 8] = b"TLSNAP\0\x01";
 const SNAPSHOT_NONCE_BYTES: usize = 12;
 const SNAPSHOT_TAG_BYTES: usize = 16;
-const LOCAL_REPORT_RULES_VERSION: u32 = 2;
 const VALID_INTERVALS: &[u32] = &[1, 3, 5, 10, 15, 30, 60];
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -188,51 +187,11 @@ pub struct SnapshotImage {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct LocalReport {
-    pub id: i64,
-    pub range_started_utc_ms: i64,
-    pub range_ended_utc_ms: i64,
-    pub generated_utc_ms: i64,
-    pub rules_version: u32,
-    pub covered_ms: u64,
-    pub keyboard_count: u64,
-    pub left_click_count: u64,
-    pub middle_click_count: u64,
-    pub right_click_count: u64,
-    pub snapshot_success_count: u64,
-    pub snapshot_missing_count: u64,
-    pub applications: Vec<LocalReportApplication>,
-    pub gaps: Vec<LocalReportGap>,
-    pub snapshot_reasons: Vec<LocalReportSnapshotReason>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct LocalReportApplication {
-    pub identity: String,
-    pub display_name: String,
-    pub opened_ms: u64,
-    pub displayed_ms: u64,
-    pub focused_ms: u64,
-    pub background_ms: u64,
-    pub window_count: u64,
-    pub keyboard_count: u64,
-    pub left_click_count: u64,
-    pub middle_click_count: u64,
-    pub right_click_count: u64,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct LocalReportGap {
+pub struct CoverageGap {
     pub data_class: String,
     pub started_utc_ms: i64,
     pub ended_utc_ms: i64,
     pub reason: String,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct LocalReportSnapshotReason {
-    pub reason: String,
-    pub slot_count: u64,
 }
 
 /// The outcome of deleting several snapshot images at once.
@@ -247,7 +206,6 @@ pub struct SnapshotDeletion {
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) struct SnapshotRetentionOutcome {
     pub snapshot_items: u64,
-    pub report_items: u64,
     pub released_bytes: u64,
 }
 
@@ -500,181 +458,8 @@ impl Storage {
         self.delete_snapshots_from_containers(slot_ids, SnapshotMissingReason::UserDeleted)
     }
 
-    pub fn generate_local_report(
-        &self,
-        range_started_utc_ms: i64,
-        range_ended_utc_ms: i64,
-        generated_utc_ms: i64,
-    ) -> Result<LocalReport> {
-        if range_ended_utc_ms <= range_started_utc_ms || generated_utc_ms <= 0 {
-            return Err(StorageError::Integrity(
-                "local report range is invalid".to_owned(),
-            ));
-        }
-        let timeline = self.timeline_snapshot(range_started_utc_ms, range_ended_utc_ms)?;
-        let mut snapshot_statement = self.connection.prepare(
-            "SELECT result, COALESCE(missing_reason, 'success'), COUNT(*)
-             FROM snapshot_slots
-             WHERE slot_started_utc_ms >= ?1 AND slot_started_utc_ms < ?2
-             GROUP BY result, COALESCE(missing_reason, 'success')",
-        )?;
-        let snapshot_counts = snapshot_statement
-            .query_map(params![range_started_utc_ms, range_ended_utc_ms], |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    row_u64(row, 2)?,
-                ))
-            })?
-            .collect::<std::result::Result<Vec<_>, _>>()?;
-        let snapshot_success_count = snapshot_counts
-            .iter()
-            .filter(|(result, _, _)| result == "success")
-            .map(|(_, _, count)| *count)
-            .sum::<u64>();
-        let snapshot_missing_count = snapshot_counts
-            .iter()
-            .filter(|(result, _, _)| result != "success")
-            .map(|(_, _, count)| *count)
-            .sum::<u64>();
-        let snapshot_reasons = snapshot_counts
-            .into_iter()
-            .filter(|(result, _, _)| result != "success")
-            .map(|(_, reason, slot_count)| LocalReportSnapshotReason { reason, slot_count })
-            .collect::<Vec<_>>();
-
-        let (covered_ms, gaps) = self.data_coverage(range_started_utc_ms, range_ended_utc_ms)?;
-        let applications = timeline
-            .applications
-            .iter()
-            .map(local_report_application)
-            .collect::<Vec<_>>();
-
-        let transaction =
-            Transaction::new_unchecked(&self.connection, TransactionBehavior::Immediate)?;
-        transaction.execute(
-            "INSERT INTO local_reports (
-                range_started_utc_ms, range_ended_utc_ms, generated_utc_ms,
-                rules_version, covered_ms, gap_count, application_count,
-                keyboard_count, left_click_count, middle_click_count,
-                right_click_count, snapshot_success_count, snapshot_missing_count
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
-            params![
-                range_started_utc_ms,
-                range_ended_utc_ms,
-                generated_utc_ms,
-                LOCAL_REPORT_RULES_VERSION,
-                to_sql_u64(covered_ms, "report covered milliseconds")?,
-                gaps.len() as i64,
-                applications.len() as i64,
-                to_sql_u64(timeline.keyboard_count, "report keyboard count")?,
-                to_sql_u64(timeline.left_click_count, "report left clicks")?,
-                to_sql_u64(timeline.middle_click_count, "report middle clicks")?,
-                to_sql_u64(timeline.right_click_count, "report right clicks")?,
-                to_sql_u64(snapshot_success_count, "report snapshot success count")?,
-                to_sql_u64(snapshot_missing_count, "report snapshot missing count")?,
-            ],
-        )?;
-        let report_id = transaction.last_insert_rowid();
-        for (ordinal, application) in applications.iter().enumerate() {
-            transaction.execute(
-                "INSERT INTO local_report_applications (
-                    report_id, ordinal, application_identity, display_name,
-                    opened_ms, displayed_ms, focused_ms, background_ms,
-                    window_count, keyboard_count, left_click_count,
-                    middle_click_count, right_click_count
-                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
-                params![
-                    report_id,
-                    ordinal as i64,
-                    application.identity,
-                    application.display_name,
-                    to_sql_u64(
-                        application.opened_ms,
-                        "report application opened milliseconds"
-                    )?,
-                    to_sql_u64(
-                        application.displayed_ms,
-                        "report application displayed milliseconds"
-                    )?,
-                    to_sql_u64(
-                        application.focused_ms,
-                        "report application focused milliseconds"
-                    )?,
-                    to_sql_u64(
-                        application.background_ms,
-                        "report application background milliseconds"
-                    )?,
-                    to_sql_u64(application.window_count, "report application window count")?,
-                    to_sql_u64(
-                        application.keyboard_count,
-                        "report application keyboard count"
-                    )?,
-                    to_sql_u64(
-                        application.left_click_count,
-                        "report application left clicks"
-                    )?,
-                    to_sql_u64(
-                        application.middle_click_count,
-                        "report application middle clicks"
-                    )?,
-                    to_sql_u64(
-                        application.right_click_count,
-                        "report application right clicks"
-                    )?,
-                ],
-            )?;
-        }
-        for (ordinal, gap) in gaps.iter().enumerate() {
-            transaction.execute(
-                "INSERT INTO local_report_gaps (
-                    report_id, ordinal, data_class, started_utc_ms,
-                    ended_utc_ms, reason
-                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-                params![
-                    report_id,
-                    ordinal as i64,
-                    gap.data_class,
-                    gap.started_utc_ms,
-                    gap.ended_utc_ms,
-                    gap.reason,
-                ],
-            )?;
-        }
-        for reason in &snapshot_reasons {
-            transaction.execute(
-                "INSERT INTO local_report_snapshot_reasons (
-                    report_id, reason, slot_count
-                 ) VALUES (?1, ?2, ?3)",
-                params![
-                    report_id,
-                    reason.reason,
-                    to_sql_u64(reason.slot_count, "report snapshot reason count")?,
-                ],
-            )?;
-        }
-        transaction.commit()?;
-        Ok(LocalReport {
-            id: report_id,
-            range_started_utc_ms,
-            range_ended_utc_ms,
-            generated_utc_ms,
-            rules_version: LOCAL_REPORT_RULES_VERSION,
-            covered_ms,
-            keyboard_count: timeline.keyboard_count,
-            left_click_count: timeline.left_click_count,
-            middle_click_count: timeline.middle_click_count,
-            right_click_count: timeline.right_click_count,
-            snapshot_success_count,
-            snapshot_missing_count,
-            applications,
-            gaps,
-            snapshot_reasons,
-        })
-    }
-
     /// How much of the range was observed, and every interval with missing data.
-    pub fn data_coverage(&self, start: i64, end: i64) -> Result<(u64, Vec<LocalReportGap>)> {
+    pub fn data_coverage(&self, start: i64, end: i64) -> Result<(u64, Vec<CoverageGap>)> {
         let mut observed = self.connection.prepare("SELECT first_observed_utc_ms,last_observed_utc_ms FROM collector_runs WHERE first_observed_utc_ms<?2 AND last_observed_utc_ms>?1")?;
         let mut intervals = observed
             .query_map(params![start, end], |r| {
@@ -696,7 +481,7 @@ impl Storage {
         let mut cursor = start;
         for (s, e) in &union {
             if *s > cursor {
-                missing.push(LocalReportGap {
+                missing.push(CoverageGap {
                     started_utc_ms: cursor,
                     ended_utc_ms: *s,
                     data_class: "activity".into(),
@@ -706,7 +491,7 @@ impl Storage {
             cursor = cursor.max(*e);
         }
         if cursor < end {
-            missing.push(LocalReportGap {
+            missing.push(CoverageGap {
                 started_utc_ms: cursor,
                 ended_utc_ms: end,
                 data_class: "activity".into(),
@@ -715,7 +500,7 @@ impl Storage {
         }
         let mut gaps = self.connection.prepare("SELECT data_class,started_utc_ms,ended_utc_ms,reason FROM data_availability WHERE started_utc_ms<?2 AND ended_utc_ms>?1")?;
         for row in gaps.query_map(params![start, end], |r| {
-            Ok(LocalReportGap {
+            Ok(CoverageGap {
                 data_class: r.get(0)?,
                 started_utc_ms: r.get::<_, i64>(1)?.max(start),
                 ended_utc_ms: r.get::<_, i64>(2)?.min(end),
@@ -726,7 +511,7 @@ impl Storage {
         }
         let mut system=self.connection.prepare("SELECT kind,started_utc_ms,ended_utc_ms FROM system_intervals WHERE kind IN ('global_pause','privacy_exclusion','session_disconnected','secure_desktop','clock_discontinuity') AND started_utc_ms<?2 AND ended_utc_ms>?1")?;
         for row in system.query_map(params![start, end], |r| {
-            Ok(LocalReportGap {
+            Ok(CoverageGap {
                 data_class: "activity".into(),
                 reason: r.get(0)?,
                 started_utc_ms: r.get::<_, i64>(1)?.max(start),
@@ -746,160 +531,6 @@ impl Storage {
         ))
     }
 
-    pub fn load_local_report(&self, report_id: i64) -> Result<LocalReport> {
-        let header = self.connection.query_row(
-            "SELECT range_started_utc_ms, range_ended_utc_ms, generated_utc_ms,
-                    rules_version, covered_ms, keyboard_count, left_click_count,
-                    middle_click_count, right_click_count, snapshot_success_count,
-                    snapshot_missing_count
-             FROM local_reports WHERE report_id = ?1",
-            params![report_id],
-            |row| {
-                Ok((
-                    row.get::<_, i64>(0)?,
-                    row.get::<_, i64>(1)?,
-                    row.get::<_, i64>(2)?,
-                    row.get::<_, u32>(3)?,
-                    row_u64(row, 4)?,
-                    row_u64(row, 5)?,
-                    row_u64(row, 6)?,
-                    row_u64(row, 7)?,
-                    row_u64(row, 8)?,
-                    row_u64(row, 9)?,
-                    row_u64(row, 10)?,
-                ))
-            },
-        )?;
-        let mut application_statement = self.connection.prepare(
-            "SELECT application_identity, display_name, opened_ms, displayed_ms,
-                    focused_ms, background_ms, window_count, keyboard_count,
-                    left_click_count, middle_click_count, right_click_count
-             FROM local_report_applications WHERE report_id = ?1 ORDER BY ordinal",
-        )?;
-        let applications = application_statement
-            .query_map(params![report_id], |row| {
-                Ok(LocalReportApplication {
-                    identity: row.get(0)?,
-                    display_name: row.get(1)?,
-                    opened_ms: row_u64(row, 2)?,
-                    displayed_ms: row_u64(row, 3)?,
-                    focused_ms: row_u64(row, 4)?,
-                    background_ms: row_u64(row, 5)?,
-                    window_count: row_u64(row, 6)?,
-                    keyboard_count: row_u64(row, 7)?,
-                    left_click_count: row_u64(row, 8)?,
-                    middle_click_count: row_u64(row, 9)?,
-                    right_click_count: row_u64(row, 10)?,
-                })
-            })?
-            .collect::<std::result::Result<Vec<_>, _>>()?;
-        let mut gap_statement = self.connection.prepare(
-            "SELECT data_class, started_utc_ms, ended_utc_ms, reason
-             FROM local_report_gaps WHERE report_id = ?1 ORDER BY ordinal",
-        )?;
-        let gaps = gap_statement
-            .query_map(params![report_id], |row| {
-                Ok(LocalReportGap {
-                    data_class: row.get(0)?,
-                    started_utc_ms: row.get(1)?,
-                    ended_utc_ms: row.get(2)?,
-                    reason: row.get(3)?,
-                })
-            })?
-            .collect::<std::result::Result<Vec<_>, _>>()?;
-        let mut reason_statement = self.connection.prepare(
-            "SELECT reason, slot_count FROM local_report_snapshot_reasons
-             WHERE report_id = ?1 ORDER BY reason",
-        )?;
-        let snapshot_reasons = reason_statement
-            .query_map(params![report_id], |row| {
-                Ok(LocalReportSnapshotReason {
-                    reason: row.get(0)?,
-                    slot_count: row_u64(row, 1)?,
-                })
-            })?
-            .collect::<std::result::Result<Vec<_>, _>>()?;
-        Ok(LocalReport {
-            id: report_id,
-            range_started_utc_ms: header.0,
-            range_ended_utc_ms: header.1,
-            generated_utc_ms: header.2,
-            rules_version: header.3,
-            covered_ms: header.4,
-            keyboard_count: header.5,
-            left_click_count: header.6,
-            middle_click_count: header.7,
-            right_click_count: header.8,
-            snapshot_success_count: header.9,
-            snapshot_missing_count: header.10,
-            applications,
-            gaps,
-            snapshot_reasons,
-        })
-    }
-
-    pub fn latest_local_report(
-        &self,
-        range_started_utc_ms: i64,
-        range_ended_utc_ms: i64,
-    ) -> Result<Option<LocalReport>> {
-        let report_id = self
-            .connection
-            .query_row(
-                "SELECT report_id FROM local_reports
-                 WHERE range_started_utc_ms = ?1 AND range_ended_utc_ms = ?2
-                 ORDER BY generated_utc_ms DESC, report_id DESC LIMIT 1",
-                params![range_started_utc_ms, range_ended_utc_ms],
-                |row| row.get::<_, i64>(0),
-            )
-            .optional()?;
-        report_id.map(|id| self.load_local_report(id)).transpose()
-    }
-
-    /// The latest report whose range starts at `range_started_utc_ms`, for a
-    /// range such as today that still grows.
-    pub fn latest_local_report_starting(
-        &self,
-        range_started_utc_ms: i64,
-    ) -> Result<Option<LocalReport>> {
-        let report_id = self
-            .connection
-            .query_row(
-                "SELECT report_id FROM local_reports
-                 WHERE range_started_utc_ms = ?1
-                 ORDER BY generated_utc_ms DESC, report_id DESC LIMIT 1",
-                params![range_started_utc_ms],
-                |row| row.get::<_, i64>(0),
-            )
-            .optional()?;
-        report_id.map(|id| self.load_local_report(id)).transpose()
-    }
-
-    pub fn delete_local_report(&self, report_id: i64) -> Result<bool> {
-        Ok(self.connection.execute(
-            "DELETE FROM local_reports WHERE report_id = ?1",
-            params![report_id],
-        )? == 1)
-    }
-
-    pub(crate) fn apply_milestone3_retention(
-        &self,
-        now_utc_ms: i64,
-        activity_cutoff_utc_ms: Option<i64>,
-    ) -> Result<SnapshotRetentionOutcome> {
-        let mut outcome = SnapshotRetentionOutcome::default();
-        if let Some(cutoff) = activity_cutoff_utc_ms {
-            outcome.report_items = self.connection.execute(
-                "DELETE FROM local_reports WHERE generated_utc_ms < ?1",
-                params![cutoff],
-            )? as u64;
-        }
-        let images = self.apply_snapshot_day_retention(now_utc_ms)?;
-        outcome.snapshot_items = images.snapshot_items;
-        outcome.released_bytes = images.released_bytes;
-        Ok(outcome)
-    }
-
     pub(crate) fn remove_all_snapshot_files(&self) -> Result<()> {
         let directory = self.snapshot_directory();
         let Ok(entries) = fs::read_dir(&directory) else {
@@ -916,30 +547,6 @@ impl Storage {
 
     pub(crate) fn reconcile_snapshot_files(&self) -> Result<()> {
         self.reconcile_snapshot_containers()
-    }
-
-    pub(crate) fn has_local_report(&self) -> Result<bool> {
-        self.connection
-            .query_row("SELECT EXISTS(SELECT 1 FROM local_reports)", [], |row| {
-                row.get(0)
-            })
-            .map_err(Into::into)
-    }
-
-    pub(crate) fn clean_oldest_local_report(&self) -> Result<bool> {
-        let report_id = self
-            .connection
-            .query_row(
-                "SELECT report_id FROM local_reports
-                 ORDER BY generated_utc_ms, report_id LIMIT 1",
-                [],
-                |row| row.get::<_, i64>(0),
-            )
-            .optional()?;
-        report_id
-            .map(|report_id| self.delete_local_report(report_id))
-            .transpose()
-            .map(|deleted| deleted.unwrap_or(false))
     }
 
     pub(crate) fn snapshot_directory(&self) -> PathBuf {
@@ -1045,22 +652,6 @@ fn snapshot_slot_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<SnapshotS
             .transpose()?,
         plaintext_bytes: row_u64(row, 14)?,
     })
-}
-
-fn local_report_application(application: &TimelineApplication) -> LocalReportApplication {
-    LocalReportApplication {
-        identity: application.identity.clone(),
-        display_name: application.display_name.clone(),
-        opened_ms: application.opened_ms,
-        displayed_ms: application.displayed_ms,
-        focused_ms: application.focused_ms,
-        background_ms: application.background_ms,
-        window_count: application.window_count as u64,
-        keyboard_count: application.keyboard_count,
-        left_click_count: application.left_click_count,
-        middle_click_count: application.middle_click_count,
-        right_click_count: application.right_click_count,
-    }
 }
 
 fn is_webp(bytes: &[u8]) -> bool {
@@ -1424,7 +1015,7 @@ mod tests {
             })
             .unwrap();
         let outcome = storage
-            .apply_milestone3_retention(1_700_172_800_000, None)
+            .apply_snapshot_day_retention(1_700_172_800_000)
             .unwrap();
         assert_eq!(outcome.snapshot_items, 1);
         assert_eq!(
@@ -1466,7 +1057,7 @@ mod tests {
 
         // Capacity cleanup never removes the current local day.
         let outcome = storage
-            .apply_milestone3_retention(1_700_000_000_020 + 2 * 86_400_000, None)
+            .apply_snapshot_day_retention(1_700_000_000_020 + 2 * 86_400_000)
             .unwrap();
         assert_eq!(outcome.snapshot_items, 1);
         assert!(storage.snapshot_live_bytes().unwrap() <= policy.max_bytes);
@@ -1545,27 +1136,6 @@ mod tests {
                 .unwrap(),
             0
         );
-    }
-
-    #[test]
-    fn local_report_persists_only_aggregated_results() {
-        let directory = tempfile::tempdir().unwrap();
-        let storage = Storage::open(directory.path()).unwrap();
-        storage
-            .record_snapshot_missing(
-                1_700_000_000_000,
-                &SnapshotDisplay::session(),
-                SnapshotTrigger::Scheduled,
-                SnapshotMissingReason::Locked,
-            )
-            .unwrap();
-        let report = storage
-            .generate_local_report(1_699_999_000_000, 1_700_001_000_000, 1_700_001_000_010)
-            .unwrap();
-        assert_eq!(report.snapshot_missing_count, 1);
-        assert_eq!(report.snapshot_reasons[0].reason, "locked");
-        assert_eq!(storage.load_local_report(report.id).unwrap(), report);
-        assert!(storage.delete_local_report(report.id).unwrap());
     }
 
     fn contains_bytes(haystack: &[u8], needle: &[u8]) -> bool {

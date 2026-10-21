@@ -120,10 +120,6 @@ _Avoid_: Snapshot, monitoring gap
 An application-specific rule that suppresses a target display's snapshot while that application is displayed there. It affects neither activity records nor input attribution and is independent of any activity exclusion.
 _Avoid_: Activity exclusion, global pause
 
-**Usage report**:
-A persisted deterministic result generated for a user-selected time range, including its calculation version and data coverage. It is a retained derived artifact governed by automatic cleanup, not an authoritative activity fact.
-_Avoid_: Export, AI summary
-
 **Local dataset**:
 The authoritative Timelens data stored on the monitored Windows device for one Windows user.
 _Avoid_: Account, cloud profile
@@ -137,7 +133,7 @@ The permanent sequence of anonymous daily keyboard and left, middle, and right m
 _Avoid_: Minute input bucket, daily key frequency, application statistic
 
 **Data availability record**:
-A compact permanent record of which data classes are present, cleaned, paused, excluded, missing, or corrupt for a time range, allowing reports to disclose coverage without inventing facts.
+A compact permanent record of which data classes are present, cleaned, paused, excluded, missing, or corrupt for a time range, allowing statistics and exports to disclose coverage without inventing facts.
 _Avoid_: Activity record, monitoring gap, cleanup log
 
 **Projection**:
@@ -146,4 +142,4 @@ _Avoid_: Activity record, lifetime counter ledger
 
 **Timelens backup**:
 A manually created portable ZIP archive of selected local-dataset classes that excludes diagnostic logs and is restored by replacing, never merging, a local dataset. Password encryption is optional, and restoration never depends on the originating Windows user or device.
-_Avoid_: Usage report, Windows-bound archive, cloud sync
+_Avoid_: Export, Windows-bound archive, cloud sync

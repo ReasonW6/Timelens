@@ -1,4 +1,4 @@
-use crate::{AppWindow, DataState, SnapshotUiState, UiState};
+use crate::{AppWindow, DataState, SnapshotUiState};
 use anyhow::{Context, Result, anyhow, bail};
 use chrono::TimeZone;
 use slint::{ComponentHandle, Timer, TimerMode};
@@ -14,7 +14,7 @@ use std::{
 use timelens_ipc::{
     COLLECTOR_RESET_PAUSED_FILE, COLLECTOR_RESET_REQUEST_FILE, SingleInstanceGuard,
 };
-use timelens_storage::{BackupOptions, ExportFormat, PreparedRestore, RelocationStep, Storage};
+use timelens_storage::{BackupOptions, PreparedRestore, RelocationStep, Storage};
 
 static DATA_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 pub fn data_generation() -> u64 {
@@ -45,8 +45,8 @@ pub fn choose_named(save: bool, extension: &str, name: Option<&str>) -> Result<O
             "Timelens 备份",
         ),
         "webp" => ("WebP 图片", "选择图片", "导出快照", "Timelens 快照"),
-        "json" => ("JSON 文件", "选择文件", "导出报告", "Timelens 报告"),
-        "csv" => ("CSV 表格", "选择文件", "导出报告", "Timelens 报告"),
+        "json" => ("JSON 文件", "选择文件", "导出统计", "Timelens 统计"),
+        "csv" => ("CSV 表格", "选择文件", "导出统计", "Timelens 统计"),
         _ => (
             "Timelens 文件",
             "选择文件",
@@ -249,7 +249,6 @@ enum Update {
 pub fn install(
     w: &AppWindow,
     storage: Arc<Mutex<Storage>>,
-    timeline: Rc<RefCell<UiState>>,
     snapshots: Rc<RefCell<SnapshotUiState>>,
 ) -> Timer {
     let stage = Arc::new(Mutex::new(None::<PreparedRestore>));
@@ -283,11 +282,6 @@ pub fn install(
         .to_string();
         let images = g.get_snapshots();
         let confirm = g.get_replace_confirmed();
-        let paths = g.get_export_paths();
-        let range = {
-            let t = timeline.borrow();
-            (t.range_started_utc_ms, t.range_ended_utc_ms)
-        };
         let slot = snapshots.borrow().selected_slot_id;
         // An exported snapshot is named after when it was taken.
         let slot_name = snapshots
@@ -421,29 +415,6 @@ pub fn install(
                             lock(&storage)?.replace_from_backup(prepared, true)?;
                             dataset_changed();
                             Ok(Update::Done("数据集已恢复。".into()))
-                        })
-                    }
-                    5 | 6 => {
-                        let Some(path) =
-                            choose_file(true, if action == 5 { "json" } else { "csv" })?
-                        else {
-                            return Ok(Update::Canceled);
-                        };
-                        crate::snapshot::run_heavy_task(|| {
-                            let s = lock(&storage)?;
-                            let report =
-                                s.generate_local_report(range.0, range.1, crate::unix_time_ms())?;
-                            s.export_report(
-                                report.id,
-                                &path,
-                                if action == 5 {
-                                    ExportFormat::Json
-                                } else {
-                                    ExportFormat::Csv
-                                },
-                                paths,
-                            )?;
-                            Ok(Update::Done(format!("报告已导出到 {}", path.display())))
                         })
                     }
                     7 => {

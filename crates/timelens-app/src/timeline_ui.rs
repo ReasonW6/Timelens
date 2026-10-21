@@ -78,7 +78,6 @@ pub fn install(
         }
         window.set_page(page.clamp(0, 3));
         window.set_snapshot_open(page == 2);
-        window.set_report_open(page == 3);
         window.global::<DataState>().set_open(false);
         window.global::<CollectionState>().set_open(false);
         match page {
@@ -400,22 +399,6 @@ pub fn render(window: &AppWindow, state: &Rc<RefCell<UiState>>, snapshot: &Timel
                 .timestamp_millis_opt(anchor)
                 .single()
                 .is_some_and(|d| d.date_naive() == now_date),
-    );
-    window.set_has_gaps(!snapshot.monitoring_gaps.is_empty());
-    let gap_count = snapshot
-        .monitoring_gaps
-        .iter()
-        .map(|gap| (gap.started_utc_ms, gap.ended_utc_ms, &gap.reason))
-        .collect::<std::collections::BTreeSet<_>>()
-        .len();
-    window.set_coverage_value(
-        if snapshot.applications.is_empty() && snapshot.monitoring_gaps.is_empty() {
-            "当前时段尚无活动记录".into()
-        } else if snapshot.monitoring_gaps.is_empty() {
-            "未发现已知记录缺口".into()
-        } else {
-            format!("{gap_count} 段明确记录缺口").into()
-        },
     );
 }
 

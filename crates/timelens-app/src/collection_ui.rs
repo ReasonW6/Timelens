@@ -108,10 +108,8 @@ fn select(w: &AppWindow, d: &Data, s: &Storage, index: i32) -> Result<()> {
     g.set_activity(p.activity.contains(id));
     g.set_input(p.input.contains(id));
     g.set_snapshots(s.snapshot_exclusions()?.contains(id));
-    let (windows, reports) = s.application_deletion_impact(id)?;
-    g.set_impact(
-        format!("将删除「{name}」的 {windows} 个窗口实例和 {reports} 份本地报告。").into(),
-    );
+    let windows = s.application_deletion_impact(id)?;
+    g.set_impact(format!("将删除「{name}」的 {windows} 个窗口实例。").into());
     g.set_delete_confirmed(false);
     g.set_merge_confirmed(false);
     g.set_merge_index(-1);
