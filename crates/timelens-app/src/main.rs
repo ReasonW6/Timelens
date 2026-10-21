@@ -118,9 +118,8 @@ fn main() -> Result<()> {
             SingleInstanceGuard::acquire_collector().context("删除数据前必须先停止采集器")?;
         let data = options.data_directory()?;
         let control = options.control_directory()?;
-        if options.data_directory.is_none() {
-            credentials::remove_ai_credentials()?;
-        }
+        // Every AI credential is obsolete, whichever dataset it belonged to.
+        credentials::remove_ai_credentials()?;
         Storage::delete_owned_dataset(&data)?;
         if data != control {
             Storage::delete_owned_dataset(&control)?;
