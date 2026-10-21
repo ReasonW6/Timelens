@@ -1,6 +1,7 @@
 //! The home timeline: one continuous history read like a chat, earlier days above
 //! and now at the bottom. Earlier days load as the user scrolls up; they are
 //! cached because their records rarely change, while today follows the clock.
+use crate::i18n::{tr, trn};
 use std::{
     cell::RefCell,
     collections::BTreeMap,
@@ -249,25 +250,25 @@ fn build_day(
 
 fn day_title(day: &Day) -> (String, String) {
     let weekdays = [
-        "星期一",
-        "星期二",
-        "星期三",
-        "星期四",
-        "星期五",
-        "星期六",
-        "星期日",
+        tr!("星期一"),
+        tr!("星期二"),
+        tr!("星期三"),
+        tr!("星期四"),
+        tr!("星期五"),
+        tr!("星期六"),
+        tr!("星期日"),
     ];
     let weekday = weekdays[day.date.weekday().num_days_from_monday() as usize];
-    let date = day.date.format("%-m月%-d日").to_string();
+    let date = day.date.format(tr!("%-m月%-d日")).to_string();
     let this_year = Local::now().year() == day.date.year();
     let long_date = if this_year {
         date.clone()
     } else {
-        day.date.format("%Y年%-m月%-d日").to_string()
+        day.date.format(tr!("%Y年%-m月%-d日")).to_string()
     };
     match day.offset {
-        0 => ("今天".into(), format!("{date} · {weekday}")),
-        1 => ("昨天".into(), format!("{date} · {weekday}")),
+        0 => (tr!("今天").into(), format!("{date} · {weekday}")),
+        1 => (tr!("昨天").into(), format!("{date} · {weekday}")),
         _ => (long_date, weekday.into()),
     }
 }
@@ -287,10 +288,10 @@ fn period(timestamp: i64) -> &'static str {
         .map(|t| chrono::Timelike::hour(&t))
         .unwrap_or(0);
     match hour {
-        0..=5 => "凌晨",
-        6..=11 => "上午",
-        12..=17 => "下午",
-        _ => "晚上",
+        0..=5 => tr!("凌晨"),
+        6..=11 => tr!("上午"),
+        12..=17 => tr!("下午"),
+        _ => tr!("晚上"),
     }
 }
 
@@ -320,20 +321,15 @@ fn entry_note(participants: &[timeline_view::Participant]) -> String {
     let list = |apps: &[&timeline_view::Participant]| match apps {
         [] => None,
         [one] => Some(named(one)),
-        [one, two] => Some(format!("{}、{}", named(one), named(two))),
-        [one, two, ..] => Some(format!(
-            "{}、{} 等 {} 个",
-            named(one),
-            named(two),
-            apps.len()
-        )),
+        [one, two] => Some(tr!("{}、{}", named(one), named(two))),
+        [one, two, ..] => Some(tr!("{}、{} 等 {} 个", named(one), named(two), apps.len())),
     };
     let mut parts = Vec::new();
     if let Some(names) = list(&same_screen) {
-        parts.push(format!("同屏 {names}"));
+        parts.push(tr!("同屏 {}", names));
     }
     if let Some(names) = list(&interleaved) {
-        parts.push(format!("穿插 {names}"));
+        parts.push(tr!("穿插 {}", names));
     }
     parts.join(" · ")
 }
@@ -353,20 +349,20 @@ fn break_title(day: &Day, from: i64, to: i64) -> String {
         .into_iter()
         .filter_map(|(kind, ms)| {
             let label = match kind {
-                "global_pause" => "已暂停记录",
-                "locked" => "锁屏",
-                "sleep" => "睡眠",
-                "desktop_idle" => "空闲",
-                "session_disconnected" => "会话断开",
-                "secure_desktop" => "安全桌面",
-                "privacy_exclusion" => "不记录的应用",
+                "global_pause" => tr!("已暂停记录"),
+                "locked" => tr!("锁屏"),
+                "sleep" => tr!("睡眠"),
+                "desktop_idle" => tr!("空闲"),
+                "session_disconnected" => tr!("会话断开"),
+                "secure_desktop" => tr!("安全桌面"),
+                "privacy_exclusion" => tr!("不记录的应用"),
                 _ => return None,
             };
             Some((label, ms))
         })
         .max_by_key(|(_, ms)| *ms)
         .filter(|(_, ms)| ms * 2 >= length)
-        .map_or("无聚焦记录", |(label, _)| label);
+        .map_or(tr!("无聚焦记录"), |(label, _)| label);
     format!("{label} {}", format_duration(length.unsigned_abs()))
 }
 
@@ -381,17 +377,17 @@ fn matches_query(entry: &DayEntry, query: &str) -> bool {
 
 fn unrecorded_title(span: &Unrecorded) -> String {
     let why = if span.count > 1 {
-        format!("记录中断 {} 次", span.count)
+        trn!(span.count, "记录中断 {} 次", span.count)
     } else {
         match span.reason.as_str() {
-            "collector_restart" => "采集器未运行",
-            "buffer_overflow" => "记录过多，部分丢失",
-            "clock_discontinuity" => "系统时间跳变",
-            _ => "原因未知",
+            "collector_restart" => tr!("采集器未运行"),
+            "buffer_overflow" => tr!("记录过多，部分丢失"),
+            "clock_discontinuity" => tr!("系统时间跳变"),
+            _ => tr!("原因未知"),
         }
         .to_owned()
     };
-    format!("未记录 {} · {why}", format_duration(span.missing_ms))
+    tr!("未记录 {} · {}", format_duration(span.missing_ms), why)
 }
 
 /// A history row before it becomes a view item.
@@ -456,9 +452,9 @@ fn flatten_days<'a>(
         title: if !query.is_empty() || (!can_load && horizon == 0) {
             ""
         } else if can_load {
-            "载入更早的记录"
+            tr!("载入更早的记录")
         } else {
-            "已显示保留期内的全部记录"
+            tr!("已显示保留期内的全部记录")
         }
         .into(),
         more: i32::from(can_load),
@@ -496,14 +492,14 @@ fn flatten_days<'a>(
         // A search counts the day's hits instead.
         let (apps, duration) = if query.is_empty() {
             (
-                format!("{} 个应用", day.totals.len()),
-                format!("聚焦 {}", format_duration(day.focus_ms)),
+                trn!(day.totals.len(), "{} 个应用", day.totals.len()),
+                tr!("聚焦 {}", format_duration(day.focus_ms)),
             )
         } else {
             let hits = entries.iter().map(|e| e.entry.duration_ms).sum::<u64>();
             (
-                format!("{} 段", entries.len()),
-                format!("命中 {}", format_duration(hits)),
+                trn!(entries.len(), "{} 段", entries.len()),
+                tr!("命中 {}", format_duration(hits)),
             )
         };
         let day_top = top;
@@ -608,9 +604,9 @@ fn flatten_days<'a>(
                             .find(|n| n.to_lowercase().contains(&query))
                     {
                         note = if note.is_empty() {
-                            format!("含 {hit}")
+                            tr!("含 {}", hit)
                         } else {
-                            format!("含 {hit} · {note}")
+                            tr!("含 {} · {}", hit, note)
                         };
                     }
                     items.push(HistoryItem {
@@ -848,7 +844,7 @@ fn select(
     let date = Local
         .timestamp_millis_opt(start)
         .single()
-        .map(|d| d.format("%-m月%-d日").to_string())
+        .map(|d| d.format(tr!("%-m月%-d日")).to_string())
         .unwrap_or_default();
     window.set_detail_name(app_icon::display_name(identity, &entry.entry.name).into());
     window.set_detail_icon(app_icon::for_identity(identity));
@@ -957,11 +953,16 @@ fn show_detail(window: &AppWindow, entry: &DayEntry, span: &TimelineSnapshot) {
             icon: app_icon::for_identity(&participant.identity),
             tint,
             role: match participant.role {
-                ParticipantRole::Main => "主应用",
-                ParticipantRole::Interleaved => "穿插",
-                ParticipantRole::SameScreen => "同屏",
+                ParticipantRole::Main => tr!("主应用"),
+                ParticipantRole::Interleaved => tr!("穿插"),
+                ParticipantRole::SameScreen => tr!("同屏"),
             }
             .into(),
+            kind: match participant.role {
+                ParticipantRole::Main => 0,
+                ParticipantRole::Interleaved => 1,
+                ParticipantRole::SameScreen => 2,
+            },
             focused: format_duration(focused).into(),
             visible: format_duration(displayed).into(),
             background: format_duration(background).into(),
@@ -984,18 +985,15 @@ fn show_detail(window: &AppWindow, entry: &DayEntry, span: &TimelineSnapshot) {
     }
     let others = interleaved.len() + same_screen.len();
     let mut note = if others == 0 {
-        "期间没有切换到其他应用".to_owned()
+        tr!("期间没有切换到其他应用").to_owned()
     } else {
-        format!("期间还用到 {others} 个应用")
+        trn!(others, "期间还用到 {} 个应用", others)
     };
     // Short absences join neighbouring stretches into one activity; say how
     // much of it had no focus rather than counting it as used.
     let unfocused = entry.entry.duration_ms.saturating_sub(main_focused);
     if unfocused >= 60_000 {
-        note.push_str(&format!(
-            "，其中 {} 没有聚焦记录",
-            format_duration(unfocused)
-        ));
+        note.push_str(&tr!("，其中 {} 没有聚焦记录", format_duration(unfocused)));
     }
     window.set_detail_note(note.into());
     window.set_detail_main(main);
@@ -1064,7 +1062,7 @@ fn focus_range(
         state.selected_identity = entry.entry.identity.clone();
     }
     if let Err(error) = refresh_timeline(window, storage, ui_state) {
-        window.set_action_status(format!("刷新失败：{error}").into());
+        window.set_action_status(tr!("刷新失败：{}", error).into());
     }
 }
 
@@ -1092,7 +1090,7 @@ pub fn install(
             if let Some(window) = weak.upgrade()
                 && let Err(error) = paging::refresh(&window, &storage, &state)
             {
-                window.set_action_status(format!("读取历史失败：{error}").into());
+                window.set_action_status(tr!("读取历史失败：{}", error).into());
             }
         });
     }
@@ -1155,7 +1153,7 @@ pub fn install(
                 Ok(span) => show_detail(&window, &entry, &span),
                 Err(error) => {
                     window.set_detail_loading(false);
-                    window.set_detail_note(format!("读取各应用的时间失败：{error}").into());
+                    window.set_detail_note(tr!("读取各应用的时间失败：{}", error).into());
                 }
             }
         });
@@ -1209,17 +1207,17 @@ pub fn install(
                 return;
             };
             let Ok(date) = NaiveDate::parse_from_str(date.trim(), "%Y-%m-%d") else {
-                window.set_action_status("请输入有效日期，格式为 YYYY-MM-DD".into());
+                window.set_action_status(tr!("请输入有效日期，格式为 YYYY-MM-DD").into());
                 return;
             };
             let offset = (Local::now().date_naive() - date).num_days();
             if offset < 0 {
-                window.set_action_status("日期不能晚于今天".into());
+                window.set_action_status(tr!("日期不能晚于今天").into());
                 return;
             }
             let s = state.borrow();
             if offset as i32 > s.horizon {
-                window.set_action_status("这一天早于最早的记录".into());
+                window.set_action_status(tr!("这一天早于最早的记录").into());
                 return;
             }
             drop(s);

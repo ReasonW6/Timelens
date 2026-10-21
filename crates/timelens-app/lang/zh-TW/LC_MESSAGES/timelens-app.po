@@ -1,0 +1,1717 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: Timelens\n"
+"Language: zh-TW\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=1; plural=0;\n"
+
+#: main-window.slint
+msgid "0 次"
+msgstr "0 次"
+
+#: main-window.slint
+msgid "0 秒"
+msgstr "0 秒"
+
+#: main-window.slint
+msgid "1 小时"
+msgstr "1 小時"
+
+#: main-window.slint
+msgid "1 年"
+msgstr "1 年"
+
+#: main-window.slint
+msgid "10月"
+msgstr "10月"
+
+#: main-window.slint
+msgid "11月"
+msgstr "11月"
+
+#: main-window.slint
+msgid "12月"
+msgstr "12月"
+
+#: main-window.slint
+msgid "15 分钟"
+msgstr "15 分鐘"
+
+#: main-window.slint
+msgid "1月"
+msgstr "1月"
+
+#: main-window.slint
+msgid "2月"
+msgstr "2月"
+
+#: main-window.slint
+msgid "30 天"
+msgstr "30 天"
+
+#: main-window.slint
+msgid "30 天 · 100 MiB"
+msgstr "30 天 · 100 MiB"
+
+#: main-window.slint
+msgid "3月"
+msgstr "3月"
+
+#: main-window.slint
+msgid "4月"
+msgstr "4月"
+
+#: main-window.slint
+msgid "5月"
+msgstr "5月"
+
+#: main-window.slint
+msgid "6月"
+msgstr "6月"
+
+#: main-window.slint
+msgid "7 天"
+msgstr "7 天"
+
+#: main-window.slint
+msgid "7月"
+msgstr "7月"
+
+#: main-window.slint
+msgid "8月"
+msgstr "8月"
+
+#: main-window.slint
+msgid "90 天"
+msgstr "90 天"
+
+#: main-window.slint
+msgid "9月"
+msgstr "9月"
+
+#: about.slint
+msgid "Timelens {}，适用于 Windows 11。"
+msgstr "Timelens {}，適用於 Windows 11。"
+
+#: recovery.slint
+msgid "Timelens · 数据恢复"
+msgstr "Timelens · 資料復原"
+
+#: timeline.slint
+msgid "Timelens 会自动重新启动采集器；也可以在设置中查看记录状态。"
+msgstr "Timelens 會自動重新啟動採集器；也可以在設定中查看記錄狀態。"
+
+#: main-window.slint
+msgid "Timelens 会退出并打开修复工具，修复完成前不会记录活动和输入。"
+msgstr "Timelens 會結束並開啟修復工具，修復完成前不會記錄活動和輸入。"
+
+#: main-window.slint
+msgid "Timelens 记录什么、不记录什么。"
+msgstr "Timelens 記錄什麼、不記錄什麼。"
+
+#: data-panel.slint
+msgid "ZIP 包含活动、输入、设置和排除规则；登录任务不进入备份。"
+msgstr "ZIP 包含活動、輸入、設定和排除規則；登入工作不會進入備份。"
+
+#: main-window.slint
+msgctxt "duration"
+msgid "打开"
+msgstr "開啟"
+
+#: main-window.slint
+msgctxt "range"
+msgid "应用"
+msgstr "套用"
+
+#: main-window.slint
+msgid "{0}{1}日"
+msgstr "{0}{1}日"
+
+#: main-window.slint
+msgid "{0}年{1}"
+msgstr "{0}年{1}"
+
+#: collection-panel.slint
+msgid "{n} 组合并关联"
+msgid_plural "{n} 组合并关联"
+msgstr[0] "{n} 組合併關聯"
+
+#: timeline.slint
+msgid "{} {}，{}"
+msgstr "{} {}，{}"
+
+#: timeline.slint
+msgid "{} {}，{}，{}"
+msgstr "{} {}，{}，{}"
+
+#: timeline.slint
+msgid "{} {}，跳到日期"
+msgstr "{} {}，跳到日期"
+
+#: main-window.slint
+msgid "{} · 点选应用查看详情"
+msgstr "{} · 點選應用程式查看詳情"
+
+#: main-window.slint
+msgid "{} 之前的应用活动和输入明细会立即删除，无法恢复。"
+msgstr "{} 之前的應用程式活動和輸入明細會立即刪除，無法復原。"
+
+#: main-window.slint
+msgid "{} 分"
+msgstr "{} 分"
+
+#: main-window.slint
+msgid "{} 分钟"
+msgstr "{} 分鐘"
+
+#: collection-panel.slint
+msgid "{} 次"
+msgstr "{} 次"
+
+#: main-window.slint timeline.slint
+msgid "{}，{}，{}"
+msgstr "{}，{}，{}"
+
+#: main-window.slint
+msgid "{}，聚焦 {}"
+msgstr "{}，聚焦 {}"
+
+#: main-window.slint
+msgid "一"
+msgstr "一"
+
+#: main-window.slint
+msgid "三"
+msgstr "三"
+
+#: collection-panel.slint
+msgid "三份名单相互独立，切换后立即生效，不影响已有记录和图片。"
+msgstr "三份名單相互獨立，切換後立即生效，不影響已有記錄和圖片。"
+
+#: main-window.slint
+msgid "上一张"
+msgstr "上一張"
+
+#: main-window.slint
+msgid "上个月"
+msgstr "上個月"
+
+#: main-window.slint
+msgid "上午"
+msgstr "上午"
+
+#: main-window.slint
+msgid "下一张"
+msgstr "下一張"
+
+#: main-window.slint
+msgid "下个月"
+msgstr "下個月"
+
+#: main-window.slint
+msgid "下午"
+msgstr "下午"
+
+#: main-window.slint
+msgid "不会删除你导出到其他位置的文件。"
+msgstr "不會刪除你匯出到其他位置的檔案。"
+
+#: collection-panel.slint
+msgid "不拍摄快照"
+msgstr "不拍攝快照"
+
+#: main-window.slint
+msgid "不拍摄某些应用"
+msgstr "不拍攝某些應用程式"
+
+#: collection-panel.slint
+msgid "不记录活动"
+msgstr "不記錄活動"
+
+#: collection-panel.slint
+msgid "不记录输入"
+msgstr "不記錄輸入"
+
+#: collection-panel.slint
+msgid "不记录这个应用的身份与使用时间。"
+msgstr "不記錄這個應用程式的身分與使用時間。"
+
+#: data-panel.slint
+msgid "不设密码时，任何拿到 ZIP 的人都能读取其中的记录。"
+msgstr "不設密碼時，任何拿到 ZIP 的人都能讀取其中的記錄。"
+
+#: collection-panel.slint
+msgid "与另一个应用合并显示"
+msgstr "與另一個應用程式合併顯示"
+
+#: about.slint
+msgid "专注不是从不分心，而是每次分心后都愿意回来。"
+msgstr "專注不是從不分心，而是每次分心後都願意回來。"
+
+#: data-panel.slint
+msgid "两次输入的密码不一致。"
+msgstr "兩次輸入的密碼不一致。"
+
+#: main-window.slint
+msgid "两者合并成一项显示，原始记录不改写，之后可以在「已有合并」里解除。"
+msgstr "兩者合併成一項顯示，原始記錄不改寫，之後可以在「已有合併」裡解除。"
+
+#: collection-panel.slint
+msgid "中键（滚轮按下）"
+msgstr "中鍵（按下滾輪）"
+
+#: main-window.slint
+msgid "为单个应用设置排除、合并显示或删除历史。"
+msgstr "為單一應用程式設定排除、合併顯示或刪除歷史。"
+
+#: timeline.slint
+msgid "主应用"
+msgstr "主應用程式"
+
+#: main-window.slint
+msgid "主题"
+msgstr "主題"
+
+#: main-window.slint
+msgid "二"
+msgstr "二"
+
+#: main-window.slint
+msgid "五"
+msgstr "五"
+
+#: main-window.slint
+msgid "今天"
+msgstr "今天"
+
+#: about.slint
+msgid "今天不必完美，记下来就已经很好了。"
+msgstr "今天不必完美，記下來就已經很好了。"
+
+#: timeline.slint
+msgid "今天还没有记录"
+msgstr "今天還沒有記錄"
+
+#: main-window.slint
+msgid "从不记录"
+msgstr "從不記錄"
+
+#: data-panel.slint recovery.slint
+msgid "从备份恢复"
+msgstr "從備份復原"
+
+#: main-window.slint
+msgid "从左侧选择一张快照预览"
+msgstr "從左側選擇一張快照預覽"
+
+#: collection-panel.slint
+msgid "从已记录的应用中选择，或指定一个 EXE。规则只影响之后的记录。"
+msgstr "從已記錄的應用程式中選擇，或指定一個 EXE。規則只影響之後的記錄。"
+
+#: about.slint
+msgid "休息也是时间线的一部分，不必把它涂成灰色。"
+msgstr "休息也是時間軸的一部分，不必把它塗成灰色。"
+
+#: main-window.slint
+msgid "会自动尝试重启采集器"
+msgstr "會自動嘗試重新啟動採集器"
+
+#: recovery.slint
+msgid "使用已校验的新数据集"
+msgstr "使用已驗證的新資料集"
+
+#: data-panel.slint
+msgid "例如 D:\\TimelensData"
+msgstr "例如 D:\\TimelensData"
+
+#: recovery.slint
+msgid "便携 ZIP 备份"
+msgstr "可攜式 ZIP 備份"
+
+#: recovery.slint
+msgid "便携 ZIP 备份路径"
+msgstr "可攜式 ZIP 備份路徑"
+
+#: main-window.slint
+msgid "保留"
+msgstr "保留"
+
+#: recovery.slint
+msgid "保留原件，恢复数据"
+msgstr "保留原件，復原資料"
+
+#: main-window.slint
+msgid "保留时长"
+msgstr "保留時長"
+
+#: main-window.slint
+msgid "保留时长、备份与存储位置。"
+msgstr "保留時長、備份與儲存位置。"
+
+#: data-panel.slint
+msgid "修复工具"
+msgstr "修復工具"
+
+#: main-window.slint
+msgid "修复工具只在你确认后才会替换数据。"
+msgstr "修復工具只在你確認後才會取代資料。"
+
+#: collection-panel.slint
+msgid "先在上方选择一个应用，这里会显示受影响的窗口。"
+msgstr "先在上方選擇一個應用程式，這裡會顯示受影響的視窗。"
+
+#: main-window.slint
+msgid "先在日历中选择一天，再缩小到当天的某个时段。"
+msgstr "先在日曆中選擇一天，再縮小到當天的某個時段。"
+
+#: recovery.slint
+msgid "先恢复并校验，再决定是否切换到新的数据集。"
+msgstr "先復原並驗證，再決定是否切換到新的資料集。"
+
+#: main-window.slint
+msgid "先选择应用"
+msgstr "先選擇應用程式"
+
+#: main-window.slint
+msgid "全不选"
+msgstr "全不選"
+
+#: main-window.slint
+msgid "全天"
+msgstr "全天"
+
+#: main-window.slint
+msgid "全选"
+msgstr "全選"
+
+#: collection-panel.slint
+msgid "全部排除名单"
+msgstr "全部排除名單"
+
+#: main-window.slint
+msgid "全部显示器"
+msgstr "全部顯示器"
+
+#: main-window.slint
+msgid "全部记录"
+msgstr "全部記錄"
+
+#: main-window.slint
+msgid "六"
+msgstr "六"
+
+#: main-window.slint
+msgid "关于"
+msgstr "關於"
+
+#: main-window.slint
+msgid "关闭后保留明确的暂停区间，重新开启后不会补录。"
+msgstr "關閉後保留明確的暫停區間，重新開啟後不會補錄。"
+
+#: main-window.slint
+msgid "关闭大图（Esc）"
+msgstr "關閉大圖（Esc）"
+
+#: main-window.slint
+msgid "关闭提示"
+msgstr "關閉提示"
+
+#: recovery.slint
+msgid "关闭此窗口即可退出；原始文件仍保留在原位置。"
+msgstr "關閉此視窗即可結束；原始檔案仍保留在原位置。"
+
+#: main-window.slint
+msgid "关闭设置"
+msgstr "關閉設定"
+
+#: main-window.slint
+msgid "关闭详情"
+msgstr "關閉詳情"
+
+#: data-panel.slint
+msgid "再次输入密码"
+msgstr "再次輸入密碼"
+
+#: about.slint
+msgid "再点 {n} 下，看看时间会怎样"
+msgid_plural "再点 {n} 下，看看时间会怎样"
+msgstr[0] "再點 {n} 下，看看時間會怎樣"
+
+#: about.slint
+msgid "再转下去，透镜要晕了。"
+msgstr "再轉下去，透鏡要暈了。"
+
+#: recovery.slint
+msgid "准备升级本地数据"
+msgstr "準備升級本機資料"
+
+#: recovery.slint
+msgid "准备就绪。请选择上方操作。"
+msgstr "準備就緒。請選擇上方操作。"
+
+#: timeline.slint
+msgid "切换到任意窗口后，几秒内就会按时间出现在这里。"
+msgstr "切換到任意視窗後，幾秒內就會依時間出現在這裡。"
+
+#: data-panel.slint
+msgid "创建便携备份"
+msgstr "建立可攜式備份"
+
+#: data-panel.slint
+msgid "创建备份…"
+msgstr "建立備份…"
+
+#: main-window.slint
+msgid "删除 {} 的快照？"
+msgstr "刪除 {} 的快照？"
+
+#: main-window.slint
+msgid "删除…"
+msgstr "刪除…"
+
+#: collection-panel.slint
+msgid "删除「{}」的全部历史"
+msgstr "刪除「{}」的全部歷史"
+
+#: main-window.slint
+msgid "删除「{}」的全部历史？"
+msgstr "刪除「{}」的全部歷史？"
+
+#: collection-panel.slint
+msgid "删除「{}」的历史…"
+msgstr "刪除「{}」的歷史…"
+
+#: collection-panel.slint main-window.slint
+msgid "删除历史"
+msgstr "刪除歷史"
+
+#: collection-panel.slint
+msgid "删除历史…"
+msgstr "刪除歷史…"
+
+#: main-window.slint
+msgid "删除后图片无法恢复。"
+msgstr "刪除後圖片無法復原。"
+
+#: main-window.slint
+msgid "删除后图片无法恢复，时间线中保留对应的删除记录。"
+msgstr "刪除後圖片無法復原，時間軸中保留對應的刪除記錄。"
+
+#: main-window.slint
+msgid "删除图片"
+msgstr "刪除圖片"
+
+#: main-window.slint
+msgid "删除并缩短"
+msgstr "刪除並縮短"
+
+#: main-window.slint
+msgid "删除并降低上限"
+msgstr "刪除並降低上限"
+
+#: collection-panel.slint
+msgid "删除所选应用的全部历史"
+msgstr "刪除所選應用程式的全部歷史"
+
+#: main-window.slint
+msgid "删除所选的 {n} 张快照图片？"
+msgid_plural "删除所选的 {n} 张快照图片？"
+msgstr[0] "刪除所選的 {n} 張快照圖片？"
+
+#: main-window.slint
+msgid "删除活动、输入和快照，并轮换数据密钥。此操作无法撤销。"
+msgstr "刪除活動、輸入和快照，並輪換資料金鑰。此操作無法復原。"
+
+#: main-window.slint
+msgid "删除这张快照图片？"
+msgstr "刪除這張快照圖片？"
+
+#: main-window.slint
+msgid "前一天"
+msgstr "前一天"
+
+#: timeline.slint
+msgid "前台可见"
+msgstr "前景可見"
+
+#: timeline.slint
+msgid "前台可见 "
+msgstr "前景可見 "
+
+#: data-panel.slint
+msgid "加密存储"
+msgstr "加密儲存"
+
+#: main-window.slint
+msgid "加密存放在本机，不上传、不同步。"
+msgstr "加密存放在本機，不上傳、不同步。"
+
+#: data-panel.slint
+msgid "包含快照图片"
+msgstr "包含快照圖片"
+
+#: main-window.slint
+msgid "匿名累计总数会保留，快照图片与外部文件也会保留。此操作无法撤销。"
+msgstr "匿名累計總數會保留，快照圖片與外部檔案也會保留。此操作無法復原。"
+
+#: collection-panel.slint
+msgid "匿名累计总数和无法归属应用的每日键位总数会保留，快照图片与外部文件也会保留。"
+msgstr "匿名累計總數和無法歸屬應用程式的每日鍵位總數會保留，快照圖片與外部檔案也會保留。"
+
+#: recovery.slint
+msgid "升级并打开"
+msgstr "升級並開啟"
+
+#: main-window.slint
+msgid "单屏时优先拍聚焦窗口所在的显示器。"
+msgstr "單螢幕時優先拍聚焦視窗所在的顯示器。"
+
+#: main-window.slint
+msgid "危险操作"
+msgstr "危險操作"
+
+#: recovery.slint
+msgid "原数据位置"
+msgstr "原資料位置"
+
+#: recovery.slint
+msgid "原数据库、密钥和快照不会被覆盖。恢复及新建都使用另一个空目录；先完成校验，再由你选择是否切换。"
+msgstr "原資料庫、金鑰和快照不會被覆寫。復原及新建都使用另一個空目錄；先完成驗證，再由你選擇是否切換。"
+
+#: main-window.slint theme.slint
+msgid "取消"
+msgstr "取消"
+
+#: main-window.slint
+msgid "取消选择（Esc）"
+msgstr "取消選擇（Esc）"
+
+#: collection-panel.slint
+msgid "只保留匿名的每日总数。"
+msgstr "只保留匿名的每日總數。"
+
+#: main-window.slint
+msgid "只显示最近 500 条。缩小时段可以查看更早的快照。"
+msgstr "只顯示最近 500 筆。縮小時段可以查看更早的快照。"
+
+#: main-window.slint
+msgid "只显示聚焦最长的几个"
+msgstr "只顯示聚焦最長的幾個"
+
+#: main-window.slint
+msgid "只记录应用本身，不记录它打开了什么。"
+msgstr "只記錄應用程式本身，不記錄它開啟了什麼。"
+
+#: recovery.slint
+msgid "可以尝试从可读取的记录建立新数据集。无法恢复的记录会明确标记为缺失；采集和快照保持暂停，供你先检查排除规则。"
+msgstr "可以嘗試從可讀取的記錄建立新資料集。無法復原的記錄會明確標記為缺失；採集和快照保持暫停，供你先檢查排除規則。"
+
+#: data-panel.slint
+msgid "可以选择本机任意磁盘上的文件夹。迁移期间暂停记录，全部数据复制并校验通过后才会切换。"
+msgstr "可以選擇本機任意磁碟上的資料夾。移轉期間暫停記錄，全部資料複製並驗證通過後才會切換。"
+
+#: collection-panel.slint
+msgid "右键"
+msgstr "右鍵"
+
+#: main-window.slint
+msgid "合并"
+msgstr "合併"
+
+#: collection-panel.slint
+msgid "合并…"
+msgstr "合併…"
+
+#: main-window.slint
+msgid "合并「{}」与「{}」？"
+msgstr "合併「{}」與「{}」？"
+
+#: collection-panel.slint
+msgid "合并显示"
+msgstr "合併顯示"
+
+#: collection-panel.slint
+msgid "同一款软件的不同版本可以合并成一项显示，原始记录不改写，可随时解除。"
+msgstr "同一款軟體的不同版本可以合併成一項顯示，原始記錄不改寫，可隨時解除。"
+
+#: timeline.slint
+msgid "同屏 {}"
+msgstr "同螢幕 {}"
+
+#: main-window.slint
+msgid "同屏显示（{}）"
+msgstr "同螢幕顯示（{}）"
+
+#: main-window.slint
+msgid "后一天"
+msgstr "後一天"
+
+#: main-window.slint timeline.slint
+msgid "后台"
+msgstr "背景"
+
+#: timeline.slint
+msgid "后台 "
+msgstr "背景 "
+
+#: main-window.slint
+msgid "启动"
+msgstr "啟動"
+
+#: main-window.slint
+msgid "四"
+msgstr "四"
+
+#: main-window.slint
+msgid "回到现在"
+msgstr "回到現在"
+
+#: main-window.slint
+msgid "固定使用所选外观，不随 Windows 改变。"
+msgstr "固定使用所選外觀，不隨 Windows 改變。"
+
+#: main-window.slint
+msgid "图片保留时长"
+msgstr "圖片保留時長"
+
+#: main-window.slint
+msgid "在应用规则中为应用开启“不拍摄快照”。"
+msgstr "在應用程式規則中為應用程式開啟「不拍攝快照」。"
+
+#: recovery.slint
+msgid "在新目录建立空数据集"
+msgstr "在新目錄建立空資料集"
+
+#: main-window.slint
+msgid "在时间线中查看"
+msgstr "在時間軸中查看"
+
+#: about.slint
+msgid "在本机回看应用活动、输入统计和快照。"
+msgstr "在本機回顧應用程式活動、輸入統計和快照。"
+
+#: about.slint
+msgid "在浏览器中打开发布页，查看是否有新版本。Timelens 本身不联网。"
+msgstr "在瀏覽器中開啟發行頁，查看是否有新版本。Timelens 本身不連網。"
+
+#: recovery.slint
+msgid "处理中"
+msgstr "處理中"
+
+#: data-panel.slint
+msgid "备份与恢复"
+msgstr "備份與復原"
+
+#: data-panel.slint
+msgid "备份密码（没有则留空）"
+msgstr "備份密碼（沒有則留空）"
+
+#: recovery.slint
+msgid "备份独立密码"
+msgstr "備份獨立密碼"
+
+#: recovery.slint
+msgid "备份独立密码（可选）"
+msgstr "備份獨立密碼（選填）"
+
+#: main-window.slint
+msgid "外观"
+msgstr "外觀"
+
+#: collection-panel.slint
+msgid "多"
+msgstr "多"
+
+#: data-panel.slint
+msgid "好的"
+msgstr "好的"
+
+#: data-panel.slint
+msgid "存储位置"
+msgstr "儲存位置"
+
+#: main-window.slint
+msgid "安装与卸载程序"
+msgstr "安裝與解除安裝程式"
+
+#: main-window.slint
+msgid "安装器、卸载器这类一次性程序不计入记录。"
+msgstr "安裝程式、解除安裝程式這類一次性程式不計入記錄。"
+
+#: data-panel.slint
+msgid "完整性检查"
+msgstr "完整性檢查"
+
+#: main-window.slint
+msgid "定时快照"
+msgstr "定時快照"
+
+#: main-window.slint
+msgid "定时快照已关闭，可以在快照设置中开启，或者现在拍一张。"
+msgstr "定時快照已關閉，可以在快照設定中開啟，或者現在拍一張。"
+
+#: main-window.slint
+msgid "定时快照已开启，新的快照会按设置的间隔出现在这里。快照只保存在本机。"
+msgstr "定時快照已開啟，新的快照會依設定的間隔出現在這裡。快照只儲存在本機。"
+
+#: main-window.slint
+msgid "定时拍摄屏幕快照，帮你回忆当时在做什么。"
+msgstr "定時拍攝螢幕快照，幫你回想當時在做什麼。"
+
+#: main-window.slint
+msgid "实际大小（1）"
+msgstr "實際大小（1）"
+
+#: main-window.slint
+msgid "导出"
+msgstr "匯出"
+
+#: main-window.slint
+msgid "导出 CSV"
+msgstr "匯出 CSV"
+
+#: main-window.slint
+msgid "导出 JSON"
+msgstr "匯出 JSON"
+
+#: recovery.slint
+msgid "将切换到状态区中已校验的新位置。"
+msgstr "將切換到狀態區中已驗證的新位置。"
+
+#: collection-panel.slint
+msgid "少"
+msgstr "少"
+
+#: collection-panel.slint
+msgid "尚无排除规则。"
+msgstr "尚無排除規則。"
+
+#: recovery.slint
+msgid "尝试恢复可读取的记录"
+msgstr "嘗試復原可讀取的記錄"
+
+#: collection-panel.slint
+msgid "左键"
+msgstr "左鍵"
+
+#: main-window.slint
+msgid "已关闭，仍可在快照页手动拍一张。"
+msgstr "已關閉，仍可在快照頁手動拍一張。"
+
+#: main-window.slint
+msgid "已暂停记录"
+msgstr "已暫停記錄"
+
+#: collection-panel.slint
+msgid "已有合并"
+msgstr "已有合併"
+
+#: recovery.slint
+msgid "已校验"
+msgstr "已驗證"
+
+#: main-window.slint
+msgid "已选 {} 张"
+msgstr "已選 {} 張"
+
+#: main-window.slint
+msgid "已选 {} 张，可在上方删除"
+msgstr "已選 {} 張，可在上方刪除"
+
+#: main-window.slint
+msgid "常规"
+msgstr "一般"
+
+#: collection-panel.slint main-window.slint
+msgid "应用"
+msgstr "應用程式"
+
+#: main-window.slint
+msgid "应用规则"
+msgstr "應用程式規則"
+
+#: main-window.slint
+msgid "应用详情"
+msgstr "應用程式詳情"
+
+#: main-window.slint
+msgid "开启定时快照后生效。"
+msgstr "開啟定時快照後生效。"
+
+#: data-panel.slint
+msgid "开始迁移"
+msgstr "開始移轉"
+
+#: main-window.slint
+msgid "开机自启动"
+msgstr "開機自動啟動"
+
+#: data-panel.slint
+msgid "当前处于恢复模式。选择一个备份，校验通过后再替换数据集。"
+msgstr "目前處於復原模式。選擇一個備份，驗證通過後再取代資料集。"
+
+#: data-panel.slint
+msgid "当前数据目录"
+msgstr "目前資料目錄"
+
+#: main-window.slint
+msgid "当前显示器"
+msgstr "目前顯示器"
+
+#: collection-panel.slint
+msgid "当前没有合并关联。"
+msgstr "目前沒有合併關聯。"
+
+#: about.slint
+msgid "当前版本"
+msgstr "目前版本"
+
+#: main-window.slint
+msgid "当前的活动、输入和快照会被备份里的内容整体替换，不会合并，无法撤销。"
+msgstr "目前的活動、輸入和快照會被備份裡的內容整體取代，不會合併，無法復原。"
+
+#: main-window.slint
+msgid "当天时段"
+msgstr "當天時段"
+
+#: main-window.slint
+msgid "快照"
+msgstr "快照"
+
+#: main-window.slint
+msgid "快照只保存在本机，不会发送到任何地方。"
+msgstr "快照只儲存在本機，不會傳送到任何地方。"
+
+#: main-window.slint
+msgid "快照大图"
+msgstr "快照大圖"
+
+#: main-window.slint
+msgid "快照已关闭"
+msgstr "快照已關閉"
+
+#: main-window.slint
+msgid "快照设置"
+msgstr "快照設定"
+
+#: main-window.slint
+msgid "快照，缩放 {}%"
+msgstr "快照，縮放 {}%"
+
+#: main-window.slint
+msgid "快速选择"
+msgstr "快速選擇"
+
+#: data-panel.slint
+msgid "恢复会整体替换现有记录，不会合并。"
+msgstr "復原會整體取代現有記錄，不會合併。"
+
+#: recovery.slint
+msgid "恢复到新目录"
+msgstr "復原到新目錄"
+
+#: main-window.slint
+msgid "恢复原来的范围"
+msgstr "恢復原來的範圍"
+
+#: recovery.slint
+msgid "恢复并校验完成后，可在这里切换。"
+msgstr "復原並驗證完成後，可在這裡切換。"
+
+#: main-window.slint
+msgid "想留一份现在的数据，先取消，在上方「创建便携备份」导出一份。"
+msgstr "想留一份現在的資料，先取消，在上方「建立可攜式備份」匯出一份。"
+
+#: data-panel.slint
+msgid "我知道这份备份未加密、含敏感数据，并会妥善保管"
+msgstr "我知道這份備份未加密、含敏感資料，並會妥善保管"
+
+#: collection-panel.slint
+msgid "所有应用的活动、输入与快照排除。"
+msgstr "所有應用程式的活動、輸入與快照排除。"
+
+#: data-panel.slint
+msgid "所选文件夹里已有其他文件时，数据会放进其中新建的 Timelens 文件夹。外部备份与导出文件会留在原处。"
+msgstr "所選資料夾裡已有其他檔案時，資料會放進其中新建的 Timelens 資料夾。外部備份與匯出檔案會留在原處。"
+
+#: main-window.slint
+msgid "所选范围聚焦"
+msgstr "所選範圍聚焦"
+
+#: about.slint
+msgid "打开"
+msgstr "開啟"
+
+#: data-panel.slint
+msgid "打开修复工具…"
+msgstr "開啟修復工具…"
+
+#: about.slint
+msgid "打开发布页"
+msgstr "開啟發行頁"
+
+#: main-window.slint
+msgid "打开文件夹"
+msgstr "開啟資料夾"
+
+#: collection-panel.slint
+msgid "把「{}」与另一个应用合并"
+msgstr "把「{}」與另一個應用程式合併"
+
+#: main-window.slint
+msgid "把空间上限降到 {}？"
+msgstr "把空間上限降到 {}？"
+
+#: main-window.slint
+msgid "拍摄"
+msgstr "拍攝"
+
+#: main-window.slint
+msgid "拍摄的屏幕"
+msgstr "拍攝的螢幕"
+
+#: main-window.slint
+msgid "拍摄间隔"
+msgstr "拍攝間隔"
+
+#: main-window.slint
+msgid "持续"
+msgstr "持續"
+
+#: main-window.slint
+msgid "按应用排除活动、输入或快照，或合并显示同一款软件。"
+msgstr "依應用程式排除活動、輸入或快照，或合併顯示同一款軟體。"
+
+#: main-window.slint
+msgid "按当前策略清理"
+msgstr "依目前策略清理"
+
+#: collection-panel.slint
+msgid "按键抬起后再次按下计为一次。键帽标记物理位置，不代表输入内容。"
+msgstr "按鍵放開後再次按下計為一次。鍵帽標記實體位置，不代表輸入內容。"
+
+#: collection-panel.slint
+msgid "按键抬起后再次按下计为一次。键帽标记物理位置，不代表输入内容。键位与鼠标按整天保存，这里显示所选时段所在日期的全天数据。"
+msgstr "按鍵放開後再次按下計為一次。鍵帽標記實體位置，不代表輸入內容。鍵位與滑鼠依整天儲存，這裡顯示所選時段所在日期的全天資料。"
+
+#: data-panel.slint
+msgid "换一个备份…"
+msgstr "換一個備份…"
+
+#: collection-panel.slint
+msgid "排除规则"
+msgstr "排除規則"
+
+#: main-window.slint
+msgid "搜索应用，例如 微信"
+msgstr "搜尋應用程式，例如 LINE"
+
+#: recovery.slint
+msgid "收起其他恢复方式"
+msgstr "收起其他復原方式"
+
+#: main-window.slint
+msgid "放大"
+msgstr "放大"
+
+#: main-window.slint
+msgid "放大（+）"
+msgstr "放大（+）"
+
+#: main-window.slint
+msgid "数据与存储"
+msgstr "資料與儲存"
+
+#: main-window.slint
+msgid "数据只保存在这台电脑"
+msgstr "資料只儲存在這台電腦"
+
+#: data-panel.slint
+msgid "数据损坏时使用：Timelens 会退出并打开修复工具，从备份或可读取的记录重建数据。"
+msgstr "資料損壞時使用：Timelens 會結束並開啟修復工具，從備份或可讀取的記錄重建資料。"
+
+#: main-window.slint
+msgid "数据覆盖 {}"
+msgstr "資料覆蓋 {}"
+
+#: main-window.slint
+msgid "数据覆盖 {}，{}"
+msgstr "資料覆蓋 {}，{}"
+
+#: main-window.slint
+msgid "数据覆盖 {}，{}，收起明细"
+msgstr "資料覆蓋 {}，{}，收起明細"
+
+#: main-window.slint
+msgid "数据覆盖 {}，{}，查看明细"
+msgstr "資料覆蓋 {}，{}，查看明細"
+
+#: recovery.slint
+msgid "新数据目录"
+msgstr "新資料目錄"
+
+#: recovery.slint
+msgid "无密码备份请留空"
+msgstr "無密碼備份請留空"
+
+#: main-window.slint
+msgid "无论保留多久，数据库超过上限时都会先清理最早的一天。快照图片另有上限。"
+msgstr "無論保留多久，資料庫超過上限時都會先清理最早的一天。快照圖片另有上限。"
+
+#: main-window.slint
+msgid "日"
+msgstr "日"
+
+#: main-window.slint
+msgid "早于 {} 天的快照图片会立即删除，无法恢复。时间线中保留对应的清理记录。"
+msgstr "早於 {} 天的快照圖片會立即刪除，無法復原。時間軸中保留對應的清理記錄。"
+
+#: main-window.slint
+msgid "时间线"
+msgstr "時間軸"
+
+#: about.slint
+msgid "时间被倒拨了三圈——可惜只在这枚图标里有效。"
+msgstr "時間被倒撥了三圈——可惜只在這枚圖示裡有效。"
+
+#: main-window.slint
+msgid "昨天"
+msgstr "昨天"
+
+#: main-window.slint
+msgid "显示"
+msgstr "顯示"
+
+#: main-window.slint
+msgid "显示全部 {} 个窗口"
+msgstr "顯示全部 {} 個視窗"
+
+#: main-window.slint
+msgid "晚上"
+msgstr "晚上"
+
+#: main-window.slint
+msgid "普通设置与排除规则保留。外部备份和导出文件不会删除。"
+msgstr "一般設定與排除規則保留。外部備份和匯出檔案不會刪除。"
+
+#: timeline.slint
+msgid "暂停期间不记录活动与输入，继续后从现在开始记录。"
+msgstr "暫停期間不記錄活動與輸入，繼續後從現在開始記錄。"
+
+#: main-window.slint
+msgid "暂停记录"
+msgstr "暫停記錄"
+
+#: main-window.slint
+msgid "暂停记录多久？"
+msgstr "暫停記錄多久？"
+
+#: main-window.slint
+msgid "更改时需要管理员确认。关闭自启动不会停止当前记录，之后仍可手动打开 Timelens。"
+msgstr "變更時需要系統管理員確認。關閉自動啟動不會停止目前記錄，之後仍可手動開啟 Timelens。"
+
+#: main-window.slint
+msgid "替换数据"
+msgstr "取代資料"
+
+#: main-window.slint
+msgid "最近 30 天"
+msgstr "最近 30 天"
+
+#: main-window.slint
+msgid "最近 30 天没有找到“{}”"
+msgstr "最近 30 天沒有找到「{}」"
+
+#: main-window.slint
+msgid "最近 7 天"
+msgstr "最近 7 天"
+
+#: main-window.slint
+msgid "有新活动"
+msgstr "有新活動"
+
+#: timeline.slint
+msgid "未打开"
+msgstr "未開啟"
+
+#: recovery.slint
+msgid "本地固定磁盘上的空目录"
+msgstr "本機固定磁碟上的空目錄"
+
+#: main-window.slint
+msgid "本机时间回看"
+msgstr "本機時間回顧"
+
+#: main-window.slint
+msgid "来自时间线：{}"
+msgstr "來自時間軸：{}"
+
+#: main-window.slint
+msgid "查找应用"
+msgstr "尋找應用程式"
+
+#: about.slint
+msgid "查看源代码、更新记录，或反馈问题。"
+msgstr "查看原始碼、更新記錄，或回報問題。"
+
+#: timeline.slint
+msgid "查看记录设置"
+msgstr "查看記錄設定"
+
+#: main-window.slint timeline.slint
+msgid "查看这段的快照"
+msgstr "查看這段的快照"
+
+#: recovery.slint
+msgid "校验并恢复备份到新目录"
+msgstr "驗證並復原備份到新目錄"
+
+#: data-panel.slint
+msgid "检查数据库的完整性与外键。"
+msgstr "檢查資料庫的完整性與外部索引鍵。"
+
+#: about.slint
+msgid "检查更新"
+msgstr "檢查更新"
+
+#: data-panel.slint
+msgid "正在处理…"
+msgstr "正在處理…"
+
+#: collection-panel.slint main-window.slint recovery.slint
+msgid "正在处理，请稍候…"
+msgstr "正在處理，請稍候…"
+
+#: main-window.slint
+msgid "正在统计…"
+msgstr "正在統計…"
+
+#: main-window.slint
+msgid "正在统计全部记录…"
+msgstr "正在統計全部記錄…"
+
+#: main-window.slint
+msgid "正在统计这段时间…"
+msgstr "正在統計這段時間…"
+
+#: main-window.slint
+msgid "正在记录"
+msgstr "正在記錄"
+
+#: main-window.slint
+msgid "正在读取各应用的时间…"
+msgstr "正在讀取各應用程式的時間…"
+
+#: data-panel.slint
+msgid "正在读取数据位置…"
+msgstr "正在讀取資料位置…"
+
+#: data-panel.slint
+msgid "正在迁移数据"
+msgstr "正在移轉資料"
+
+#: main-window.slint
+msgid "正在连接采集器"
+msgstr "正在連線採集器"
+
+#: timeline.slint
+msgid "正在连接采集器…"
+msgstr "正在連線採集器…"
+
+#: collection-panel.slint
+msgid "此操作无法撤销。"
+msgstr "此操作無法復原。"
+
+#: collection-panel.slint
+msgid "此范围没有系统状态记录。"
+msgstr "此範圍沒有系統狀態記錄。"
+
+#: main-window.slint
+msgid "每 1 小时拍一张，只保存在本机。"
+msgstr "每 1 小時拍一張，只儲存在本機。"
+
+#: main-window.slint
+msgid "每 {} 分钟拍一张，只保存在本机。"
+msgstr "每 {} 分鐘拍一張，只儲存在本機。"
+
+#: main-window.slint
+msgid "每隔多久拍一张。"
+msgstr "每隔多久拍一張。"
+
+#: main-window.slint
+msgid "永久"
+msgstr "永久"
+
+#: main-window.slint
+msgid "永久累计的输入总数保留。快照使用自己的上限。外部备份和导出文件不会删除。"
+msgstr "永久累計的輸入總數保留。快照使用自己的上限。外部備份和匯出檔案不會刪除。"
+
+#: main-window.slint
+msgid "永久累计的输入总数保留。快照使用自己的保留策略。外部备份和导出文件不会删除。"
+msgstr "永久累計的輸入總數保留。快照使用自己的保留策略。外部備份和匯出檔案不會刪除。"
+
+#: main-window.slint
+msgid "没有匹配的应用，试试其他名称。"
+msgstr "沒有符合的應用程式，試試其他名稱。"
+
+#: recovery.slint
+msgid "没有备份？查看其他方式"
+msgstr "沒有備份？查看其他方式"
+
+#: main-window.slint
+msgid "活动、输入和快照将被删除，数据密钥也会轮换。此操作无法撤销。"
+msgstr "活動、輸入和快照將被刪除，資料金鑰也會輪換。此操作無法復原。"
+
+#: main-window.slint
+msgid "活动数据保留"
+msgstr "活動資料保留"
+
+#: main-window.slint
+msgid "活动记录使用自己的保留策略，不受影响。外部备份和导出文件不会删除。"
+msgstr "活動記錄使用自己的保留策略，不受影響。外部備份和匯出檔案不會刪除。"
+
+#: main-window.slint
+msgid "活动详情"
+msgstr "活動詳情"
+
+#: main-window.slint
+msgid "浅色"
+msgstr "淺色"
+
+#: recovery.slint
+msgid "浏览"
+msgstr "瀏覽"
+
+#: main-window.slint
+msgid "深色"
+msgstr "深色"
+
+#: main-window.slint
+msgid "清空…"
+msgstr "清除…"
+
+#: main-window.slint
+msgid "清空全部本地记录"
+msgstr "清除全部本機記錄"
+
+#: main-window.slint
+msgid "清空全部本地记录？"
+msgstr "清除全部本機記錄？"
+
+#: main-window.slint
+msgid "清除搜索"
+msgstr "清除搜尋"
+
+#: main-window.slint
+msgid "灰色的日子早于最早的记录或晚于今天。"
+msgstr "灰色的日子早於最早的記錄或晚於今天。"
+
+#: main-window.slint
+msgid "点选图片；按住 Shift 再点另一张可选中这段时间。全选只含列表中已显示的快照。"
+msgstr "點選圖片；按住 Shift 再點另一張可選取這段時間。全選只含清單中已顯示的快照。"
+
+#: main-window.slint
+msgid "版本、更新与项目信息。"
+msgstr "版本、更新與專案資訊。"
+
+#: about.slint
+msgid "版本与更新"
+msgstr "版本與更新"
+
+#: collection-panel.slint
+msgid "物理键位热度"
+msgstr "實體鍵位熱度"
+
+#: recovery.slint
+msgid "状态"
+msgstr "狀態"
+
+#: data-panel.slint
+msgid "独立密码无法找回，也不会保存在备份内；忘记密码后这份备份无法打开。"
+msgstr "獨立密碼無法找回，也不會儲存在備份內；忘記密碼後這份備份無法開啟。"
+
+#: data-panel.slint
+msgid "独立密码（留空则不加密）"
+msgstr "獨立密碼（留空則不加密）"
+
+#: data-panel.slint
+msgid "用一份便携备份替换当前的全部记录。恢复前会先校验备份。"
+msgstr "用一份可攜式備份取代目前的全部記錄。復原前會先驗證備份。"
+
+#: recovery.slint
+msgid "用于恢复的新数据目录"
+msgstr "用於復原的新資料目錄"
+
+#: data-panel.slint
+msgid "用此备份替换当前数据…"
+msgstr "用此備份取代目前資料…"
+
+#: main-window.slint
+msgid "用这份备份替换当前全部记录？"
+msgstr "用這份備份取代目前全部記錄？"
+
+#: main-window.slint
+msgid "由本机记录直接计算"
+msgstr "由本機記錄直接計算"
+
+#: about.slint
+msgid "界面图标使用 Tabler Icons，遵循 MIT 许可。"
+msgstr "介面圖示使用 Tabler Icons，遵循 MIT 授權。"
+
+#: main-window.slint
+msgid "登录 Windows 后在后台启动 Timelens。"
+msgstr "登入 Windows 後在背景啟動 Timelens。"
+
+#: main-window.slint
+msgid "直到手动继续"
+msgstr "直到手動繼續"
+
+#: main-window.slint
+msgid "直到明天"
+msgstr "直到明天"
+
+#: data-panel.slint
+msgid "知道了"
+msgstr "知道了"
+
+#: recovery.slint
+msgid "确认数据位置并阅读说明，然后继续。"
+msgstr "確認資料位置並閱讀說明，然後繼續。"
+
+#: main-window.slint
+msgid "确认清空"
+msgstr "確認清除"
+
+#: collection-panel.slint
+msgid "空闲、锁屏、睡眠等系统状态在所选范围内的时长，按时长排列。"
+msgstr "閒置、鎖定畫面、睡眠等系統狀態在所選範圍內的時長，依時長排列。"
+
+#: main-window.slint
+msgid "空间上限"
+msgstr "空間上限"
+
+#: main-window.slint
+msgid "空间上限 {}，超出时先清理最早的图片。"
+msgstr "空間上限 {}，超出時先清理最早的圖片。"
+
+#: main-window.slint
+msgid "穿插切换（{}）"
+msgstr "穿插切換（{}）"
+
+#: main-window.slint
+msgid "窗口标题、网址和文档名"
+msgstr "視窗標題、網址和文件名稱"
+
+#: main-window.slint
+msgid "窗口（{}）"
+msgstr "視窗（{}）"
+
+#: main-window.slint
+msgid "立即拍摄"
+msgstr "立即拍攝"
+
+#: main-window.slint
+msgid "立即清理"
+msgstr "立即清理"
+
+#: main-window.slint
+msgid "等待首次上报…"
+msgstr "等待首次回報…"
+
+#: main-window.slint
+msgid "管理"
+msgstr "管理"
+
+#: collection-panel.slint
+msgid "系统状态"
+msgstr "系統狀態"
+
+#: main-window.slint
+msgid "系统默认"
+msgstr "系統預設"
+
+#: main-window.slint
+msgid "系统默认跟随 Windows 的显示语言，不支持的语言显示为英文。"
+msgstr "系統預設跟隨 Windows 的顯示語言，不支援的語言顯示為英文。"
+
+#: main-window.slint
+msgid "累计聚焦"
+msgstr "累計聚焦"
+
+#: main-window.slint
+msgid "统计"
+msgstr "統計"
+
+#: main-window.slint timeline.slint
+msgid "继续记录"
+msgstr "繼續記錄"
+
+#: data-panel.slint
+msgid "维护"
+msgstr "維護"
+
+#: main-window.slint
+msgid "缩小（-）"
+msgstr "縮小（-）"
+
+#: main-window.slint
+msgid "缩短快照图片保留期？"
+msgstr "縮短快照圖片保留期？"
+
+#: main-window.slint
+msgid "缩短活动数据保留期？"
+msgstr "縮短活動資料保留期？"
+
+#: main-window.slint timeline.slint
+msgid "聚焦"
+msgstr "聚焦"
+
+#: timeline.slint
+msgid "聚焦 "
+msgstr "聚焦 "
+
+#: timeline.slint
+msgid "聚焦 {}"
+msgstr "聚焦 {}"
+
+#: main-window.slint
+msgid "聚焦总计"
+msgstr "聚焦總計"
+
+#: collection-panel.slint
+msgid "自开始使用以来"
+msgstr "自開始使用以來"
+
+#: collection-panel.slint
+msgid "要设置的应用"
+msgstr "要設定的應用程式"
+
+#: main-window.slint
+msgid "规则"
+msgstr "規則"
+
+#: collection-panel.slint
+msgid "解除"
+msgstr "解除"
+
+#: collection-panel.slint
+msgid "解除合并 {}"
+msgstr "解除合併 {}"
+
+#: collection-panel.slint
+msgid "解除后恢复合并前的规则；合并期间新增的排除默认保留给双方。"
+msgstr "解除後恢復合併前的規則；合併期間新增的排除預設保留給雙方。"
+
+#: main-window.slint
+msgid "记录"
+msgstr "記錄"
+
+#: main-window.slint
+msgid "记录与隐私"
+msgstr "記錄與隱私"
+
+#: main-window.slint
+msgid "记录只保存在这台电脑上"
+msgstr "記錄只儲存在這台電腦上"
+
+#: timeline.slint
+msgid "记录已暂停"
+msgstr "記錄已暫停"
+
+#: main-window.slint
+msgid "记录已用约 {} MiB，超过新的上限。最早的活动和输入明细会按天立即删除，直到低于上限，无法恢复。"
+msgstr "記錄已用約 {} MiB，超過新的上限。最早的活動和輸入明細會按天立即刪除，直到低於上限，無法復原。"
+
+#: main-window.slint
+msgid "记录应用活动与输入"
+msgstr "記錄應用程式活動與輸入"
+
+#: main-window.slint
+msgid "设置"
+msgstr "設定"
+
+#: main-window.slint
+msgid "设置 Timelens 的外观与启动方式。"
+msgstr "設定 Timelens 的外觀與啟動方式。"
+
+#: main-window.slint
+msgid "语言"
+msgstr "語言"
+
+#: main-window.slint
+msgid "跟随 Windows 的应用模式，切换后这里随之改变。"
+msgstr "跟隨 Windows 的應用程式模式，切換後這裡隨之改變。"
+
+#: main-window.slint
+msgid "跟随系统"
+msgstr "跟隨系統"
+
+#: main-window.slint
+msgid "跳到日期"
+msgstr "跳到日期"
+
+#: main-window.slint
+msgid "输入的文字"
+msgstr "輸入的文字"
+
+#: data-panel.slint
+msgid "迁移到其他位置"
+msgstr "移轉到其他位置"
+
+#: data-panel.slint
+msgid "迁移失败"
+msgstr "移轉失敗"
+
+#: data-panel.slint
+msgid "迁移完成"
+msgstr "移轉完成"
+
+#: data-panel.slint
+msgid "迁移期间暂停记录。请不要关闭 Timelens 或拔出目标磁盘，完成后会自动恢复记录。"
+msgstr "移轉期間暫停記錄。請不要關閉 Timelens 或拔出目標磁碟，完成後會自動恢復記錄。"
+
+#: data-panel.slint
+msgid "运行检查"
+msgstr "執行檢查"
+
+#: collection-panel.slint
+msgid "还没有已记录的应用，可以直接选择一个 EXE。"
+msgstr "還沒有已記錄的應用程式，可以直接選擇一個 EXE。"
+
+#: main-window.slint
+msgid "还没有应用记录。"
+msgstr "還沒有應用程式記錄。"
+
+#: collection-panel.slint
+msgid "这个应用显示在屏幕上时，跳过它所在的屏幕。"
+msgstr "這個應用程式顯示在螢幕上時，略過它所在的螢幕。"
+
+#: main-window.slint timeline.slint
+msgid "这个应用的规则"
+msgstr "這個應用程式的規則"
+
+#: main-window.slint
+msgid "这段时间没有应用记录。"
+msgstr "這段時間沒有應用程式記錄。"
+
+#: main-window.slint
+msgid "这段时间没有快照"
+msgstr "這段時間沒有快照"
+
+#: about.slint
+msgid "这里的每一分钟都只留在这台电脑上，只有你看得见。"
+msgstr "這裡的每一分鐘都只留在這台電腦上，只有你看得見。"
+
+#: collection-panel.slint
+msgid "这里的累计不受保留期清理影响，也包含不记录输入的应用的匿名计数，所以可能比上方按范围统计的次数多。"
+msgstr "這裡的累計不受保留期清理影響，也包含不記錄輸入的應用程式的匿名計數，所以可能比上方依範圍統計的次數多。"
+
+#: timeline.slint
+msgid "连接后，切换到任意窗口几秒内就会出现在这里。"
+msgstr "連線後，切換到任意視窗幾秒內就會出現在這裡。"
+
+#: main-window.slint
+msgid "退出并打开"
+msgstr "結束並開啟"
+
+#: main-window.slint
+msgid "退出并打开修复工具？"
+msgstr "結束並開啟修復工具？"
+
+#: main-window.slint
+msgid "适应窗口"
+msgstr "符合視窗"
+
+#: main-window.slint
+msgid "选择"
+msgstr "選擇"
+
+#: collection-panel.slint
+msgid "选择 EXE"
+msgstr "選擇 EXE"
+
+#: main-window.slint
+msgid "选择一条活动"
+msgstr "選擇一條活動"
+
+#: recovery.slint
+msgid "选择备份 ZIP 文件"
+msgstr "選擇備份 ZIP 檔案"
+
+#: data-panel.slint
+msgid "选择备份…"
+msgstr "選擇備份…"
+
+#: main-window.slint
+msgid "选择快照以查看详情"
+msgstr "選擇快照以查看詳情"
+
+#: data-panel.slint
+msgid "选择文件夹"
+msgstr "選擇資料夾"
+
+#: main-window.slint
+msgid "选择范围，当前 {}"
+msgstr "選擇範圍，目前 {}"
+
+#: collection-panel.slint
+msgid "选择要合并的另一个应用，这里会列出合并后两者共用的规则。"
+msgstr "選擇要合併的另一個應用程式，這裡會列出合併後兩者共用的規則。"
+
+#: main-window.slint
+msgid "采集器"
+msgstr "採集器"
+
+#: main-window.slint
+msgid "采集器未连接"
+msgstr "採集器未連線"
+
+#: timeline.slint
+msgid "采集器未连接，正在自动重试"
+msgstr "採集器未連線，正在自動重試"
+
+#: data-panel.slint
+msgid "重新校验"
+msgstr "重新驗證"
+
+#: recovery.slint
+msgid "重新检查并打开原位置"
+msgstr "重新檢查並開啟原位置"
+
+#: main-window.slint
+msgid "键位与系统"
+msgstr "鍵位與系統"
+
+#: main-window.slint
+msgid "键盘"
+msgstr "鍵盤"
+
+#: main-window.slint
+msgid "键盘 0 · 鼠标 0"
+msgstr "鍵盤 0 · 滑鼠 0"
+
+#: main-window.slint
+msgid "键盘只统计物理按键的位置和次数。"
+msgstr "鍵盤只統計實體按鍵的位置和次數。"
+
+#: about.slint
+msgid "项目主页"
+msgstr "專案首頁"
+
+#: main-window.slint
+msgid "鼠标"
+msgstr "滑鼠"
+
+#: collection-panel.slint
+msgid "鼠标左键、中键和右键的按下次数，范围与颜色都与上方键位相同。"
+msgstr "滑鼠左鍵、中鍵和右鍵的按下次數，範圍與顏色都與上方鍵位相同。"
+
+#: collection-panel.slint
+msgid "鼠标按键热度"
+msgstr "滑鼠按鍵熱度"
+
+#: main-window.slint
+msgid "鼠标点击"
+msgstr "滑鼠點擊"

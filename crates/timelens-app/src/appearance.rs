@@ -1,5 +1,6 @@
 //! The light or dark look: the user's choice, or the app mode Windows asks for.
 //! The choice is kept beside the data location pointer, outside the dataset.
+use crate::i18n::tr;
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -86,7 +87,7 @@ pub fn install(window: &AppWindow, control: PathBuf) {
         window.global::<Theme>().set_mode(mode);
         show(&window, dark(mode, system_dark()));
         if let Err(error) = save(&control, mode) {
-            window.set_action_status(format!("主题设置未能保存：{error}").into());
+            window.set_action_status(tr!("主题设置未能保存：{}", error).into());
         }
     });
 }

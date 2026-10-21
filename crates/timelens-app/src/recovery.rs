@@ -1,3 +1,4 @@
+use crate::i18n::tr;
 use anyhow::{Context, Result, anyhow, bail};
 use slint::{ComponentHandle, Timer, TimerMode};
 use std::{
@@ -9,7 +10,7 @@ use std::{
 };
 use timelens_storage::Storage;
 
-slint::slint! { export { RecoveryWindow } from "ui/recovery.slint"; }
+use crate::RecoveryWindow;
 
 enum Update {
     Ready(Storage, String),
@@ -20,19 +21,28 @@ enum Update {
     Canceled,
 }
 
+/// What upgrading the dataset does, for the user to agree to first.
+fn upgrade_notice((from, to): (i64, i64)) -> String {
+    tr!(
+        "需要将数据结构从版本 {} 升级到 {}。这会重建快照与缺失记录的约束，保留全部记录。升级期间会锁定数据库，并建立临时加密安全副本；检查成功后删除副本，失败自动回滚。",
+        from,
+        to
+    )
+}
+
 pub fn open(data: Result<PathBuf>, control: &Path, force: bool) -> Result<Storage> {
     let (source, detail, upgrade) = match data {
         Ok(source) => {
-            let check = Storage::migration_notice(&source);
+            let check = Storage::pending_upgrade(&source);
             match check {
-                Ok(Some(notice)) if !force => (source, notice, true),
+                Ok(Some(versions)) if !force => (source, upgrade_notice(versions), true),
                 Ok(_) if !force => match Storage::open(&source) {
                     Ok(storage) => return Ok(storage),
                     Err(error) => (source, error.to_string(), false),
                 },
                 Ok(_) => (
                     source,
-                    "你可以检查原位置，或将数据恢复到另一个目录。".into(),
+                    tr!("你可以检查原位置，或将数据恢复到另一个目录。").into(),
                     false,
                 ),
                 Err(error) => (source, error.to_string(), false),
@@ -46,6 +56,7 @@ pub fn open(data: Result<PathBuf>, control: &Path, force: bool) -> Result<Storag
         bail!("headless QA cannot recover {}: {detail}", source.display());
     }
     let window = RecoveryWindow::new()?;
+    crate::i18n::apply_interface(&window.global::<crate::Theme>());
     window.set_source(source.display().to_string().into());
     window.set_destination(
         source
@@ -77,7 +88,7 @@ pub fn open(data: Result<PathBuf>, control: &Path, force: bool) -> Result<Storag
         std::thread::spawn(move||{
             let result:Result<Update>=(||{
                 if action==6{return Ok(crate::data_ui::choose_file(false,"zip")?.map_or(Update::Canceled,Update::Archive));}
-                if action==5 && let Some(notice)=Storage::migration_notice(&source)? { return Ok(Update::Upgrade(notice)); }
+                if action==5 && let Some(versions)=Storage::pending_upgrade(&source)? { return Ok(Update::Upgrade(upgrade_notice(versions))); }
                 if action==0||action==5{
                     let storage=Storage::open(&source)?;
                     if !crate::local_config::resolve(&control).is_ok_and(|current|current==source){crate::local_config::publish(&control,&source)?;}
@@ -86,29 +97,29 @@ pub fn open(data: Result<PathBuf>, control: &Path, force: bool) -> Result<Storag
                 std::fs::create_dir_all(&control)?;
                 let _collector=crate::data_ui::pause_collector(&control)?;
                 if action==4 {
-                    let mut storage=candidate.lock().map_err(|_|anyhow!("恢复状态不可用"))?.take().context("请先校验一个新数据集")?;
+                    let mut storage=candidate.lock().map_err(|_|anyhow!(tr!("恢复状态不可用")))?.take().context(tr!("请先校验一个新数据集"))?;
                     storage.set_control_directory(&control)?;
                     crate::local_config::publish(&control,storage.data_directory())?;
                     return Ok(Update::Opened(storage));
                 }
                 let destination=Storage::validate_data_destination(&destination)?;
                 let source=Storage::validate_data_destination(&source)?;
-                if destination==source||destination.starts_with(&source)||source.starts_with(&destination){bail!("新旧目录必须分开，不能互相包含");}
-                if destination.exists()&&std::fs::read_dir(&destination)?.next().is_some(){bail!("请选择空的新目录");}
-                let parent=destination.parent().context("新目录无效")?;std::fs::create_dir_all(parent)?;
+                if destination==source||destination.starts_with(&source)||source.starts_with(&destination){bail!(tr!("新旧目录必须分开，不能互相包含"));}
+                if destination.exists()&&std::fs::read_dir(&destination)?.next().is_some(){bail!(tr!("请选择空的新目录"));}
+                let parent=destination.parent().context(tr!("新目录无效"))?;std::fs::create_dir_all(parent)?;
                 match action {
                     1=>{
                         let prepared=Storage::prepare_restore(&archive,if password.is_empty(){None}else{Some(password.as_str())},parent)?;
                         let storage=Storage::open(&destination)?;
                         storage.replace_from_backup(prepared,true)?;storage.verify_integrity()?;
-                        Ok(Update::Ready(storage,"备份已恢复并通过校验。".into()))
+                        Ok(Update::Ready(storage,tr!("备份已恢复并通过校验。").into()))
                     },
-                    2=>Ok(Update::Ready(Storage::open(&destination)?,"已建立空数据集。原件继续保留在原位置。".into())),
+                    2=>Ok(Update::Ready(Storage::open(&destination)?,tr!("已建立空数据集。原件继续保留在原位置。").into())),
                     3=>{
                         let(storage,report)=Storage::recover_to_new_directory(&source,&destination)?;
-                        Ok(Update::Ready(storage,format!("已恢复 {} 行；已知无效记录 {} 行，无法完整读取的表 {} 个，缺失图片 {} 张。采集与快照已暂停，请先检查排除规则。",report.copied_rows,report.discarded_rows,report.unreadable_tables,report.unavailable_images)))
+                        Ok(Update::Ready(storage,tr!("已恢复 {} 行；已知无效记录 {} 行，无法完整读取的表 {} 个，缺失图片 {} 张。采集与快照已暂停，请先检查排除规则。", report.copied_rows, report.discarded_rows, report.unreadable_tables, report.unavailable_images)))
                     },
-                    _=>bail!("未知恢复操作"),
+                    _=>bail!(tr!("未知恢复操作")),
                 }
             })();let _=sender.send(result.unwrap_or_else(|e|Update::Failed(e.to_string())));
         });
@@ -126,7 +137,7 @@ pub fn open(data: Result<PathBuf>, control: &Path, force: bool) -> Result<Storag
             match update {
                 Update::Ready(storage, info) => {
                     w.set_status(
-                        format!("{info}\n新位置：{}", storage.data_directory().display()).into(),
+                        tr!("{}\n新位置：{}", info, storage.data_directory().display()).into(),
                     );
                     if let Ok(mut candidate) = candidate_for_updates.lock() {
                         *candidate = Some(storage);
@@ -144,7 +155,7 @@ pub fn open(data: Result<PathBuf>, control: &Path, force: bool) -> Result<Storag
                 }
                 Update::Archive(path) => w.set_archive(path.display().to_string().into()),
                 Update::Failed(error) => {
-                    w.set_status(format!("未切换数据位置：{error}").into());
+                    w.set_status(tr!("未切换数据位置：{}", error).into());
                     w.set_upgrade(false);
                 }
                 Update::Canceled => {}
@@ -159,5 +170,5 @@ pub fn open(data: Result<PathBuf>, control: &Path, force: bool) -> Result<Storag
     selected
         .borrow_mut()
         .take()
-        .ok_or_else(|| anyhow!("用户关闭了数据恢复窗口；原件仍保留"))
+        .ok_or_else(|| anyhow!(tr!("用户关闭了数据恢复窗口；原件仍保留")))
 }

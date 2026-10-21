@@ -1,3 +1,4 @@
+use crate::i18n::tr;
 use anyhow::{Context, Result, bail};
 use std::path::PathBuf;
 use windows::{
@@ -59,7 +60,7 @@ fn executable(task: &IRegisteredTask) -> Result<PathBuf> {
         let mut count = 0;
         actions.Count(&mut count)?;
         if count != 1 {
-            bail!("Timelens 启动任务的程序配置不正确");
+            bail!(tr!("Timelens 启动任务的程序配置不正确"));
         }
         let mut path = BSTR::new();
         actions
@@ -89,7 +90,7 @@ fn logon_enabled(task: &IRegisteredTask) -> Result<bool> {
             }
         }
         if !found {
-            bail!("Timelens 启动任务缺少登录触发器，请重新安装");
+            bail!(tr!("Timelens 启动任务缺少登录触发器，请重新安装"));
         }
         Ok(task.Enabled()?.as_bool() && enabled)
     }
@@ -97,16 +98,16 @@ fn logon_enabled(task: &IRegisteredTask) -> Result<bool> {
 
 fn installed_state(collector_task: &str) -> Result<(StartupState, Installation)> {
     if !crate::collector_task::valid_task_path(collector_task) {
-        bail!("Timelens 启动任务路径不正确");
+        bail!(tr!("Timelens 启动任务路径不正确"));
     }
     let _com = ComApartment::new(COINIT_MULTITHREADED)?;
     let (folder, _) = collector_task
         .rsplit_once('\\')
-        .context("启动任务路径不正确")?;
+        .context(tr!("启动任务路径不正确"))?;
     let core = crate::collector_task::open_task(&format!(r"{folder}\Core"))
-        .context("未找到 Timelens 启动任务，请使用安装版")?;
+        .context(tr!("未找到 Timelens 启动任务，请使用安装版"))?;
     let collector = crate::collector_task::open_task(collector_task)
-        .context("未找到 Timelens 采集器启动任务，请重新安装")?;
+        .context(tr!("未找到 Timelens 采集器启动任务，请重新安装"))?;
     let mut collector_level = TASK_RUNLEVEL_TYPE::default();
     unsafe {
         collector
@@ -115,21 +116,23 @@ fn installed_state(collector_task: &str) -> Result<(StartupState, Installation)>
             .RunLevel(&mut collector_level)?
     };
     if collector_level != TASK_RUNLEVEL_HIGHEST {
-        bail!("Timelens 采集器启动任务的权限配置不正确，请重新安装");
+        bail!(tr!("Timelens 采集器启动任务的权限配置不正确，请重新安装"));
     }
     let current = std::env::current_exe()?;
     if !executable(&core)?
         .to_string_lossy()
         .eq_ignore_ascii_case(&current.to_string_lossy())
     {
-        bail!("当前程序与已安装的 Timelens 不同，请在安装版中设置开机自启动");
+        bail!(tr!(
+            "当前程序与已安装的 Timelens 不同，请在安装版中设置开机自启动"
+        ));
     }
     let collector_exe = executable(&collector)?;
     if !collector_exe.file_name().is_some_and(|name| {
         name.to_string_lossy()
             .eq_ignore_ascii_case("Timelens.Collector.exe")
     }) {
-        bail!("Timelens 采集器启动任务的程序配置不正确");
+        bail!(tr!("Timelens 采集器启动任务的程序配置不正确"));
     }
     let core_enabled = logon_enabled(&core)?;
     let collector_enabled = logon_enabled(&collector)?;
@@ -140,10 +143,13 @@ fn installed_state(collector_task: &str) -> Result<(StartupState, Installation)>
         },
         Installation {
             task_folder: format!("{folder}\\"),
-            core_directory: current.parent().context("安装目录不可用")?.to_path_buf(),
+            core_directory: current
+                .parent()
+                .context(tr!("安装目录不可用"))?
+                .to_path_buf(),
             collector_directory: collector_exe
                 .parent()
-                .context("采集器目录不可用")?
+                .context(tr!("采集器目录不可用"))?
                 .to_path_buf(),
         },
     ))
@@ -156,7 +162,7 @@ pub fn read(collector_task: &str) -> Result<StartupState> {
 // These are arguments to powershell.exe -File, never an interpolated command.
 fn quote_argument(value: &str) -> Result<String> {
     if value.contains(['"', '\0', '\r', '\n']) {
-        bail!("启动设置包含无效的路径字符");
+        bail!(tr!("启动设置包含无效的路径字符"));
     }
     let trailing = value.chars().rev().take_while(|c| *c == '\\').count();
     Ok(format!("\"{value}{}\"", "\\".repeat(trailing)))
@@ -168,12 +174,12 @@ pub fn set(collector_task: &str, enabled: bool) -> Result<()> {
         .collector_directory
         .join(r"internal\maintenance.ps1");
     if !script.is_file() {
-        bail!("启动设置组件缺失，请重新安装 Timelens");
+        bail!(tr!("启动设置组件缺失，请重新安装 Timelens"));
     }
     let mut system = vec![0_u16; 32768];
     let count = unsafe { GetSystemDirectoryW(system.as_mut_ptr(), system.len() as u32) } as usize;
     if count == 0 || count >= system.len() {
-        bail!("无法定位 Windows 系统目录");
+        bail!(tr!("无法定位 Windows 系统目录"));
     }
     let powershell = PathBuf::from(String::from_utf16(&system[..count])?)
         .join(r"WindowsPowerShell\v1.0\powershell.exe");
@@ -204,23 +210,26 @@ pub fn set(collector_task: &str, enabled: bool) -> Result<()> {
     if unsafe { ShellExecuteExW(&mut execute) } == 0 {
         let error = std::io::Error::last_os_error();
         if error.raw_os_error() == Some(ERROR_CANCELLED as i32) {
-            bail!("已取消管理员确认，开机自启动保持原设置");
+            bail!(tr!("已取消管理员确认，开机自启动保持原设置"));
         }
-        return Err(error).context("无法打开启动设置的管理员确认");
+        return Err(error).context(tr!("无法打开启动设置的管理员确认"));
     }
     if execute.hProcess.is_null() {
-        bail!("无法确认启动设置是否完成，请重新打开常规查看状态");
+        bail!(tr!("无法确认启动设置是否完成，请重新打开常规查看状态"));
     }
     let waited = unsafe { WaitForSingleObject(execute.hProcess, INFINITE) };
     let mut code = 0;
     let exited = unsafe { GetExitCodeProcess(execute.hProcess, &mut code) };
     unsafe { CloseHandle(execute.hProcess) };
     if waited != WAIT_OBJECT_0 || exited == 0 || code != 0 {
-        bail!("更改开机自启动失败（{code}），请确认 Timelens 安装完整后重试");
+        bail!(tr!(
+            "更改开机自启动失败（{}），请确认 Timelens 安装完整后重试",
+            code
+        ));
     }
     let saved = read(collector_task)?;
     if !saved.consistent || saved.enabled != enabled {
-        bail!("启动任务状态与所选设置不一致，请重试");
+        bail!(tr!("启动任务状态与所选设置不一致，请重试"));
     }
     Ok(())
 }

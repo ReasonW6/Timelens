@@ -38,6 +38,8 @@ slint = { version = "1.17.1", default-features = false, features = [
     "std",
 ] }
 raw-window-handle = "0.6.2"
+# Generates code for the slint runtime above, so both stay on the same release.
+slint-build = "=1.17.1"
 tempfile = "3.27.0"
 thiserror = "2"
 windows = { version = "0.62.2", features = [
@@ -69,6 +71,7 @@ windows = { version = "0.62.2", features = [
 ] }
 windows-sys = { version = "0.61.2", features = [
     "Win32_Foundation",
+    "Win32_Globalization",
     "Win32_Security",
     "Win32_Security_Authorization",
     "Win32_Security_Cryptography",

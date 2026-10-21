@@ -3,6 +3,7 @@
 //! Intervals are half-open UTC ranges. Calendar navigation and row grouping use
 //! the computer's local time zone; neither requires a UI model or stored titles.
 
+use crate::i18n::tr;
 use std::collections::BTreeMap;
 
 use chrono::{
@@ -19,7 +20,18 @@ pub(crate) const BRIEF_ABSENCE_MS: i64 = 3 * 60_000;
 const UNRECORDED_JOIN_MS: i64 = 5 * 60_000;
 /// Interruptions missing less than this in total are restart seams, not news.
 const MIN_UNRECORDED_MS: u64 = 2 * 60_000;
-const WEEKDAYS: [&str; 7] = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"];
+/// A weekday's short name, Monday first.
+pub(crate) fn weekday_name(day: NaiveDate) -> &'static str {
+    [
+        tr!("周一"),
+        tr!("周二"),
+        tr!("周三"),
+        tr!("周四"),
+        tr!("周五"),
+        tr!("周六"),
+        tr!("周日"),
+    ][day.weekday().num_days_from_monday() as usize]
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ActivityEntry {
@@ -122,7 +134,7 @@ fn build_activity_rows_in<Tz: TimeZone>(
     let mut runs = Vec::new();
     for (identity, application) in applications {
         let name = if application.name.trim().is_empty() {
-            "未命名应用"
+            tr!("未命名应用")
         } else {
             application.name
         };
@@ -539,7 +551,7 @@ fn grouped_intervals<Tz: TimeZone>(
     while cursor < ended {
         let Some(local) = local_datetime_at(timezone, cursor) else {
             // Retain the observed range even if Chrono cannot display its date.
-            groups.push((cursor, ended, "日期未知".to_owned()));
+            groups.push((cursor, ended, tr!("日期未知").to_owned()));
             break;
         };
         let morning = local.hour() < 12;
@@ -552,7 +564,11 @@ fn grouped_intervals<Tz: TimeZone>(
             .filter(|boundary| *boundary > cursor)
             .unwrap_or(ended)
             .min(ended);
-        let period = if morning { "上午" } else { "下午" };
+        let period = if morning {
+            tr!("上午")
+        } else {
+            tr!("下午")
+        };
         groups.push((
             cursor,
             stop,
@@ -611,20 +627,13 @@ fn at<Tz: TimeZone>(zone: &Tz, ms: i64) -> Option<DateTime<Tz>> {
     DateTime::from_timestamp_millis(ms).map(|t| t.with_timezone(zone))
 }
 fn date_text(day: NaiveDate, today: NaiveDate, weekday: bool) -> String {
-    let year = if day.year() == today.year() {
-        String::new()
-    } else {
-        format!("{}年", day.year())
+    let format = match (day.year() == today.year(), weekday) {
+        (true, false) => tr!("%-m月%-d日"),
+        (false, false) => tr!("%Y年%-m月%-d日"),
+        (true, true) => tr!("%-m月%-d日 {}"),
+        (false, true) => tr!("%Y年%-m月%-d日 {}"),
     };
-    let weekday = if weekday {
-        format!(
-            " {}",
-            WEEKDAYS[day.weekday().num_days_from_monday() as usize]
-        )
-    } else {
-        String::new()
-    };
-    format!("{year}{}月{}日{weekday}", day.month(), day.day())
+    crate::i18n::fill(&day.format(format).to_string(), &[&weekday_name(day)])
 }
 /// A readable local span such as "10月15日 周四 00:00–14:32" or "10月14日 周三 全天".
 /// `brief` drops the weekday and names today and yesterday.
@@ -641,9 +650,9 @@ pub(crate) fn range_text<Tz: TimeZone>(
     let today = n.date_naive();
     let day = |d: NaiveDate, named: bool| {
         if brief && named && d == today {
-            "今天".to_owned()
+            tr!("今天").to_owned()
         } else if brief && named && Some(d) == today.pred_opt() {
-            "昨天".to_owned()
+            tr!("昨天").to_owned()
         } else {
             date_text(d, today, !brief)
         }
@@ -659,7 +668,7 @@ pub(crate) fn range_text<Tz: TimeZone>(
     };
     if midnight(&s) && midnight(&e) {
         return if first == last {
-            format!("{} 全天", day(first, true))
+            tr!("{} 全天", day(first, true))
         } else {
             format!("{} – {}", day(first, false), day(last, false))
         };

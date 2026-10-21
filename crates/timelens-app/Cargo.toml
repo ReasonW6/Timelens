@@ -30,3 +30,4 @@ tempfile.workspace = true
 
 [build-dependencies]
 embed-resource.workspace = true
+slint-build.workspace = true

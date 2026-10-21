@@ -29,7 +29,7 @@
 > [!NOTE]
 > Timelens is still in development and has not been released. The installer is not code-signed, so Windows SmartScreen may block it, and the [release matrix](docs/wayfinder/timelens-v1/performance-validation/milestone-5-physical-matrix.md) for real-hardware scenarios such as lock screen, sleep, multiple monitors and Remote Desktop is not finished yet.
 >
-> The user interface and most project documentation are currently in Simplified Chinese only. Menu names below are given in English with the original Chinese label in parentheses.
+> The interface is available in Simplified Chinese, Traditional Chinese, English, Japanese and Korean, and follows the Windows display language by default. Most project documentation is in Simplified Chinese.
 
 ## Contents
 
@@ -143,8 +143,8 @@ There is no released installer yet, so you need to [build from source](#building
 
 1. Run `Timelens-<version>-x64-setup.exe` and confirm the UAC prompt once. The installer registers two logon tasks: the main app runs with standard privileges and the collector runs with highest privileges.
 2. On first install, choose where to store data. By default it follows the install directory, in a `TimelensData` folder inside it; you can also choose `%LOCALAPPDATA%\Timelens` or any empty folder on a local fixed disk. A desktop shortcut is added by default and can be unchecked.
-3. After installation Timelens stays in the system tray. Start at sign-in can be toggled under Settings › General (设置 › 常规).
-4. To upgrade, just run the new installer; the data location and startup setting are preserved. To move existing data into the install directory, use Settings › Data (设置 › 数据) to relocate it to `TimelensData` under the install directory (an empty folder is prepared during upgrade).
+3. After installation Timelens stays in the system tray. Start at sign-in and the interface language can be changed under Settings › General.
+4. To upgrade, just run the new installer; the data location and startup setting are preserved. To move existing data into the install directory, use Settings › Data & storage to relocate it to `TimelensData` under the install directory (an empty folder is prepared during upgrade).
 5. Uninstall via the "Uninstall Timelens" shortcut in the install directory or from Windows "Installed apps". You can choose to keep or delete local data; files you exported are never deleted.
 
 ## Building from source
@@ -204,6 +204,7 @@ The documents below are written in Simplified Chinese.
 
 ## Changelog
 
+- **2026-10-21 · Interface languages**: Settings › General has a new Language option with System default, Simplified Chinese, Traditional Chinese, English, Japanese and Korean. System default follows the Windows display language and falls back to English for other languages; the switch takes effect at once, including the tray menu.
 - **2026-10-21 · Local reports removed**: local reports duplicated the live statistics under Statistics › Apps, so reports are no longer stored. Data coverage and JSON / CSV export moved to the Apps tab and are computed live for the selected range; saved reports are deleted on upgrade. See [ticket 19](docs/wayfinder/timelens-v1/issues/19-remove-stored-usage-reports.md).
 - **2026-10-21 · AI summaries removed**: AI could only see the same aggregate numbers as the statistics page, so the AI worker, provider credentials and AI settings were removed together, and Timelens no longer goes online; existing AI summaries and conversations are deleted on upgrade. See [ticket 18](docs/wayfinder/timelens-v1/issues/18-remove-ai-summaries.md).
 - **2026-10-09 · Timeline redesign**: the home page now scrolls continuously by day, with brief switches folded into the same row as interleaved apps; app statistics show all records by default; scheduled snapshots skip cursor-only black frames returned by desktop duplication.

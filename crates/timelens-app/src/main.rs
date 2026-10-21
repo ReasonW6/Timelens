@@ -8,6 +8,7 @@ mod collector_task;
 mod data_ui;
 mod general_ui;
 mod history;
+mod i18n;
 mod icon_cache;
 mod local_config;
 mod pause;
@@ -25,8 +26,9 @@ mod ui_refresh;
 mod window_chrome;
 mod window_placement;
 
+use i18n::{tr, trn};
 use std::{
-    cell::RefCell,
+    cell::{Cell, RefCell},
     env,
     path::{Path, PathBuf},
     rc::Rc,
@@ -54,12 +56,7 @@ use timelens_storage::{
 
 const COLLECTOR_NAMES: &[&str] = &["timelens-collector.exe", "Timelens.Collector.exe"];
 
-slint::slint! {
-    export { AppWindow, AppRow, WindowRow, SegmentRow, SnapshotRow,
-             HistoryItem, DayAnchor, Participant, ShareSlice, StackApp, DataState,
-             CollectionState, KeyCell, ButtonHeat, SystemRow, AppIcons, Theme }
-        from "ui/main-window.slint";
-}
+slint::include_modules!();
 /// Timelens runs as the signed-in user; only the collector is elevated.
 fn require_ordinary_privilege() -> Result<()> {
     use windows_sys::Win32::{
@@ -69,7 +66,7 @@ fn require_ordinary_privilege() -> Result<()> {
     };
     let mut token = std::ptr::null_mut();
     if unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) } == 0 {
-        bail!("无法检查 Timelens 进程权限");
+        bail!(tr!("无法检查 Timelens 进程权限"));
     }
     let mut elevation = TOKEN_ELEVATION::default();
     let mut returned = 0;
@@ -86,13 +83,16 @@ fn require_ordinary_privilege() -> Result<()> {
         CloseHandle(token);
     }
     if success == 0 || elevation.TokenIsElevated != 0 {
-        bail!("Timelens 只允许以普通权限运行，请正常启动 Timelens");
+        bail!(tr!("Timelens 只允许以普通权限运行，请正常启动 Timelens"));
     }
     Ok(())
 }
 
 fn main() -> Result<()> {
     let options = Options::parse(env::args_os().skip(1))?;
+    if let Ok(control) = options.control_directory() {
+        i18n::init(&control);
+    }
     require_ordinary_privilege()?;
     if options.shutdown {
         tray::activate_existing(true);
@@ -114,7 +114,7 @@ fn main() -> Result<()> {
     if options.uninstall_data {
         let _instance = SingleInstanceGuard::acquire_core()?;
         let _collector =
-            SingleInstanceGuard::acquire_collector().context("删除数据前必须先停止采集器")?;
+            SingleInstanceGuard::acquire_collector().context(tr!("删除数据前必须先停止采集器"))?;
         let data = options.data_directory()?;
         let control = options.control_directory()?;
         Storage::delete_owned_dataset(&data)?;
@@ -424,9 +424,15 @@ fn run_window(
     };
     // Before the first frame, so the window opens in the chosen look.
     appearance::install(&window, control_directory.clone());
+    // What Rust wrote is rewritten on the next tick, with the state it needs.
+    let relabel_pending = Rc::new(Cell::new(false));
+    let relabel = Rc::clone(&relabel_pending);
+    i18n::install(&window, control_directory.clone(), move |_| {
+        relabel.set(true)
+    });
     let _pause_timer = pause::install(&window, control_directory.clone());
     window.set_storage_status(storage_status.into());
-    window.set_collector_status("等待受信采集器事件…".into());
+    window.set_collector_status(tr!("等待受信采集器事件…").into());
     window.set_build_version(env!("CARGO_PKG_VERSION").into());
 
     let (status_sender, status_receiver) = mpsc::channel();
@@ -450,11 +456,12 @@ fn run_window(
                             )
                             .map_err(Into::into)
                     }) {
-                    Ok(()) => CollectorStatus::Connected(format!(
-                        "已验证采集器 · PID {} · {:?}",
-                        report.peer_process_id, report.verification
+                    Ok(()) => CollectorStatus::Connected(tr!(
+                        "已验证采集器 · PID {} · {}",
+                        report.peer_process_id,
+                        format!("{:?}", report.verification)
                     )),
-                    Err(error) => CollectorStatus::Failed(format!("数据库状态写入失败：{error}")),
+                    Err(error) => CollectorStatus::Failed(tr!("数据库状态写入失败：{}", error)),
                 },
                 Err(error) => CollectorStatus::Failed(error.to_string()),
             };
@@ -531,7 +538,7 @@ fn run_window(
             if let Some(window) = weak.upgrade()
                 && let Err(error) = refresh_timeline(&window, &storage, &ui_state)
             {
-                window.set_action_status(format!("刷新失败：{error}").into());
+                window.set_action_status(tr!("刷新失败：{}", error).into());
             }
         });
     }
@@ -634,7 +641,7 @@ fn run_window(
         if ui_active {
             request_apps(&window, &timer_storage, &timer_state);
             if let Err(error) = poll_apps(&window, &timer_state) {
-                window.set_action_status(format!("读取应用统计失败：{error}").into());
+                window.set_action_status(tr!("读取应用统计失败：{}", error).into());
             }
             let state = timer_state.borrow();
             let scope = apps_scope(&window, &state);
@@ -655,7 +662,7 @@ fn run_window(
             window.set_settings_tab(3);
             window.global::<DataState>().set_recovery_needed(true);
             window.global::<DataState>().set_status(
-                "发现数据损坏，已停止写入。请进入恢复界面，保留原件并恢复到新目录。".into(),
+                tr!("发现数据损坏，已停止写入。请进入恢复界面，保留原件并恢复到新目录。").into(),
             );
         }
         while let Ok(status) = status_receiver.try_recv() {
@@ -666,9 +673,9 @@ fn run_window(
                 }
                 CollectorStatus::Failed(error) => {
                     if collector_reset_active(&control_directory) {
-                        window.set_collector_status("正在安全暂停采集器…".into());
+                        window.set_collector_status(tr!("正在安全暂停采集器…").into());
                     } else {
-                        window.set_collector_status(format!("握手失败：{error}").into());
+                        window.set_collector_status(tr!("握手失败：{}", error).into());
                     }
                 }
             }
@@ -684,9 +691,22 @@ fn run_window(
             *timer_snapshot_state.borrow_mut() = SnapshotUiState::default();
             clear_snapshot_preview(&window);
             window.set_snapshot_selected_index(-1);
-            window.set_snapshot_detail("数据已变更，请重新选择快照".into());
+            window.set_snapshot_detail(tr!("数据已变更，请重新选择快照").into());
             history::reset(&timer_history);
             timer_state.borrow_mut().apps = AppsState::default();
+            refresh_requested = true;
+        }
+        if relabel_pending.take() {
+            *timer_snapshot_state.borrow_mut() = SnapshotUiState::default();
+            window.set_snapshot_selected_index(-1);
+            window.set_snapshot_detail("".into());
+            history::reset(&timer_history);
+            timer_state.borrow_mut().apps = AppsState::default();
+            window.invoke_general_opened();
+            if window.get_settings_open() && window.get_settings_tab() == 2 {
+                collection.invoke_opened();
+            }
+            tray::relabel();
             refresh_requested = true;
         }
         while let Ok(status) = action_receiver.try_recv() {
@@ -721,7 +741,7 @@ fn run_window(
                 Ok(true) => ui_refresh.refreshed(Instant::now()),
                 // Storage is busy with a long task; try again on a later tick.
                 Ok(false) => {}
-                Err(error) => window.set_action_status(format!("刷新失败：{error}").into()),
+                Err(error) => window.set_action_status(tr!("刷新失败：{}", error).into()),
             }
         }
     });
@@ -890,12 +910,12 @@ fn refresh_timeline(
     window.set_retention_used_mib(i32::try_from(used.div_ceil(1024 * 1024)).unwrap_or(i32::MAX));
     window.set_retention_usage(
         match earliest.and_then(|ms| chrono::Local.timestamp_millis_opt(ms).single()) {
-            Some(first) => format!(
+            Some(first) => tr!(
                 "已用 {} · 最早可回看到 {}",
                 format_bytes(used),
                 first.format("%Y-%m-%d")
             ),
-            None => format!("已用 {} · 还没有活动记录", format_bytes(used)),
+            None => tr!("已用 {} · 还没有活动记录", format_bytes(used)),
         }
         .into(),
     );
@@ -1042,7 +1062,8 @@ fn render_snapshot(
         .saturating_sub(snapshot.range_started_utc_ms)
         .max(1);
     window.set_range_label(
-        format!(
+        trn!(
+            snapshot.applications.len(),
             "选中 {} · {} 个应用",
             format_duration(range_ms as u64),
             snapshot.applications.len()
@@ -1127,7 +1148,8 @@ fn render_apps(
             icon: app_icon::for_identity(&application.identity),
             tint: app_icon::tint(&application.identity),
             focused: format_duration(application.focused_ms).into(),
-            summary: format!(
+            summary: trn!(
+                application.window_count,
                 "打开 {} · 显示 {} · {} 个窗口",
                 format_duration(application.opened_ms),
                 format_duration(application.displayed_ms),
@@ -1164,7 +1186,7 @@ fn render_apps(
 /// A moment in words: the time alone today, with the date otherwise.
 fn moment_label(timestamp: i64) -> String {
     let Some(value) = chrono::Local.timestamp_millis_opt(timestamp).single() else {
-        return "时间不可用".to_owned();
+        return tr!("时间不可用").to_owned();
     };
     if value.date_naive() == chrono::Local::now().date_naive() {
         value.format("%H:%M").to_string()
@@ -1185,15 +1207,15 @@ fn render_application(
     range_start: i64,
 ) {
     let Some(application) = application else {
-        window.set_selected_name("尚无应用数据".into());
-        window.set_opened_value("0 秒".into());
-        window.set_displayed_value("0 秒".into());
-        window.set_focused_value("0 秒".into());
-        window.set_background_value("0 秒".into());
-        window.set_input_value("键盘 0 · 鼠标 0".into());
+        window.set_selected_name(tr!("尚无应用数据").into());
+        window.set_opened_value(tr!("0 秒").into());
+        window.set_displayed_value(tr!("0 秒").into());
+        window.set_focused_value(tr!("0 秒").into());
+        window.set_background_value(tr!("0 秒").into());
+        window.set_input_value(tr!("键盘 0 · 鼠标 0").into());
         window.set_selected_icon(Image::default());
-        window.set_keyboard_value("0 次".into());
-        window.set_mouse_value("0 次".into());
+        window.set_keyboard_value(tr!("0 次").into());
+        window.set_mouse_value(tr!("0 次").into());
         window.set_windows(ModelRc::new(VecModel::<WindowRow>::default()));
         window.set_windows_total(0);
         window.set_segments(ModelRc::new(VecModel::<SegmentRow>::default()));
@@ -1208,14 +1230,15 @@ fn render_application(
         .left_click_count
         .saturating_add(application.middle_click_count)
         .saturating_add(application.right_click_count);
-    window.set_keyboard_value(format!("{} 次", grouped_count(application.keyboard_count)).into());
-    window.set_mouse_value(format!("{} 次", grouped_count(clicks)).into());
+    let keys = application.keyboard_count;
+    window.set_keyboard_value(trn!(keys, "{} 次", grouped_count(keys)).into());
+    window.set_mouse_value(trn!(clicks, "{} 次", grouped_count(clicks)).into());
     window.set_opened_value(format_duration(application.opened_ms).into());
     window.set_displayed_value(format_duration(application.displayed_ms).into());
     window.set_focused_value(format_duration(application.focused_ms).into());
     window.set_background_value(format_duration(application.background_ms).into());
     window.set_input_value(
-        format!(
+        tr!(
             "键盘 {} · 鼠标 {}",
             grouped_count(application.keyboard_count),
             grouped_count(clicks)
@@ -1239,22 +1262,22 @@ fn render_application(
         .into_iter()
         .map(|item| {
             let opened = if item.opened_utc_ms <= snapshot.range_started_utc_ms {
-                "更早".to_owned()
+                tr!("更早").to_owned()
             } else {
                 moment_label(item.opened_utc_ms)
             };
             let ended = if item.ended_utc_ms < range_end {
                 moment_label(item.ended_utc_ms)
             } else if range_end >= now - 60_000 {
-                "仍打开".to_owned()
+                tr!("仍打开").to_owned()
             } else {
-                "之后".to_owned()
+                tr!("之后").to_owned()
             };
             WindowRow {
                 identity: format!("{}:{}", application.identity, item.number).into(),
                 label: format!("{opened} – {ended}").into(),
                 focused: format_duration(item.focused_ms).into(),
-                summary: format!(
+                summary: tr!(
                     "打开 {} · 显示 {} · 后台 {}",
                     format_duration(item.opened_ms),
                     format_duration(item.displayed_ms),
@@ -1275,7 +1298,7 @@ fn render_application(
     window.set_segments_start(moment_label(range_start).into());
     window.set_segments_end(
         if range_end >= now - 60_000 {
-            "现在".to_owned()
+            tr!("现在").to_owned()
         } else {
             moment_label(range_end)
         }
@@ -1310,7 +1333,7 @@ fn install_retention_callback(
 ) {
     window.on_retention_cutoff(|days| {
         let cutoff = chrono::Local::now() - chrono::Duration::days(i64::from(days.max(0)));
-        cutoff.format("%Y年%-m月%-d日").to_string().into()
+        cutoff.format(tr!("%Y年%-m月%-d日")).to_string().into()
     });
     {
         let storage = Arc::clone(&storage);
@@ -1333,9 +1356,9 @@ fn install_retention_callback(
                     storage.set_retention_policy(policy)?;
                     let report = storage.apply_retention(unix_time_ms())?;
                     Ok(if report.activity_items + report.input_items == 0 {
-                        format!("空间上限已改为 {}", format_bytes(policy.max_bytes))
+                        tr!("空间上限已改为 {}", format_bytes(policy.max_bytes))
                     } else {
-                        format!(
+                        tr!(
                             "空间上限已改为 {}；清理活动 {} 项、输入 {} 项",
                             format_bytes(policy.max_bytes),
                             report.activity_items,
@@ -1345,7 +1368,7 @@ fn install_retention_callback(
                 });
                 busy.store(false, Ordering::Release);
                 let _ = sender.send(ActionStatus {
-                    message: result.unwrap_or_else(|error| format!("空间上限保存失败：{error}")),
+                    message: result.unwrap_or_else(|error| tr!("空间上限保存失败：{}", error)),
                     refresh: true,
                 });
             });
@@ -1367,14 +1390,16 @@ fn install_retention_callback(
                 policy.days = (days > 0).then_some(days as u32);
                 storage.set_retention_policy(policy)?;
                 let report = storage.apply_retention(unix_time_ms())?;
-                Ok(format!(
+                Ok(tr!(
                     "保留策略已更新；清理快照 {} 项、活动 {} 项、输入 {} 项",
-                    report.snapshot_items, report.activity_items, report.input_items
+                    report.snapshot_items,
+                    report.activity_items,
+                    report.input_items
                 ))
             });
             busy.store(false, Ordering::Release);
             let _ = sender.send(ActionStatus {
-                message: result.unwrap_or_else(|error| format!("保留策略失败：{error}")),
+                message: result.unwrap_or_else(|error| tr!("保留策略失败：{}", error)),
                 refresh: true,
             });
         });
@@ -1403,14 +1428,14 @@ fn install_cleanup_callback(
             });
             busy.store(false, Ordering::Release);
             let message = match result {
-                Ok(report) => format!(
+                Ok(report) => tr!(
                     "清理完成：快照 {} 项、活动 {} 项、输入 {} 项、释放 {}",
                     report.snapshot_items,
                     report.activity_items,
                     report.input_items,
                     format_bytes(report.released_bytes)
                 ),
-                Err(error) => format!("清理失败：{error}"),
+                Err(error) => tr!("清理失败：{}", error),
             };
             let _ = sender.send(ActionStatus {
                 message,
@@ -1434,7 +1459,7 @@ fn install_clear_callback(
         let busy = Arc::clone(&busy);
         let sender = sender.clone();
         let _ = sender.send(ActionStatus {
-            message: "正在暂停采集器并轮换全部数据密钥…".to_owned(),
+            message: tr!("正在暂停采集器并轮换全部数据密钥…").to_owned(),
             refresh: false,
         });
         thread::spawn(move || {
@@ -1445,14 +1470,15 @@ fn install_clear_callback(
                 let report = storage.clear_all_coordinated(Duration::from_secs(12))?;
                 data_ui::dataset_changed();
                 storage.record_component_health("core", PROTOCOL_VERSION, None)?;
-                Ok(format!(
+                Ok(trn!(
+                    report.deleted_rows,
                     "已清空 {} 行本地数据并轮换数据密钥",
                     report.deleted_rows
                 ))
             });
             busy.store(false, Ordering::Release);
             let _ = sender.send(ActionStatus {
-                message: result.unwrap_or_else(|error| format!("清空失败：{error}")),
+                message: result.unwrap_or_else(|error| tr!("清空失败：{}", error)),
                 refresh: true,
             });
         });
@@ -1478,7 +1504,7 @@ fn install_snapshot_callbacks(
                 && let Err(error) =
                     refresh_snapshot_panel(&window, &storage, &ui_state, &snapshot_state)
             {
-                window.set_action_status(format!("快照列表刷新失败：{error}").into());
+                window.set_action_status(tr!("快照列表刷新失败：{}", error).into());
             }
         });
     }
@@ -1510,22 +1536,24 @@ fn install_snapshot_callbacks(
             if !slot.success {
                 let reason = slot
                     .missing_reason
-                    .map_or("原因未知", snapshot_reason_label);
+                    .map_or(tr!("原因未知"), snapshot_reason_label);
                 let span = snapshot_state.borrow().spans.get(index as usize).copied();
                 window.set_snapshot_preview(Image::default());
                 window.set_snapshot_detail(
                     match span {
-                        Some((first, last, count)) if count > 1 => format!(
-                            "{} 期间的 {count} 个时段没有拍摄：{reason}",
-                            span_label(first, last)
+                        Some((first, last, count)) if count > 1 => tr!(
+                            "{} 期间的 {} 个时段没有拍摄：{}",
+                            span_label(first, last),
+                            count,
+                            reason
                         ),
-                        _ => format!("这个时段没有拍摄：{reason}"),
+                        _ => tr!("这个时段没有拍摄：{}", reason),
                     }
                     .into(),
                 );
                 return;
             }
-            window.set_snapshot_detail("正在打开…".into());
+            window.set_snapshot_detail(tr!("正在打开…").into());
             // The image is read and decoded off the UI thread; a later
             // selection makes this one moot.
             let storage = Arc::clone(&storage);
@@ -1559,7 +1587,7 @@ fn install_snapshot_callbacks(
                         }
                         Err(error) => {
                             window.set_snapshot_preview(Image::default());
-                            window.set_snapshot_detail(format!("预览失败：{error}").into());
+                            window.set_snapshot_detail(tr!("预览失败：{}", error).into());
                         }
                     }
                 });
@@ -1608,22 +1636,22 @@ fn install_snapshot_callbacks(
                         }
                         window.set_action_status(match postponed {
                             Some(error) => {
-                                format!("已删除所选快照；旧加密数据稍后清理：{error}").into()
+                                tr!("已删除所选快照；旧加密数据稍后清理：{}", error).into()
                             }
-                            None => "已删除所选快照".into(),
+                            None => tr!("已删除所选快照").into(),
                         });
                         if let Err(error) =
                             refresh_snapshot_panel(&window, &storage, &ui_state, &snapshot_state)
                         {
-                            window.set_action_status(format!("列表刷新失败：{error}").into());
+                            window.set_action_status(tr!("列表刷新失败：{}", error).into());
                         }
                         let index = window.get_snapshot_selected_index();
                         if index >= 0 {
                             window.invoke_snapshot_row_selected(index);
                         }
                     }
-                    Ok(false) => window.set_action_status("所选记录没有可删除的图片".into()),
-                    Err(error) => window.set_action_status(format!("快照删除失败：{error}").into()),
+                    Ok(false) => window.set_action_status(tr!("所选记录没有可删除的图片").into()),
+                    Err(error) => window.set_action_status(tr!("快照删除失败：{}", error).into()),
                 }
             }
         });
@@ -1702,7 +1730,7 @@ fn install_snapshot_callbacks(
                 window.set_snapshot_selected_index(-1);
                 window.set_snapshot_deletable(false);
                 clear_snapshot_preview(&window);
-                window.set_snapshot_detail("从左侧选择一张快照预览".into());
+                window.set_snapshot_detail(tr!("从左侧选择一张快照预览").into());
             }
             snapshot_grid::tick_all(&mut state, false);
             snapshot_grid::show_ticks(&window, &state);
@@ -1720,17 +1748,18 @@ fn install_snapshot_callbacks(
                 busy.store(false, Ordering::Release);
                 let message = match result {
                     Ok(deletion) => {
-                        let mut message = format!(
+                        let mut message = trn!(
+                            deletion.deleted,
                             "已删除 {} 张快照，释放 {}",
                             deletion.deleted,
                             format_bytes(deletion.released_bytes)
                         );
                         if let Some(error) = deletion.cleanup_pending {
-                            message.push_str(&format!("；旧加密数据稍后清理：{error}"));
+                            message.push_str(&tr!("；旧加密数据稍后清理：{}", error));
                         }
                         message
                     }
-                    Err(error) => format!("批量删除失败：{error}"),
+                    Err(error) => tr!("批量删除失败：{}", error),
                 };
                 let _ = sender.send(ActionStatus {
                     message,
@@ -1772,7 +1801,7 @@ fn install_snapshot_callbacks(
                         busy.store(false, Ordering::Release);
                         let (message, slot) = match result {
                             Ok(summary) => (capture_message(&summary), summary.slot_utc_ms),
-                            Err(error) => (format!("拍摄失败：{error}"), 0),
+                            Err(error) => (tr!("拍摄失败：{}", error), 0),
                         };
                         let _ = weak.upgrade_in_event_loop(move |window| {
                             window
@@ -1794,7 +1823,11 @@ fn install_snapshot_callbacks(
                 let _ = window_chrome::show_and_activate(&window);
             } else if !window.window().is_visible() {
                 // Taken from the tray: the hidden window cannot show the result.
-                tray::show_message("Timelens 快照", message.to_string(), slot.as_str() != "0");
+                tray::show_message(
+                    tr!("Timelens 快照"),
+                    message.to_string(),
+                    slot.as_str() != "0",
+                );
             }
             window.set_action_status(message);
             let Ok(slot) = slot.parse::<i64>() else {
@@ -1811,7 +1844,7 @@ fn install_snapshot_callbacks(
                     next.selected_identity = ui_state.borrow().selected_identity.clone();
                     *ui_state.borrow_mut() = next;
                     if let Err(error) = refresh_timeline(&window, &storage, &ui_state) {
-                        window.set_action_status(format!("刷新失败：{error}").into());
+                        window.set_action_status(tr!("刷新失败：{}", error).into());
                     }
                 }
                 snapshot_state.borrow_mut().pending_select = Some(slot);
@@ -1819,7 +1852,7 @@ fn install_snapshot_callbacks(
             if let Err(error) =
                 refresh_snapshot_panel(&window, &storage, &ui_state, &snapshot_state)
             {
-                window.set_action_status(format!("快照列表刷新失败：{error}").into());
+                window.set_action_status(tr!("快照列表刷新失败：{}", error).into());
             }
         });
     }
@@ -1837,7 +1870,7 @@ fn install_snapshot_callbacks(
         window.on_snapshot_toggle_exclusion(move || {
             let identity = ui_state.borrow().selected_identity.clone();
             let result = (|| -> Result<String> {
-                let identity = identity.context("请先在主界面选择一个应用")?;
+                let identity = identity.context(tr!("请先在主界面选择一个应用"))?;
                 let storage = storage
                     .lock()
                     .map_err(|_| anyhow::anyhow!("storage lock poisoned"))?;
@@ -1847,23 +1880,23 @@ fn install_snapshot_callbacks(
                     .any(|candidate| candidate == &identity);
                 storage.set_snapshot_excluded(&identity, !excluded, unix_time_ms())?;
                 Ok(if excluded {
-                    "已从快照排除名单恢复所选应用".to_owned()
+                    tr!("已从快照排除名单恢复所选应用").to_owned()
                 } else {
-                    "已将所选应用加入独立快照排除名单".to_owned()
+                    tr!("已将所选应用加入独立快照排除名单").to_owned()
                 })
             })();
             if let Some(window) = weak.upgrade() {
                 window.set_action_status(
                     result
                         .as_ref()
-                        .map_or_else(|error| format!("排除设置失败：{error}"), Clone::clone)
+                        .map_or_else(|error| tr!("排除设置失败：{}", error), Clone::clone)
                         .into(),
                 );
                 if result.is_ok()
                     && let Err(error) =
                         refresh_snapshot_panel(&window, &storage, &ui_state, &snapshot_state)
                 {
-                    window.set_action_status(format!("快照设置刷新失败：{error}").into());
+                    window.set_action_status(tr!("快照设置刷新失败：{}", error).into());
                 }
             }
         });
@@ -1874,8 +1907,7 @@ fn install_snapshot_callbacks(
 /// How the toast treats a status: 0 a result that fades, 1 work still going,
 /// 2 a failure that stays until dismissed.
 fn status_kind(message: &str) -> i32 {
-    const FAILURE: [&str; 6] = ["失败", "错误", "无法", "未能", "未完成", "请输入"];
-    if FAILURE.iter().any(|word| message.contains(word)) {
+    if i18n::reads_as_failure(message) {
         2
     } else if message.ends_with('…') {
         1
@@ -1884,13 +1916,20 @@ fn status_kind(message: &str) -> i32 {
     }
 }
 
-/// The file an export status names, when it still exists.
+/// The file an export status names, when it still exists. Every language puts
+/// the path last, so it starts at the first drive or share that leads to it.
 fn status_path(message: &str) -> Option<PathBuf> {
-    let (_, path) = message
-        .split_once("导出到 ")
-        .or_else(|| message.split_once("个文件到 "))?;
-    let path = PathBuf::from(path.trim());
-    path.exists().then_some(path)
+    message
+        .char_indices()
+        .filter(|&(index, _)| {
+            let rest = &message.as_bytes()[index..];
+            rest.starts_with(br"\\")
+                || (rest.len() > 2
+                    && rest[0].is_ascii_alphabetic()
+                    && rest[1..].starts_with(b":\\"))
+        })
+        .map(|(index, _)| PathBuf::from(message[index..].trim()))
+        .find(|path| path.exists())
 }
 
 const PROJECT_URL: &str = "https://github.com/ReasonW6/Timelens";
@@ -1903,13 +1942,22 @@ fn open_in_browser(url: &str) {
 
 fn capture_message(summary: &snapshot::CaptureSummary) -> String {
     let when = clock_label(summary.slot_utc_ms);
-    let reason = summary.reason.map_or("原因未知", snapshot_reason_label);
+    let reason = summary
+        .reason
+        .map_or(tr!("原因未知"), snapshot_reason_label);
     match (summary.stored, summary.missing) {
-        (0, _) => format!("没有拍摄：{reason}"),
-        (1, 0) => format!("已拍摄 {when} 的快照"),
-        (stored, 0) => format!("已拍摄 {when} 的快照，共 {stored} 张"),
+        (0, _) => tr!("没有拍摄：{}", reason),
+        (1, 0) => tr!("已拍摄 {} 的快照", when),
+        (stored, 0) => tr!("已拍摄 {} 的快照，共 {} 张", when, stored),
         (stored, missing) => {
-            format!("已拍摄 {when} 的快照 {stored} 张；{missing} 块屏幕没有拍摄：{reason}")
+            trn!(
+                missing,
+                "已拍摄 {} 的快照 {} 张；{} 块屏幕没有拍摄：{}",
+                when,
+                stored,
+                missing,
+                reason
+            )
         }
     }
 }
@@ -2014,14 +2062,14 @@ fn update_and_refresh_snapshot_policy(
     if let Some(window) = weak.upgrade() {
         match result {
             Ok(()) => {
-                window.set_action_status("快照策略已更新；固定周期从现在重新开始".into());
+                window.set_action_status(tr!("快照策略已更新；固定周期从现在重新开始").into());
                 if let Err(error) =
                     refresh_snapshot_panel(&window, storage, ui_state, snapshot_state)
                 {
-                    window.set_action_status(format!("快照设置刷新失败：{error}").into());
+                    window.set_action_status(tr!("快照设置刷新失败：{}", error).into());
                 }
             }
-            Err(error) => window.set_action_status(format!("快照策略失败：{error}").into()),
+            Err(error) => window.set_action_status(tr!("快照策略失败：{}", error).into()),
         }
     }
 }
@@ -2138,9 +2186,9 @@ fn refresh_snapshot_panel(
             } else {
                 let reason = slot
                     .missing_reason
-                    .map_or("原因未知", snapshot_reason_label);
+                    .map_or(tr!("原因未知"), snapshot_reason_label);
                 if count > 1 {
-                    format!("{reason} · {count} 次").into()
+                    tr!("{} · {} 次", reason, count).into()
                 } else {
                     reason.into()
                 }
@@ -2148,7 +2196,7 @@ fn refresh_snapshot_panel(
             badge: display_numbers
                 .get(&slot.display.key)
                 .filter(|_| several_displays)
-                .map_or_else(SharedString::new, |number| format!("屏 {number}").into()),
+                .map_or_else(SharedString::new, |number| tr!("屏 {}", number).into()),
             display: slot
                 .display
                 .key
@@ -2156,13 +2204,13 @@ fn refresh_snapshot_panel(
                 .to_owned()
                 .into(),
             result: if slot.success {
-                format!("已保存 · {}", format_bytes(slot.plaintext_bytes)).into()
+                tr!("已保存 · {}", format_bytes(slot.plaintext_bytes)).into()
             } else {
-                format!(
+                tr!(
                     "缺失 · {}",
                     slot.missing_reason
                         .map(snapshot_reason_label)
-                        .unwrap_or("未知原因")
+                        .unwrap_or(tr!("未知原因"))
                 )
                 .into()
             },
@@ -2200,14 +2248,18 @@ fn refresh_snapshot_panel(
     }
     window.set_snapshot_summary(
         if saved == 0 && unsaved == 0 {
-            "这段时间没有快照".to_owned()
+            tr!("这段时间没有快照").to_owned()
         } else {
-            let mut summary = format!("{} 张快照", grouped_count(saved));
+            let mut summary = trn!(saved, "{} 张快照", grouped_count(saved));
             if unsaved > 0 {
-                summary.push_str(&format!(" · {} 个时段没有拍摄", grouped_count(unsaved)));
+                summary.push_str(&trn!(
+                    unsaved,
+                    " · {} 个时段没有拍摄",
+                    grouped_count(unsaved)
+                ));
             }
             if truncated {
-                summary.push_str(&format!(" · 显示最近 {SNAPSHOTS_LISTED} 条"));
+                summary.push_str(&tr!(" · 显示最近 {} 条", SNAPSHOTS_LISTED));
             }
             summary
         }
@@ -2226,7 +2278,7 @@ fn refresh_snapshot_panel(
     snapshot_grid::show_neighbours(window, &snapshot_state.borrow(), selected_index);
     if selected_index < 0 {
         clear_snapshot_preview(window);
-        window.set_snapshot_detail("从左侧选择一张快照预览".into());
+        window.set_snapshot_detail(tr!("从左侧选择一张快照预览").into());
     } else if newly_selected {
         window.invoke_snapshot_row_selected(selected_index);
     }
@@ -2246,10 +2298,10 @@ fn refresh_snapshot_panel(
     );
     let exclusion_label = match selected_identity {
         Some(identity) if exclusions.iter().any(|candidate| candidate == &identity) => {
-            format!("{} · 当前已排除", window.get_selected_name())
+            tr!("{} · 当前已排除", window.get_selected_name())
         }
-        Some(_) => format!("{} · 当前允许", window.get_selected_name()),
-        None => "先在主界面选择应用".to_owned(),
+        Some(_) => tr!("{} · 当前允许", window.get_selected_name()),
+        None => tr!("先在主界面选择应用").to_owned(),
     };
     window.set_snapshot_exclusion_label(exclusion_label.into());
     Ok(true)
@@ -2289,7 +2341,7 @@ fn install_export_callback(
             Ok(Some(path)) => path,
             Ok(None) => return,
             Err(error) => {
-                window.set_action_status(format!("无法选择位置：{error}").into());
+                window.set_action_status(tr!("无法选择位置：{}", error).into());
                 return;
             }
         };
@@ -2305,7 +2357,8 @@ fn install_export_callback(
                     .lock()
                     .map_err(|_| anyhow::anyhow!("storage lock poisoned"))?;
                 let now = unix_time_ms();
-                let range = stats_range(&storage, scope, now)?.context("还没有可导出的记录")?;
+                let range =
+                    stats_range(&storage, scope, now)?.context(tr!("还没有可导出的记录"))?;
                 let format = if format == 0 {
                     ExportFormat::Json
                 } else {
@@ -2315,8 +2368,8 @@ fn install_export_callback(
             });
             busy.store(false, Ordering::Release);
             let message = match result {
-                Ok(()) => format!("统计已导出到 {}", path.display()),
-                Err(error) => format!("导出失败：{error}"),
+                Ok(()) => tr!("统计已导出到 {}", path.display()),
+                Err(error) => tr!("导出失败：{}", error),
             };
             let _ = sender.send(ActionStatus {
                 message,
@@ -2360,13 +2413,13 @@ fn render_coverage(window: &AppWindow, coverage: Option<Coverage>) {
         .count();
     let mut note = Vec::new();
     if unobserved > 0 {
-        note.push(format!("未观察 {}", format_duration(unobserved)));
+        note.push(tr!("未观察 {}", format_duration(unobserved)));
     }
     if gap_count > 0 {
-        note.push(format!("明确缺口 {gap_count} 段"));
+        note.push(trn!(gap_count, "明确缺口 {} 段", gap_count));
     }
     if cleaned_count > 0 {
-        note.push(format!("已清理 {cleaned_count} 段"));
+        note.push(trn!(cleaned_count, "已清理 {} 段", cleaned_count));
     }
     const GAPS_LISTED: usize = 50;
     let mut rows = gaps
@@ -2381,12 +2434,19 @@ fn render_coverage(window: &AppWindow, coverage: Option<Coverage>) {
         })
         .collect::<Vec<_>>();
     if gaps.len() > GAPS_LISTED {
-        rows.push(format!("另有 {} 段未列出", gaps.len() - GAPS_LISTED).into());
+        rows.push(
+            trn!(
+                gaps.len() - GAPS_LISTED,
+                "另有 {} 段未列出",
+                gaps.len() - GAPS_LISTED
+            )
+            .into(),
+        );
     }
     window.set_apps_coverage(format!("{coverage:.1}%").into());
     window.set_apps_coverage_note(
         if note.is_empty() {
-            "没有缺失数据".to_owned()
+            tr!("没有缺失数据").to_owned()
         } else {
             note.join(" · ")
         }
@@ -2398,19 +2458,19 @@ fn render_coverage(window: &AppWindow, coverage: Option<Coverage>) {
 /// What a gap in the data stands for.
 fn gap_reason_label(reason: &str) -> &str {
     match reason {
-        "unobserved" => "采集器没有运行记录",
-        "collector_restart" => "采集器重启",
-        "buffer_overflow" => "记录过多，部分丢失",
-        "input_overflow" => "输入计数溢出",
-        "clock_discontinuity" => "系统时间跳变",
-        "retention_time" => "超过保留期，已清理",
-        "retention_space" => "超过空间上限，已清理",
-        "user_deleted" => "已手动删除",
-        "recovery_corruption" => "损坏恢复时丢失",
-        "global_pause" => "已暂停记录",
-        "privacy_exclusion" => "不记录的应用",
-        "session_disconnected" => "会话断开",
-        "secure_desktop" => "安全桌面",
+        "unobserved" => tr!("采集器没有运行记录"),
+        "collector_restart" => tr!("采集器重启"),
+        "buffer_overflow" => tr!("记录过多，部分丢失"),
+        "input_overflow" => tr!("输入计数溢出"),
+        "clock_discontinuity" => tr!("系统时间跳变"),
+        "retention_time" => tr!("超过保留期，已清理"),
+        "retention_space" => tr!("超过空间上限，已清理"),
+        "user_deleted" => tr!("已手动删除"),
+        "recovery_corruption" => tr!("损坏恢复时丢失"),
+        "global_pause" => tr!("已暂停记录"),
+        "privacy_exclusion" => tr!("不记录的应用"),
+        "session_disconnected" => tr!("会话断开"),
+        "secure_desktop" => tr!("安全桌面"),
         _ => reason,
     }
 }
@@ -2440,41 +2500,44 @@ fn clock_label(timestamp: i64) -> String {
 
 fn snapshot_policy_label(policy: SnapshotPolicy) -> String {
     let enabled = if policy.enabled {
-        "已启用"
+        tr!("已启用")
     } else {
-        "已停用"
+        tr!("已停用")
     };
     let target = if policy.capture_all_displays {
-        "全部显示器"
+        tr!("全部显示器")
     } else {
-        "当前显示器"
+        tr!("当前显示器")
     };
     let days = policy
         .retention_days
-        .map_or_else(|| "永久".to_owned(), |days| format!("{days} 天"));
-    format!(
-        "{enabled} · 每 {} 分钟 · {target} · {days} / {}",
+        .map_or_else(|| tr!("永久").to_owned(), |days| trn!(days, "{} 天", days));
+    tr!(
+        "{} · 每 {} 分钟 · {} · {} / {}",
+        enabled,
         policy.interval_minutes,
+        target,
+        days,
         format_bytes(policy.max_bytes)
     )
 }
 
 fn snapshot_reason_label(reason: SnapshotMissingReason) -> &'static str {
     match reason {
-        SnapshotMissingReason::DesktopIdle => "桌面空闲",
-        SnapshotMissingReason::GlobalPause => "已暂停记录",
-        SnapshotMissingReason::Locked => "锁屏",
-        SnapshotMissingReason::Sleep => "睡眠/恢复",
-        SnapshotMissingReason::SecureDesktop => "安全桌面/UAC",
-        SnapshotMissingReason::SessionDisconnected => "会话断开",
-        SnapshotMissingReason::RemoteSession => "远程会话",
-        SnapshotMissingReason::PrivacyExclusion => "隐私排除",
-        SnapshotMissingReason::CaptureFailed => "捕获失败",
-        SnapshotMissingReason::LowDisk => "可用空间低于 2 GB",
-        SnapshotMissingReason::RetentionCleaned => "保留策略已清理",
-        SnapshotMissingReason::UserDeleted => "用户已删除",
-        SnapshotMissingReason::BackupOmitted => "备份未包含图片",
-        SnapshotMissingReason::RecoveryCorruption => "图片损坏，无法恢复",
+        SnapshotMissingReason::DesktopIdle => tr!("桌面空闲"),
+        SnapshotMissingReason::GlobalPause => tr!("已暂停记录"),
+        SnapshotMissingReason::Locked => tr!("锁屏"),
+        SnapshotMissingReason::Sleep => tr!("睡眠/恢复"),
+        SnapshotMissingReason::SecureDesktop => tr!("安全桌面/UAC"),
+        SnapshotMissingReason::SessionDisconnected => tr!("会话断开"),
+        SnapshotMissingReason::RemoteSession => tr!("远程会话"),
+        SnapshotMissingReason::PrivacyExclusion => tr!("隐私排除"),
+        SnapshotMissingReason::CaptureFailed => tr!("捕获失败"),
+        SnapshotMissingReason::LowDisk => tr!("可用空间低于 2 GB"),
+        SnapshotMissingReason::RetentionCleaned => tr!("保留策略已清理"),
+        SnapshotMissingReason::UserDeleted => tr!("用户已删除"),
+        SnapshotMissingReason::BackupOmitted => tr!("备份未包含图片"),
+        SnapshotMissingReason::RecoveryCorruption => tr!("图片损坏，无法恢复"),
     }
 }
 
@@ -2484,13 +2547,13 @@ fn snapshot_time_label(timestamp_utc_ms: i64) -> String {
         .map(|value| {
             let value = value.with_timezone(&chrono::Local);
             let format = if value.year() == chrono::Local::now().year() {
-                "%-m月%-d日 %H:%M"
+                tr!("%-m月%-d日 %H:%M")
             } else {
-                "%Y年%-m月%-d日 %H:%M"
+                tr!("%Y年%-m月%-d日 %H:%M")
             };
             value.format(format).to_string()
         })
-        .unwrap_or_else(|| "时间不可用".to_owned())
+        .unwrap_or_else(|| tr!("时间不可用").to_owned())
 }
 
 fn grouped_count(value: u64) -> String {
@@ -2518,27 +2581,29 @@ fn format_duration(milliseconds: u64) -> String {
     let seconds = seconds % 60;
     if hours > 0 {
         if minutes == 0 {
-            format!("{hours}小时")
+            tr!("{}小时", hours)
         } else {
-            format!("{hours}小时{minutes}分")
+            tr!("{}小时{}分", hours, minutes)
         }
     } else if minutes > 0 {
         if seconds == 0 {
-            format!("{minutes}分")
+            tr!("{}分", minutes)
         } else {
-            format!("{minutes}分{seconds}秒")
+            tr!("{}分{}秒", minutes, seconds)
         }
     } else {
-        format!("{seconds}秒")
+        tr!("{}秒", seconds)
     }
 }
 
 fn retention_label(policy: RetentionPolicy) -> String {
-    let time = policy
-        .days
-        .map_or_else(|| "永久保留".to_owned(), |days| format!("保留 {days} 天"));
-    format!(
-        "{time}。数据库超过 {} 时，从最早的一天开始清理。",
+    let time = policy.days.map_or_else(
+        || tr!("永久保留").to_owned(),
+        |days| trn!(days, "保留 {} 天", days),
+    );
+    tr!(
+        "{}。数据库超过 {} 时，从最早的一天开始清理。",
+        time,
         format_bytes(policy.max_bytes)
     )
 }
@@ -2670,5 +2735,26 @@ mod tests {
         assert_eq!(collector_state(120 * second, Some(10 * second), false), 0);
         assert_eq!(collector_state(600 * second, Some(100 * second), false), 2);
         assert_eq!(collector_state(600 * second, None, true), 0);
+    }
+
+    #[test]
+    fn status_path_finds_the_exported_file_in_any_language() {
+        let directory = tempfile::tempdir().unwrap();
+        let file = directory.path().join("Timelens 统计.csv");
+        std::fs::write(&file, "").unwrap();
+        let path = file.display().to_string();
+        for message in [
+            format!("统计已导出到 {path}"),
+            format!("Statistics exported to {path}"),
+            format!("統計のエクスポート先: {path}"),
+            format!("Backup created and verified · 3 files · 1.2 MB, exported to {path}"),
+        ] {
+            assert_eq!(status_path(&message), Some(file.clone()), "{message}");
+        }
+        assert_eq!(
+            status_path(&format!("Statistics exported to {path}.gone")),
+            None
+        );
+        assert_eq!(status_path("正在记录"), None);
     }
 }

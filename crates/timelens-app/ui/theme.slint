@@ -90,6 +90,8 @@ export global Theme {
     out property <color> shadow-strong: dark ? #00000073 : #161c2d33;
 
     out property <string> font-display: "Segoe UI Variable Display";
+    // The interface language's own Windows font, so kanji and hangul take their shapes.
+    in property <string> font-ui: "Microsoft YaHei UI";
 
     // Names kept for panels written against the earlier Paper theme.
     out property <color> paper: layer;
@@ -623,7 +625,7 @@ export component ConfirmationDialog inherits Rectangle {
                 HorizontalLayout {
                     spacing: 10px;
                     Rectangle { horizontal-stretch: 1; }
-                    cancel-button := Action { width: 96px; text: "取消"; modal-action: true; clicked => { root.dismissed(); } }
+                    cancel-button := Action { width: 96px; text: @tr("取消"); modal-action: true; clicked => { root.dismissed(); } }
                     accept-button := Action { min-width: 120px; text: root.accept-text; modal-action: true; accent: true; danger: true; clicked => { root.accepted(); } }
                 }
             }

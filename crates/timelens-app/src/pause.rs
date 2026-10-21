@@ -1,5 +1,6 @@
 //! A pause that ends by itself. When it ends is kept beside the theme choice,
 //! outside the dataset, so it survives a restart.
+use crate::i18n::{tr, trn};
 use std::{
     cell::Cell,
     fs,
@@ -61,7 +62,8 @@ fn ends(minutes: i32, now_ms: i64) -> Option<i64> {
 pub fn resume_label(until: i64, now_ms: i64) -> String {
     let left = (until - now_ms).max(0);
     if left <= 60 * 60_000 {
-        return format!("还剩 {} 分钟", ((left + 59_999) / 60_000).max(1));
+        let minutes = ((left + 59_999) / 60_000).max(1);
+        return trn!(minutes, "还剩 {} 分钟", minutes);
     }
     let (Some(end), Some(now)) = (
         Local.timestamp_millis_opt(until).single(),
@@ -70,9 +72,9 @@ pub fn resume_label(until: i64, now_ms: i64) -> String {
         return String::new();
     };
     if end.date_naive() == now.date_naive() {
-        format!("{} 自动继续", end.format("%H:%M"))
+        tr!("{} 自动继续", end.format("%H:%M"))
     } else {
-        format!("明天 {} 自动继续", end.format("%H:%M"))
+        tr!("明天 {} 自动继续", end.format("%H:%M"))
     }
 }
 

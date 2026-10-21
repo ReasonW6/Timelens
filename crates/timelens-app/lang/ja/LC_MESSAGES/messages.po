@@ -1,0 +1,1647 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: Timelens\n"
+"Language: ja\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=1; plural=0;\n"
+
+#: main.rs
+msgid " · {} 个时段没有拍摄"
+msgid_plural " · {} 个时段没有拍摄"
+msgstr[0] " · {} 枠は未撮影"
+
+#: main.rs
+msgid " · 显示最近 {} 条"
+msgstr " · 最新の {} 件を表示"
+
+#: collection_ui.rs history.rs history_cache.rs timeline_view.rs
+msgid "%-m月%-d日"
+msgstr "%-m月%-d日"
+
+#: timeline_ui.rs
+msgid "%-m月%-d日 "
+msgstr "%-m月%-d日 "
+
+#: main.rs timeline_ui.rs
+msgid "%-m月%-d日 %H:%M"
+msgstr "%-m月%-d日 %H:%M"
+
+#: timeline_ui.rs timeline_view.rs
+msgid "%-m月%-d日 {}"
+msgstr "%-m月%-d日（{}）"
+
+#: history.rs main.rs timeline_ui.rs timeline_view.rs
+msgid "%Y年%-m月%-d日"
+msgstr "%Y年%-m月%-d日"
+
+#: main.rs
+msgid "%Y年%-m月%-d日 %H:%M"
+msgstr "%Y年%-m月%-d日 %H:%M"
+
+#: timeline_ui.rs timeline_view.rs
+msgid "%Y年%-m月%-d日 {}"
+msgstr "%Y年%-m月%-d日（{}）"
+
+#: main.rs
+msgid "0 次"
+msgstr "0 回"
+
+#: main.rs
+msgid "0 秒"
+msgstr "0秒"
+
+#: tray.rs
+msgid "1 小时"
+msgstr "1 時間"
+
+#: tray.rs
+msgid "15 分钟"
+msgstr "15 分"
+
+#: data_ui.rs
+msgid "CSV 表格"
+msgstr "CSV 表"
+
+#: data_ui.rs
+msgid "JSON 文件"
+msgstr "JSON ファイル"
+
+#: tray.rs
+msgid "Timelens 仍在后台记录"
+msgstr "Timelens はバックグラウンドで記録を続けています"
+
+#: main.rs
+msgid "Timelens 只允许以普通权限运行，请正常启动 Timelens"
+msgstr "Timelens は通常の権限でのみ動作します。Timelens を通常どおり起動してください"
+
+#: startup.rs
+msgid "Timelens 启动任务的程序配置不正确"
+msgstr "Timelens の起動タスクのプログラム設定が正しくありません"
+
+#: startup.rs
+msgid "Timelens 启动任务缺少登录触发器，请重新安装"
+msgstr "Timelens の起動タスクにサインイン トリガーがありません。再インストールしてください"
+
+#: startup.rs
+msgid "Timelens 启动任务路径不正确"
+msgstr "Timelens の起動タスクのパスが正しくありません"
+
+#: data_ui.rs
+msgid "Timelens 备份"
+msgstr "Timelens バックアップ"
+
+#: data_ui.rs main.rs
+msgid "Timelens 快照"
+msgstr "Timelens スナップショット"
+
+#: data_ui.rs
+msgid "Timelens 快照 {}"
+msgstr "Timelens スナップショット {}"
+
+#: data_ui.rs
+msgid "Timelens 文件"
+msgstr "Timelens ファイル"
+
+#: data_ui.rs
+msgid "Timelens 统计"
+msgstr "Timelens 統計"
+
+#: startup.rs
+msgid "Timelens 采集器启动任务的权限配置不正确，请重新安装"
+msgstr "Timelens コレクターの起動タスクの権限設定が正しくありません。再インストールしてください"
+
+#: startup.rs
+msgid "Timelens 采集器启动任务的程序配置不正确"
+msgstr "Timelens コレクターの起動タスクのプログラム設定が正しくありません"
+
+#: data_ui.rs
+msgid "WebP 图片"
+msgstr "WebP 画像"
+
+#: storage
+msgid "ZIP 包含重复、越界或未知路径"
+msgstr "ZIP に重複・範囲外・不明なパスがあります"
+
+#: storage
+msgid "ZIP 容量溢出"
+msgstr "ZIP の容量がオーバーフローしました"
+
+#: storage
+msgid "ZIP 文件数量超出限制"
+msgstr "ZIP のファイル数が上限を超えています"
+
+#: storage
+msgid "ZIP 解压大小超出限制"
+msgstr "ZIP の展開後のサイズが上限を超えています"
+
+#: data_ui.rs
+msgid "{}\n原来的数据没有改动，Timelens 会继续使用原位置。"
+msgstr "{}\n元のデータは変更されていません。Timelens は元の場所を使い続けます。"
+
+#: recovery.rs
+msgid "{}\n新位置：{}"
+msgstr "{}\n新しい場所: {}"
+
+#: collection_ui.rs
+msgid "{} {} 次"
+msgid_plural "{} {} 次"
+msgstr[0] "{} {} 回"
+
+#: main.rs
+msgid "{} · {} 次"
+msgstr "{} · {} 回"
+
+#: main.rs
+msgid "{} · 当前允许"
+msgstr "{} · 現在は許可"
+
+#: main.rs
+msgid "{} · 当前已排除"
+msgstr "{} · 現在は除外"
+
+#: main.rs
+msgid "{} · 每 {} 分钟 · {} · {} / {}"
+msgstr "{} · {} 分ごと · {} · {} / {}"
+
+#: collection_ui.rs
+msgid "{} ✓（来自「{}」）"
+msgstr "{} ✓（「{}」から）"
+
+#: history.rs
+msgid "{} 个应用"
+msgid_plural "{} 个应用"
+msgstr[0] "{} 個のアプリ"
+
+#: timeline_view.rs
+msgid "{} 全天"
+msgstr "{} 終日"
+
+#: main.rs
+msgid "{} 天"
+msgid_plural "{} 天"
+msgstr[0] "{} 日"
+
+#: data_ui.rs
+msgid "{} 已存在且不是空文件夹。Timelens 不会合并或覆盖已有数据，请换一个位置"
+msgstr "{} は既に存在し、空のフォルダーではありません。Timelens は既存のデータを結合も上書きもしません。別の場所を選んでください"
+
+#: main.rs
+msgid "{} 张快照"
+msgid_plural "{} 张快照"
+msgstr[0] "スナップショット {} 枚"
+
+#: main.rs
+msgid "{} 期间的 {} 个时段没有拍摄：{}"
+msgstr "{} の間の {} 枠は未撮影: {}"
+
+#: main.rs
+msgid "{} 次"
+msgid_plural "{} 次"
+msgstr[0] "{} 回"
+
+#: history.rs
+msgid "{} 段"
+msgid_plural "{} 段"
+msgstr[0] "{} 件"
+
+#: pause.rs
+msgid "{} 自动继续"
+msgstr "{} に自動で再開"
+
+#: history.rs
+msgid "{}、{}"
+msgstr "{}、{}"
+
+#: history.rs
+msgid "{}、{} 等 {} 个"
+msgstr "{}、{} など {} 個"
+
+#: main.rs
+msgid "{}。数据库超过 {} 时，从最早的一天开始清理。"
+msgstr "{}。データベースが {} を超えると、最も古い日から整理します。"
+
+#: main.rs
+msgid "{}分"
+msgstr "{}分"
+
+#: main.rs
+msgid "{}分{}秒"
+msgstr "{}分{}秒"
+
+#: main.rs
+msgid "{}小时"
+msgstr "{}時間"
+
+#: main.rs
+msgid "{}小时{}分"
+msgstr "{}時間{}分"
+
+#: main.rs
+msgid "{}秒"
+msgstr "{}秒"
+
+#: collection_ui.rs
+msgid "{}（{}）"
+msgstr "{}（{}）"
+
+#: collection_ui.rs
+msgid "{}：{}"
+msgstr "{}: {}"
+
+#: history_cache.rs
+msgid "“{}” · 最近一个月 · 找到 {} 段"
+msgid_plural "“{}” · 最近一个月 · 找到 {} 段"
+msgstr[0] "「{}」 · 過去 1 か月 · {} 件"
+
+#: collection_ui.rs
+msgid "、"
+msgstr "、"
+
+#: history.rs timeline_view.rs
+msgid "上午"
+msgstr "午前"
+
+#: data_ui.rs
+msgid "上次检查：{} · 通过"
+msgstr "前回のチェック: {} · 合格"
+
+#: history.rs timeline_view.rs
+msgid "下午"
+msgstr "午後"
+
+#: storage
+msgid "不兼容的备份格式版本"
+msgstr "互換性のないバックアップ形式のバージョンです"
+
+#: data_ui.rs
+msgid "不含快照；相关槽将显示已省略"
+msgstr "スナップショットなし。該当する枠は省略として表示します"
+
+#: collection_ui.rs
+msgid "不拍摄快照"
+msgstr "スナップショットを撮らない"
+
+#: storage
+msgid "不支持网络数据目录"
+msgstr "ネットワーク上のデータ フォルダーには対応していません"
+
+#: collection_ui.rs
+msgid "不能和自己合并，请选择另一个应用。"
+msgstr "同じアプリ同士は結合できないため、別のアプリを選んでください。"
+
+#: collection_ui.rs
+msgid "不记录活动"
+msgstr "活動を記録しない"
+
+#: history.rs main.rs
+msgid "不记录的应用"
+msgstr "記録しないアプリ"
+
+#: collection_ui.rs
+msgid "不记录输入"
+msgstr "入力を記録しない"
+
+#: data_ui.rs
+msgid "两次输入的备份密码不一致"
+msgstr "2 回入力したバックアップのパスワードが一致しません"
+
+#: history.rs
+msgid "主应用"
+msgstr "メインのアプリ"
+
+#: general_ui.rs
+msgid "主程序与采集器的自启动状态不一致，请开启开关同步设置"
+msgstr "本体とコレクターの自動起動の状態が一致しません。スイッチをオンにして揃えてください"
+
+#: appearance.rs
+msgid "主题设置未能保存：{}"
+msgstr "テーマの設定を保存できなかった: {}"
+
+#: main.rs
+msgid "之后"
+msgstr "以降"
+
+#: history.rs timeline_view.rs
+msgid "今天"
+msgstr "今日"
+
+#: timeline_ui.rs
+msgid "今天 · "
+msgstr "今日 · "
+
+#: main.rs
+msgid "仍打开"
+msgstr "開いたまま"
+
+#: main.rs
+msgid "从左侧选择一张快照预览"
+msgstr "左からスナップショットを選んでプレビュー"
+
+#: collection_ui.rs history.rs main.rs
+msgid "会话断开"
+msgstr "セッション切断"
+
+#: recovery.rs
+msgid "你可以检查原位置，或将数据恢复到另一个目录。"
+msgstr "元の場所を確認するか、データを別のフォルダーに復元できます。"
+
+#: data_ui.rs
+msgid "保存备份"
+msgstr "バックアップを保存"
+
+#: collection_ui.rs
+msgid "保存失败"
+msgstr "保存に失敗しました"
+
+#: main.rs
+msgid "保留 {} 天"
+msgid_plural "保留 {} 天"
+msgstr[0] "{} 日間保持"
+
+#: main.rs
+msgid "保留策略失败：{}"
+msgstr "保持設定に失敗しました: {}"
+
+#: main.rs
+msgid "保留策略已更新；清理快照 {} 项、活动 {} 项、输入 {} 项"
+msgstr "保持設定を更新しました。スナップショット {} 件、活動 {} 件、入力 {} 件を整理"
+
+#: main.rs
+msgid "保留策略已清理"
+msgstr "保持設定により整理済み"
+
+#: main.rs
+msgid "先在主界面选择应用"
+msgstr "先にメイン画面でアプリを選んでください"
+
+#: main.rs
+msgid "全部显示器"
+msgstr "すべてのディスプレイ"
+
+#: collection_ui.rs timeline_ui.rs
+msgid "全部记录"
+msgstr "すべての記録"
+
+#: timeline_ui.rs
+msgid "全部记录 · {}起"
+msgstr "すべての記録 · {}から"
+
+#: history.rs
+msgid "凌晨"
+msgstr "深夜"
+
+#: storage
+msgid "切换未完成，原数据仍使用；已验证的副本位于"
+msgstr "切り替えは未完了で、元のデータを使い続けます。検証済みのコピーの場所:"
+
+#: collection_ui.rs
+msgid "切换记录状态失败"
+msgstr "記録状態の切り替えに失敗しました"
+
+#: main.rs
+msgid "列表刷新失败：{}"
+msgstr "リストの更新に失敗しました: {}"
+
+#: main.rs
+msgid "删除数据前必须先停止采集器"
+msgstr "データを削除する前にコレクターを停止する必要があります"
+
+#: history.rs main.rs timeline_ui.rs
+msgid "刷新失败：{}"
+msgstr "更新に失敗しました: {}"
+
+#: data_ui.rs
+msgid "包含快照"
+msgstr "スナップショットを含む"
+
+#: data_ui.rs
+msgid "原位置有 {} 个文件未能删除，可以稍后手动检查。"
+msgid_plural "原位置有 {} 个文件未能删除，可以稍后手动检查。"
+msgstr[0] "元の場所のファイル {} 個を削除できなかったため、あとで手動で確認してください。"
+
+#: data_ui.rs
+msgid "原位置的数据已清理，记录已恢复。"
+msgstr "元の場所のデータを整理し、記録を再開しました。"
+
+#: history.rs main.rs
+msgid "原因未知"
+msgstr "原因不明"
+
+#: main.rs
+msgid "发现数据损坏，已停止写入。请进入恢复界面，保留原件并恢复到新目录。"
+msgstr "データの破損が見つかったため書き込みを停止しました。復元画面を開き、元のデータを残して新しいフォルダーに復元してください。"
+
+#: data_ui.rs
+msgid "另一个数据维护操作正在进行"
+msgstr "別のデータ メンテナンス操作が実行中です"
+
+#: collection_ui.rs
+msgid "另有 {} 次按键不在这张键盘图上，例如 Home、Delete 等编辑键或输入法切换键。"
+msgid_plural "另有 {} 次按键不在这张键盘图上，例如 Home、Delete 等编辑键或输入法切换键。"
+msgstr[0] "ほかに {} 回の押下がこのキーボード図にありません（Home や Delete などの編集キー、IME の切り替えキーなど）。"
+
+#: main.rs
+msgid "另有 {} 段未列出"
+msgid_plural "另有 {} 段未列出"
+msgstr[0] "ほかに {} 件は未表示"
+
+#: main.rs
+msgid "可用空间低于 2 GB"
+msgstr "空き容量が 2 GB 未満です"
+
+#: collection_ui.rs
+msgid "合并后共用规则：{} · {} · {}。"
+msgstr "結合後の共通ルール: {} · {} · {}。"
+
+#: data_ui.rs
+msgid "同名文件太多，请换一个文件名"
+msgstr "同じ名前のファイルが多すぎます。別の名前にしてください"
+
+#: history.rs
+msgid "同屏"
+msgstr "同時表示"
+
+#: history.rs
+msgid "同屏 {}"
+msgstr "同時表示 {}"
+
+#: history.rs
+msgid "含 {}"
+msgstr "{} を含む"
+
+#: history.rs
+msgid "含 {} · {}"
+msgstr "{} を含む · {}"
+
+#: startup.rs
+msgid "启动任务状态与所选设置不一致，请重试"
+msgstr "起動タスクの状態が選んだ設定と一致しません。もう一度お試しください"
+
+#: startup.rs
+msgid "启动任务路径不正确"
+msgstr "起動タスクのパスが正しくありません"
+
+#: startup.rs
+msgid "启动设置包含无效的路径字符"
+msgstr "起動設定に無効なパス文字があります"
+
+#: startup.rs
+msgid "启动设置组件缺失，请重新安装 Timelens"
+msgstr "起動設定のコンポーネントがありません。Timelens を再インストールしてください"
+
+#: timeline_view.rs
+msgid "周一"
+msgstr "月"
+
+#: timeline_view.rs
+msgid "周三"
+msgstr "水"
+
+#: timeline_view.rs
+msgid "周二"
+msgstr "火"
+
+#: timeline_view.rs
+msgid "周五"
+msgstr "金"
+
+#: timeline_view.rs
+msgid "周六"
+msgstr "土"
+
+#: timeline_view.rs
+msgid "周四"
+msgstr "木"
+
+#: timeline_view.rs
+msgid "周日"
+msgstr "日"
+
+#: history.rs
+msgid "命中 {}"
+msgstr "一致 {}"
+
+#: storage
+msgid "图片哈希无效"
+msgstr "画像のハッシュが無効です"
+
+#: main.rs
+msgid "图片损坏，无法恢复"
+msgstr "画像が破損していて復元できません"
+
+#: storage
+msgid "图片数量与数据库不一致"
+msgstr "画像の数がデータベースと一致しません"
+
+#: storage
+msgid "备份包含未知或被修改的数据库结构"
+msgstr "バックアップに不明または改変されたデータベース構造があります"
+
+#: data_ui.rs
+msgid "备份已写出，但回读校验没有通过"
+msgstr "バックアップは書き出しましたが、読み戻しの検証に通りませんでした"
+
+#: data_ui.rs
+msgid "备份已创建并通过校验 · {} 个文件 · {}，已导出到 {}"
+msgid_plural "备份已创建并通过校验 · {} 个文件 · {}，已导出到 {}"
+msgstr[0] "バックアップを作成して検証しました · {} ファイル · {} · エクスポート先: {}"
+
+#: recovery.rs
+msgid "备份已恢复并通过校验。"
+msgstr "バックアップを復元して検証しました。"
+
+#: storage
+msgid "备份数据库版本无效"
+msgstr "バックアップのデータベースのバージョンが無効です"
+
+#: main.rs
+msgid "备份未包含图片"
+msgstr "バックアップに画像は含まれていません"
+
+#: storage
+msgid "备份清单无效或密码错误"
+msgstr "バックアップの一覧が無効か、パスワードが間違っています"
+
+#: storage
+msgid "备份路径无效"
+msgstr "バックアップのパスが無効です"
+
+#: collection_ui.rs data_ui.rs
+msgid "存储锁不可用"
+msgstr "ストレージのロックを使えません"
+
+#: collection_ui.rs history.rs main.rs
+msgid "安全桌面"
+msgstr "セキュア デスクトップ"
+
+#: main.rs
+msgid "安全桌面/UAC"
+msgstr "セキュア デスクトップ/UAC"
+
+#: local_config.rs
+msgid "安装器准备的数据目录不存在或不为空：{}"
+msgstr "インストーラーが用意したデータ フォルダーがないか、空ではありません: {}"
+
+#: startup.rs
+msgid "安装目录不可用"
+msgstr "インストール フォルダーを使えません"
+
+#: data_ui.rs
+msgid "完整性与外键检查通过"
+msgstr "整合性と外部キーのチェックに合格しました"
+
+#: data_ui.rs
+msgid "导出 Timelens 文件"
+msgstr "Timelens ファイルをエクスポート"
+
+#: main.rs
+msgid "导出失败：{}"
+msgstr "エクスポートに失敗しました: {}"
+
+#: data_ui.rs
+msgid "导出快照"
+msgstr "スナップショットをエクスポート"
+
+#: data_ui.rs
+msgid "导出统计"
+msgstr "統計をエクスポート"
+
+#: collection_ui.rs
+msgid "将删除「{}」的 {} 个窗口实例。"
+msgid_plural "将删除「{}」的 {} 个窗口实例。"
+msgstr[0] "「{}」のウィンドウ インスタンス {} 個を削除します。"
+
+#: main.rs
+msgid "尚无应用数据"
+msgstr "アプリのデータはまだありません"
+
+#: main.rs
+msgid "屏 {}"
+msgstr "画面 {}"
+
+#: main.rs
+msgid "已从快照排除名单恢复所选应用"
+msgstr "選んだアプリをスナップショットの除外リストから外しました"
+
+#: main.rs
+msgid "已保存 · {}"
+msgstr "保存済み · {}"
+
+#: main.rs
+msgid "已停用"
+msgstr "オフ"
+
+#: general_ui.rs
+msgid "已关闭开机自启动"
+msgstr "サインイン時の起動をオフにしました"
+
+#: main.rs
+msgid "已删除 {} 张快照，释放 {}"
+msgid_plural "已删除 {} 张快照，释放 {}"
+msgstr[0] "スナップショット {} 枚を削除し、{} を解放しました"
+
+#: collection_ui.rs
+msgid "已删除「{}」的历史"
+msgstr "「{}」の履歴を削除しました"
+
+#: main.rs
+msgid "已删除所选快照"
+msgstr "選んだスナップショットを削除しました"
+
+#: main.rs
+msgid "已删除所选快照；旧加密数据稍后清理：{}"
+msgstr "選んだスナップショットを削除しました。古い暗号化データはあとで整理します: {}"
+
+#: startup.rs
+msgid "已取消管理员确认，开机自启动保持原设置"
+msgstr "管理者の確認がキャンセルされたため、サインイン時の起動は元の設定のままです"
+
+#: collection_ui.rs
+msgid "已合并「{}」，原始记录不改写"
+msgstr "「{}」を結合しました。元の記録は書き換えません"
+
+#: main.rs
+msgid "已启用"
+msgstr "オン"
+
+#: main.rs
+msgid "已将所选应用加入独立快照排除名单"
+msgstr "選んだアプリをスナップショットの除外リストに追加しました"
+
+#: recovery.rs
+msgid "已建立空数据集。原件继续保留在原位置。"
+msgstr "空のデータセットを作成しました。元のデータは元の場所に残ります。"
+
+#: general_ui.rs
+msgid "已开启开机自启动"
+msgstr "サインイン時の起動をオンにしました"
+
+#: recovery.rs
+msgid "已恢复 {} 行；已知无效记录 {} 行，无法完整读取的表 {} 个，缺失图片 {} 张。采集与快照已暂停，请先检查排除规则。"
+msgstr "{} 行を復元しました。既知の無効な記録 {} 行、完全に読み取ることができなかったテーブル {} 個、欠落した画像 {} 枚。収集とスナップショットは一時停止中です。先に除外ルールを確認してください。"
+
+#: main.rs
+msgid "已手动删除"
+msgstr "手動で削除済み"
+
+#: main.rs
+msgid "已拍摄 {} 的快照"
+msgstr "{} のスナップショットを撮影しました"
+
+#: main.rs
+msgid "已拍摄 {} 的快照 {} 张；{} 块屏幕没有拍摄：{}"
+msgid_plural "已拍摄 {} 的快照 {} 张；{} 块屏幕没有拍摄：{}"
+msgstr[0] "{} のスナップショットを {} 枚撮影しました。{} 画面は未撮影: {}"
+
+#: main.rs
+msgid "已拍摄 {} 的快照，共 {} 张"
+msgstr "{} のスナップショットを撮影しました（計 {} 枚）"
+
+#: history.rs
+msgid "已显示保留期内的全部记录"
+msgstr "保持期間内の記録をすべて表示しました"
+
+#: collection_ui.rs history.rs main.rs tray.rs
+msgid "已暂停记录"
+msgstr "記録を一時停止中"
+
+#: tray.rs
+msgid "已暂停记录 · {}"
+msgstr "記録を一時停止中 · {}"
+
+#: collection_ui.rs
+msgid "已更新「{}」的规则，立即生效，不影响已有记录"
+msgstr "「{}」のルールを更新しました。すぐに反映され、既存の記録には影響しません"
+
+#: main.rs
+msgid "已清理 {} 段"
+msgid_plural "已清理 {} 段"
+msgstr[0] "{} 件を整理しました"
+
+#: main.rs
+msgid "已清空 {} 行本地数据并轮换数据密钥"
+msgid_plural "已清空 {} 行本地数据并轮换数据密钥"
+msgstr[0] "ローカル データ {} 行を消去し、データ キーを更新しました"
+
+#: main.rs
+msgid "已用 {} · 最早可回看到 {}"
+msgstr "使用量 {} · {} まで振り返れます"
+
+#: main.rs
+msgid "已用 {} · 还没有活动记录"
+msgstr "使用量 {} · 活動の記録はまだありません"
+
+#: collection_ui.rs
+msgid "已继续记录，从现在开始记录"
+msgstr "記録を再開しました。今から記録します"
+
+#: collection_ui.rs
+msgid "已解除合并，恢复合并前的规则"
+msgstr "結合を解除し、結合前のルールに戻しました"
+
+#: local_config.rs
+msgid "已设置的数据位置不可用：{}。请连接原磁盘或进入恢复界面。"
+msgstr "設定されたデータの場所が使えません: {}。元のディスクを接続するか、復元画面を開いてください。"
+
+#: main.rs
+msgid "已验证采集器 · PID {} · {}"
+msgstr "検証済みのコレクター · PID {} · {}"
+
+#: data_ui.rs
+msgid "应用程序"
+msgstr "アプリケーション"
+
+#: general_ui.rs
+msgid "开机自启动仅在安装版中可用"
+msgstr "サインイン時の起動はインストール版でのみ使えます"
+
+#: main.rs
+msgid "当前显示器"
+msgstr "現在のディスプレイ"
+
+#: startup.rs
+msgid "当前程序与已安装的 Timelens 不同，请在安装版中设置开机自启动"
+msgstr "このプログラムはインストール済みの Timelens と異なります。サインイン時の起動はインストール版で設定してください"
+
+#: storage
+msgid "快照像素大小超出限制"
+msgstr "スナップショットのピクセル サイズが上限を超えています"
+
+#: storage
+msgid "快照像素无法校验"
+msgstr "スナップショットのピクセルを検証できません"
+
+#: storage
+msgid "快照像素校验失败"
+msgstr "スナップショットのピクセルの検証に失敗しました"
+
+#: main.rs
+msgid "快照列表刷新失败：{}"
+msgstr "スナップショット一覧の更新に失敗しました: {}"
+
+#: main.rs
+msgid "快照删除失败：{}"
+msgstr "スナップショットの削除に失敗しました: {}"
+
+#: storage
+msgid "快照哈希无效"
+msgstr "スナップショットのハッシュが無効です"
+
+#: data_ui.rs
+msgid "快照已导出到 {}"
+msgstr "スナップショットのエクスポート先: {}"
+
+#: main.rs
+msgid "快照策略失败：{}"
+msgstr "スナップショットの設定に失敗しました: {}"
+
+#: main.rs
+msgid "快照策略已更新；固定周期从现在重新开始"
+msgstr "スナップショットの設定を更新しました。周期は今から数え直します"
+
+#: storage
+msgid "快照记录无效"
+msgstr "スナップショットの記録が無効です"
+
+#: main.rs
+msgid "快照设置刷新失败：{}"
+msgstr "スナップショットの設定の更新に失敗しました: {}"
+
+#: storage
+msgid "恢复引用包含未知表"
+msgstr "復元の参照に不明なテーブルがあります"
+
+#: storage
+msgid "恢复引用无法修复"
+msgstr "復元の参照を修復できません"
+
+#: recovery.rs
+msgid "恢复状态不可用"
+msgstr "復元の状態を使えません"
+
+#: storage
+msgid "恢复目录必须与原数据目录分开"
+msgstr "復元先のフォルダーは元のデータ フォルダーと別にしてください"
+
+#: storage
+msgid "恢复目录无效"
+msgstr "復元先のフォルダーが無効です"
+
+#: data_ui.rs
+msgid "恢复锁不可用"
+msgstr "復元のロックを使えません"
+
+#: timeline_ui.rs
+msgid "所选日期不可用"
+msgstr "選んだ日付は使えません"
+
+#: collection_ui.rs
+msgid "所选时段不可用"
+msgstr "選んだ時間帯は使えません"
+
+#: timeline_ui.rs
+msgid "所选时段还没有开始，请选择当前时刻之前的开始时间"
+msgstr "選んだ時間帯はまだ始まっていません。現在より前の開始時刻を選んでください"
+
+#: main.rs
+msgid "所选记录没有可删除的图片"
+msgstr "選んだ記録には削除できる画像がありません"
+
+#: tray.rs
+msgid "打开 Timelens"
+msgstr "Timelens を開く"
+
+#: main.rs
+msgid "打开 {} · 显示 {} · {} 个窗口"
+msgid_plural "打开 {} · 显示 {} · {} 个窗口"
+msgstr[0] "起動 {} · 表示 {} · ウィンドウ {} 個"
+
+#: main.rs
+msgid "打开 {} · 显示 {} · 后台 {}"
+msgstr "起動 {} · 表示 {} · バックグラウンド {}"
+
+#: tray.rs
+msgid "打开窗口失败：{}"
+msgstr "ウィンドウを開くのに失敗しました: {}"
+
+#: tray.rs
+msgid "托盘锁不可用"
+msgstr "トレイのロックを使えません"
+
+#: main.rs
+msgid "批量删除失败：{}"
+msgstr "一括削除に失敗しました: {}"
+
+#: main.rs
+msgid "拍摄失败：{}"
+msgstr "撮影に失敗しました: {}"
+
+#: main.rs
+msgid "捕获失败"
+msgstr "キャプチャ失敗"
+
+#: main.rs
+msgid "损坏恢复时丢失"
+msgstr "破損からの復元で欠落"
+
+#: main.rs
+msgid "排除设置失败：{}"
+msgstr "除外の設定に失敗しました: {}"
+
+#: main.rs
+msgid "握手失败：{}"
+msgstr "ハンドシェイクに失敗しました: {}"
+
+#: data_ui.rs
+msgid "操作失败：{}"
+msgstr "操作に失敗しました: {}"
+
+#: storage
+msgid "数据位置不能经过符号链接、联接或云占位目录"
+msgstr "データの場所にシンボリック リンク、ジャンクション、クラウドのプレースホルダー フォルダーは使えません"
+
+#: storage
+msgid "数据位置必须是目录"
+msgstr "データの場所はフォルダーである必要があります"
+
+#: local_config.rs
+msgid "数据位置设置格式无效"
+msgstr "データの場所の設定形式が無効です"
+
+#: local_config.rs
+msgid "数据位置设置过大"
+msgstr "データの場所の設定が大きすぎます"
+
+#: main.rs
+msgid "数据已变更，请重新选择快照"
+msgstr "データが変わりました。スナップショットを選び直してください"
+
+#: storage
+msgid "数据库完整性检查失败"
+msgstr "データベースの整合性チェックに失敗しました"
+
+#: storage
+msgid "数据库引用完整性检查失败"
+msgstr "データベースの参照整合性チェックに失敗しました"
+
+#: storage
+msgid "数据库版本与备份清单不一致"
+msgstr "データベースのバージョンがバックアップの一覧と一致しません"
+
+#: main.rs
+msgid "数据库状态写入失败：{}"
+msgstr "データベースの状態の書き込みに失敗しました: {}"
+
+#: data_ui.rs
+msgid "数据父目录不可用"
+msgstr "データの親フォルダーを使えません"
+
+#: data_ui.rs
+msgid "数据现在保存在：\n{}\n{}"
+msgstr "データの保存場所:\n{}\n{}"
+
+#: storage
+msgid "数据目录不能放在云同步目录"
+msgstr "データ フォルダーはクラウド同期フォルダーに置けません"
+
+#: storage
+msgid "数据目录必须位于本地固定磁盘"
+msgstr "データ フォルダーはローカル固定ディスクに置いてください"
+
+#: storage
+msgid "数据路径无法规范化"
+msgstr "データのパスを正規化できません"
+
+#: data_ui.rs
+msgid "数据集已恢复。"
+msgstr "データセットを復元しました。"
+
+#: storage
+msgid "数据集快照路径无效"
+msgstr "データセットのスナップショットのパスが無効です"
+
+#: data_ui.rs
+msgid "文件夹选择窗口失败：{}"
+msgstr "フォルダー選択ウィンドウでエラー: {}"
+
+#: data_ui.rs
+msgid "文件选择窗口失败：{}"
+msgstr "ファイル選択ウィンドウでエラー: {}"
+
+#: storage
+msgid "新旧数据目录不能相同或互相包含"
+msgstr "新旧のデータ フォルダーを同じにしたり入れ子にしたりはできません"
+
+#: recovery.rs
+msgid "新旧目录必须分开，不能互相包含"
+msgstr "新旧のフォルダーは別々にし、入れ子にしないでください"
+
+#: recovery.rs
+msgid "新目录无效"
+msgstr "新しいフォルダーが無効です"
+
+#: storage
+msgid "无法在这个位置创建目录。请选择有写入权限的位置，或先建好一个空目录再迁移"
+msgstr "この場所にフォルダーを作成できません。書き込み権限のある場所を選ぶか、先に空のフォルダーを作ってから移動してください"
+
+#: startup.rs
+msgid "无法定位 Windows 系统目录"
+msgstr "Windows のシステム フォルダーを特定できません"
+
+#: storage
+msgid "无法定位损坏的引用记录"
+msgstr "破損した参照の記録を特定できません"
+
+#: startup.rs
+msgid "无法打开启动设置的管理员确认"
+msgstr "起動設定の管理者確認を開くことができません"
+
+#: data_ui.rs
+msgid "无法打开文件夹选择窗口"
+msgstr "フォルダー選択ウィンドウを開くことができません"
+
+#: main.rs
+msgid "无法检查 Timelens 进程权限"
+msgstr "Timelens のプロセス権限を確認できません"
+
+#: startup.rs
+msgid "无法确认启动设置是否完成，请重新打开常规查看状态"
+msgstr "起動設定が完了したか確認できません。「一般」を開き直して状態を確認してください"
+
+#: storage
+msgid "无法读取原数据库的数据结构"
+msgstr "元のデータベースの構造を読み取ることができません"
+
+#: data_ui.rs
+msgid "无法进入恢复：{}"
+msgstr "復元を開始できません: {}"
+
+#: main.rs
+msgid "无法选择位置：{}"
+msgstr "場所を選択できません: {}"
+
+#: history.rs
+msgid "无聚焦记录"
+msgstr "フォーカスの記録なし"
+
+#: history.rs
+msgid "日期不能晚于今天"
+msgstr "日付は今日より後にしないでください"
+
+#: timeline_view.rs
+msgid "日期未知"
+msgstr "日付不明"
+
+#: main.rs timeline_ui.rs
+msgid "时间不可用"
+msgstr "時刻不明"
+
+#: data_ui.rs
+msgid "时间未知"
+msgstr "時刻不明"
+
+#: pause.rs
+msgid "明天 {} 自动继续"
+msgstr "明日 {} に自動で再開"
+
+#: main.rs
+msgid "明确缺口 {} 段"
+msgid_plural "明确缺口 {} 段"
+msgstr[0] "記録の欠落 {} 件"
+
+#: history.rs
+msgid "星期一"
+msgstr "月曜日"
+
+#: history.rs
+msgid "星期三"
+msgstr "水曜日"
+
+#: history.rs
+msgid "星期二"
+msgstr "火曜日"
+
+#: history.rs
+msgid "星期五"
+msgstr "金曜日"
+
+#: history.rs
+msgid "星期六"
+msgstr "土曜日"
+
+#: history.rs
+msgid "星期四"
+msgstr "木曜日"
+
+#: history.rs
+msgid "星期日"
+msgstr "日曜日"
+
+#: history.rs history_cache.rs timeline_view.rs
+msgid "昨天"
+msgstr "昨日"
+
+#: timeline_ui.rs
+msgid "昨天 · "
+msgstr "昨日 · "
+
+#: history.rs
+msgid "晚上"
+msgstr "夜"
+
+#: collection_ui.rs
+msgid "暂停"
+msgstr "一時停止"
+
+#: tray.rs
+msgid "暂停记录"
+msgstr "記録を一時停止"
+
+#: startup.rs
+msgid "更改开机自启动失败（{}），请确认 Timelens 安装完整后重试"
+msgstr "サインイン時の起動の変更に失敗しました（{}）。Timelens が正しくインストールされているか確認して、もう一度お試しください"
+
+#: main.rs
+msgid "更早"
+msgstr "それ以前"
+
+#: timeline_ui.rs
+msgid "最近 {} 天"
+msgid_plural "最近 {} 天"
+msgstr[0] "過去 {} 日"
+
+#: timeline_ui.rs
+msgid "最近 {} 小时"
+msgid_plural "最近 {} 小时"
+msgstr[0] "過去 {} 時間"
+
+#: history.rs
+msgid "期间没有切换到其他应用"
+msgstr "その間ほかのアプリへの切り替えはありません"
+
+#: history.rs
+msgid "期间还用到 {} 个应用"
+msgid_plural "期间还用到 {} 个应用"
+msgstr[0] "その間ほかに {} 個のアプリを使用"
+
+#: recovery.rs
+msgid "未切换数据位置：{}"
+msgstr "データの場所は切り替えていません: {}"
+
+#: timeline_view.rs
+msgid "未命名应用"
+msgstr "名前のないアプリ"
+
+#: startup.rs
+msgid "未找到 Timelens 启动任务，请使用安装版"
+msgstr "Timelens の起動タスクが見つかりません。インストール版を使ってください"
+
+#: startup.rs
+msgid "未找到 Timelens 采集器启动任务，请重新安装"
+msgstr "Timelens コレクターの起動タスクが見つかりません。再インストールしてください"
+
+#: main.rs
+msgid "未知原因"
+msgstr "原因不明"
+
+#: recovery.rs
+msgid "未知恢复操作"
+msgstr "不明な復元操作"
+
+#: collection_ui.rs data_ui.rs
+msgid "未知操作"
+msgstr "不明な操作"
+
+#: main.rs
+msgid "未观察 {}"
+msgstr "未観測 {}"
+
+#: history.rs
+msgid "未记录 {} · {}"
+msgstr "未記録 {} · {}"
+
+#: data_ui.rs
+msgid "校验通过 · 备份创建于 {} · {} 个文件 · {}。\n来源：{}"
+msgid_plural "校验通过 · 备份创建于 {} · {} 个文件 · {}。\n来源：{}"
+msgstr[0] "検証に合格 · バックアップ作成日時 {} · {} ファイル · {}。\n元: {}"
+
+#: collection_ui.rs main.rs
+msgid "桌面空闲"
+msgstr "デスクトップのアイドル"
+
+#: storage
+msgid "检测到数据损坏，已停止写入。请进入恢复界面，保留原件后恢复到新目录。"
+msgstr "データの破損を検出したため書き込みを停止しました。復元画面を開き、元のデータを残して新しいフォルダーに復元してください。"
+
+#: tray.rs
+msgid "正在保存并退出 Timelens…"
+msgstr "保存して Timelens を終了しています…"
+
+#: data_ui.rs
+msgid "正在准备…"
+msgstr "準備中…"
+
+#: data_ui.rs
+msgid "正在切换到新位置…"
+msgstr "新しい場所に切り替えています…"
+
+#: data_ui.rs qa.rs
+msgid "正在复制 {} / {}"
+msgstr "コピー中 {} / {}"
+
+#: main.rs
+msgid "正在安全暂停采集器…"
+msgstr "コレクターを安全に一時停止しています…"
+
+#: main.rs
+msgid "正在打开…"
+msgstr "開いています…"
+
+#: history_cache.rs
+msgid "正在搜索最近一个月… 已查 {}/{} 天，找到 {} 段"
+msgstr "過去 1 か月を検索中… {}/{} 日を確認、{} 件"
+
+#: main.rs
+msgid "正在暂停采集器并轮换全部数据密钥…"
+msgstr "コレクターを一時停止し、すべてのデータ キーを更新しています…"
+
+#: data_ui.rs
+msgid "正在校验快照 {} / {}"
+msgstr "スナップショットを検証中 {} / {}"
+
+#: data_ui.rs
+msgid "正在检查当前数据…"
+msgstr "現在のデータを確認しています…"
+
+#: tray.rs
+msgid "正在记录"
+msgstr "記録中"
+
+#: general_ui.rs
+msgid "正在读取启动设置…"
+msgstr "起動設定を読み込んでいます…"
+
+#: main.rs
+msgid "永久"
+msgstr "無期限"
+
+#: main.rs
+msgid "永久保留"
+msgstr "無期限に保持"
+
+#: main.rs
+msgid "没有拍摄：{}"
+msgstr "未撮影: {}"
+
+#: main.rs
+msgid "没有缺失数据"
+msgstr "欠落したデータはありません"
+
+#: collection_ui.rs
+msgid "活动名单：{}\n输入名单：{}\n快照名单：{}"
+msgstr "活動リスト: {}\n入力リスト: {}\nスナップショット リスト: {}"
+
+#: collection_ui.rs
+msgid "活动排除"
+msgstr "活動の除外"
+
+#: storage
+msgid "清单与 ZIP 内容不一致"
+msgstr "一覧と ZIP の内容が一致しません"
+
+#: main.rs
+msgid "清理失败：{}"
+msgstr "整理に失敗しました: {}"
+
+#: main.rs
+msgid "清理完成：快照 {} 项、活动 {} 项、输入 {} 项、释放 {}"
+msgstr "整理が終わりました: スナップショット {} 件、活動 {} 件、入力 {} 件、{} を解放"
+
+#: main.rs
+msgid "清空失败：{}"
+msgstr "消去に失敗しました: {}"
+
+#: storage
+msgid "独立密码不能为空或超过 1024 字节"
+msgstr "パスワードは空にできず、1024 バイトを超えることもできません"
+
+#: main.rs
+msgid "现在"
+msgstr "現在"
+
+#: recovery.rs
+msgid "用户关闭了数据恢复窗口；原件仍保留"
+msgstr "データ復元ウィンドウが閉じられました。元のデータは残っています"
+
+#: main.rs
+msgid "用户已删除"
+msgstr "ユーザーが削除"
+
+#: storage
+msgid "目标位于已注册的云同步根目录"
+msgstr "移動先は登録済みのクラウド同期ルートの中にあります"
+
+#: storage
+msgid "目标文件已存在，请选择新文件名"
+msgstr "ファイルは既に存在します。新しい名前を選んでください"
+
+#: storage
+msgid "目标父目录不可用"
+msgstr "移動先の親フォルダーを使えません"
+
+#: storage
+msgid "目标目录必须为空；V1 不合并数据集"
+msgstr "移動先のフォルダーは空にしてください。V1 はデータセットを結合しません"
+
+#: tray.rs
+msgid "直到手动继续"
+msgstr "手動で再開するまで"
+
+#: tray.rs
+msgid "直到明天"
+msgstr "明日まで"
+
+#: collection_ui.rs history.rs
+msgid "睡眠"
+msgstr "スリープ"
+
+#: main.rs
+msgid "睡眠/恢复"
+msgstr "スリープ/復帰"
+
+#: storage
+msgid "磁盘根路径无效"
+msgstr "ディスクのルート パスが無効です"
+
+#: history.rs
+msgid "空闲"
+msgstr "アイドル"
+
+#: main.rs
+msgid "空间上限保存失败：{}"
+msgstr "容量の上限の保存に失敗しました: {}"
+
+#: main.rs
+msgid "空间上限已改为 {}"
+msgstr "容量の上限を {} にしました"
+
+#: main.rs
+msgid "空间上限已改为 {}；清理活动 {} 项、输入 {} 项"
+msgstr "容量の上限を {} にしました。活動 {} 件、入力 {} 件を整理"
+
+#: history.rs
+msgid "穿插"
+msgstr "合間"
+
+#: history.rs
+msgid "穿插 {}"
+msgstr "合間に {}"
+
+#: tray.rs
+msgid "窗口已收起到通知区域，记录照常进行。点击托盘图标可重新打开；右键可以暂停记录或退出。"
+msgstr "ウィンドウを通知領域にしまいました。記録はそのまま続きます。トレイ アイコンをクリックすると開き直し、右クリックで記録の一時停止や終了ができます。"
+
+#: tray.rs
+msgid "立即拍摄快照"
+msgstr "今すぐスナップショットを撮影"
+
+#: main.rs
+msgid "等待受信采集器事件…"
+msgstr "信頼済みのコレクターからのイベントを待っています…"
+
+#: general_ui.rs
+msgid "等待管理员确认…"
+msgstr "管理者の確認を待っています…"
+
+#: tray.rs
+msgid "系统托盘初始化失败"
+msgstr "システム トレイの初期化に失敗しました"
+
+#: collection_ui.rs history.rs main.rs
+msgid "系统时间跳变"
+msgstr "システム時刻の変化"
+
+#: collection_ui.rs
+msgid "系统正常结束"
+msgstr "システムの正常終了"
+
+#: timeline_ui.rs
+msgid "结束时间需要晚于开始时间"
+msgstr "終了時刻は開始時刻より後にしてください"
+
+#: main.rs
+msgid "统计已导出到 {}"
+msgstr "統計のエクスポート先: {}"
+
+#: tray.rs
+msgid "继续记录"
+msgstr "記録を再開"
+
+#: main.rs
+msgid "缺失 · {}"
+msgstr "欠落 · {}"
+
+#: history.rs
+msgid "聚焦 {}"
+msgstr "フォーカス {}"
+
+#: snapshot.rs
+msgid "解密图片尺寸与元数据不一致"
+msgstr "復号した画像のサイズがメタデータと一致しません"
+
+#: history.rs
+msgid "记录中断 {} 次"
+msgid_plural "记录中断 {} 次"
+msgstr[0] "記録の中断 {} 回"
+
+#: history.rs main.rs
+msgid "记录过多，部分丢失"
+msgstr "記録が多すぎて一部が欠落"
+
+#: i18n.rs
+msgid "语言设置未能保存：{}"
+msgstr "言語の設定を保存できなかった: {}"
+
+#: main.rs
+msgid "请先在主界面选择一个应用"
+msgstr "先にメイン画面でアプリを 1 つ選んでください"
+
+#: data_ui.rs
+msgid "请先在快照面板选择一张可用图片"
+msgstr "先にスナップショット パネルで使える画像を選んでください"
+
+#: recovery.rs
+msgid "请先校验一个新数据集"
+msgstr "先に新しいデータセットを検証してください"
+
+#: data_ui.rs
+msgid "请先选择新的数据位置"
+msgstr "先に新しいデータの場所を選んでください"
+
+#: data_ui.rs
+msgid "请先重新校验备份"
+msgstr "先にバックアップを再検証してください"
+
+#: collection_ui.rs
+msgid "请确认三份规则各自取并集"
+msgstr "3 つのルールがそれぞれ和集合になることを確認してください"
+
+#: collection_ui.rs
+msgid "请确认删除影响"
+msgstr "削除の影響を確認してください"
+
+#: data_ui.rs
+msgid "请确认整体替换"
+msgstr "すべて置き換えることを確認してください"
+
+#: timeline_ui.rs
+msgid "请输入有效日期（YYYY-MM-DD），日期不能晚于今天"
+msgstr "今日までの有効な日付（YYYY-MM-DD）を入力してください"
+
+#: history.rs
+msgid "请输入有效日期，格式为 YYYY-MM-DD"
+msgstr "有効な日付を YYYY-MM-DD の形式で入力してください"
+
+#: timeline_ui.rs
+msgid "请输入有效的开始时间，格式为 HH:MM"
+msgstr "有効な開始時刻を HH:MM の形式で入力してください"
+
+#: timeline_ui.rs
+msgid "请输入有效的结束时间，格式为 HH:MM"
+msgstr "有効な終了時刻を HH:MM の形式で入力してください"
+
+#: storage
+msgid "请选择一个新的空恢复目录"
+msgstr "新しい空の復元先フォルダーを選んでください"
+
+#: storage
+msgid "请选择两个不同应用"
+msgstr "異なる 2 つのアプリを選んでください"
+
+#: collection_ui.rs
+msgid "请选择另一个应用"
+msgstr "別のアプリを選んでください"
+
+#: collection_ui.rs
+msgid "请选择合并关联"
+msgstr "結合を選んでください"
+
+#: collection_ui.rs
+msgid "请选择应用"
+msgstr "アプリを選んでください"
+
+#: storage
+msgid "请选择本地固定磁盘的绝对路径"
+msgstr "ローカル固定ディスクの絶対パスを選んでください"
+
+#: recovery.rs
+msgid "请选择空的新目录"
+msgstr "空の新しいフォルダーを選んでください"
+
+#: history.rs
+msgid "读取历史失败：{}"
+msgstr "履歴の読み込みに失敗しました: {}"
+
+#: history.rs
+msgid "读取各应用的时间失败：{}"
+msgstr "アプリごとの時間の読み込みに失敗しました: {}"
+
+#: main.rs
+msgid "读取应用统计失败：{}"
+msgstr "アプリの統計の読み込みに失敗しました: {}"
+
+#: collection_ui.rs
+msgid "读取统计失败：{}"
+msgstr "統計の読み込みに失敗しました: {}"
+
+#: collection_ui.rs
+msgid "读取规则失败：{}"
+msgstr "ルールの読み込みに失敗しました: {}"
+
+#: main.rs
+msgid "超过保留期，已清理"
+msgstr "保持期間を過ぎたため整理済み"
+
+#: main.rs
+msgid "超过空间上限，已清理"
+msgstr "容量の上限を超えたため整理済み"
+
+#: history.rs
+msgid "载入更早的记录"
+msgstr "以前の記録を読み込む"
+
+#: main.rs
+msgid "输入计数溢出"
+msgstr "入力回数のオーバーフロー"
+
+#: pause.rs
+msgid "还剩 {} 分钟"
+msgid_plural "还剩 {} 分钟"
+msgstr[0] "残り {} 分"
+
+#: main.rs
+msgid "还没有可导出的记录"
+msgstr "エクスポートできる記録はまだありません"
+
+#: history.rs
+msgid "这一天早于最早的记录"
+msgstr "この日は最初の記録より前です"
+
+#: history_cache.rs
+msgid "这一天没有记录"
+msgstr "この日の記録はありません"
+
+#: main.rs
+msgid "这个时段没有拍摄：{}"
+msgstr "この枠は未撮影: {}"
+
+#: main.rs
+msgid "这段时间没有快照"
+msgstr "この期間にスナップショットはありません"
+
+#: main.rs
+msgid "远程会话"
+msgstr "リモート セッション"
+
+#: tray.rs
+msgid "退出 Timelens？"
+msgstr "Timelens を終了しますか？"
+
+#: tray.rs
+msgid "退出后不再记录活动、输入和快照，直到下次打开 Timelens。\n\n只想暂时不记录，可以改用「暂停记录」。"
+msgstr "終了すると、次に Timelens を開くまで活動・入力・スナップショットを記録しません。\n\nしばらく記録を止めたいだけなら「記録を一時停止」を使ってください。"
+
+#: tray.rs
+msgid "退出未完成：{}"
+msgstr "終了が未完了です: {}"
+
+#: tray.rs
+msgid "退出（停止记录）…"
+msgstr "終了（記録を停止）…"
+
+#: main.rs
+msgid "选中 {} · {} 个应用"
+msgid_plural "选中 {} · {} 个应用"
+msgstr[0] "選択 {} · アプリ {} 個"
+
+#: data_ui.rs
+msgid "选择 Timelens 备份"
+msgstr "Timelens バックアップを選択"
+
+#: data_ui.rs
+msgid "选择图片"
+msgstr "画像を選択"
+
+#: data_ui.rs
+msgid "选择数据的新位置"
+msgstr "データの新しい場所を選択"
+
+#: data_ui.rs
+msgid "选择文件"
+msgstr "ファイルを選択"
+
+#: data_ui.rs
+msgid "选择要设置规则的应用程序"
+msgstr "ルールを設定するアプリケーションを選択"
+
+#: data_ui.rs
+msgid "采集器未确认暂停，未替换数据"
+msgstr "コレクターが一時停止を確認しなかったため、データは置き換えていません"
+
+#: tray.rs
+msgid "采集器未能完成停止，请重试"
+msgstr "コレクターの停止が未完了です。もう一度お試しください"
+
+#: history.rs
+msgid "采集器未运行"
+msgstr "コレクターは動作していません"
+
+#: main.rs
+msgid "采集器没有运行记录"
+msgstr "コレクターの動作記録なし"
+
+#: startup.rs
+msgid "采集器目录不可用"
+msgstr "コレクターのフォルダーを使えません"
+
+#: main.rs
+msgid "采集器重启"
+msgstr "コレクターの再起動"
+
+#: collection_ui.rs history.rs main.rs
+msgid "锁屏"
+msgstr "ロック"
+
+#: main.rs
+msgid "键盘 0 · 鼠标 0"
+msgstr "キーボード 0 · マウス 0"
+
+#: collection_ui.rs
+msgid "键盘 {} · 左键 {} · 中键 {} · 右键 {}"
+msgstr "キーボード {} · 左 {} · 中 {} · 右 {}"
+
+#: main.rs
+msgid "键盘 {} · 鼠标 {}"
+msgstr "キーボード {} · マウス {}"
+
+#: main.rs
+msgid "隐私排除"
+msgstr "プライバシーの除外"
+
+#: recovery.rs
+msgid "需要将数据结构从版本 {} 升级到 {}。这会重建快照与缺失记录的约束，保留全部记录。升级期间会锁定数据库，并建立临时加密安全副本；检查成功后删除副本，失败自动回滚。"
+msgstr "データ構造をバージョン {} から {} にアップグレードする必要があります。スナップショットと欠落記録の制約を作り直し、記録はすべて残します。アップグレード中はデータベースをロックし、一時的な暗号化された安全用コピーを作ります。チェックに合格するとコピーを削除し、失敗すると自動で元に戻します。"
+
+#: main.rs
+msgid "预览失败：{}"
+msgstr "プレビューに失敗しました: {}"
+
+#: history.rs
+msgid "，其中 {} 没有聚焦记录"
+msgstr "、うち {} はフォーカスなし"
+
+#: main.rs
+msgid "；旧加密数据稍后清理：{}"
+msgstr "。古い暗号化データはあとで整理します: {}"

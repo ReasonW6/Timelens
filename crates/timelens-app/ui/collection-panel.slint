@@ -134,7 +134,7 @@ component MouseLegend inherits HorizontalLayout {
     spacing: 10px;
     VerticalLayout { alignment: center; Rectangle { width: 14px; height: 14px; border-radius: 3px; border-width: 1px; border-color: Theme.line; background: Theme.heat-hot.mix(Theme.heat-cold, root.heat.strength); } }
     Text { width: 128px; text: root.label; color: Theme.ink-2; font-size: 13px; vertical-alignment: center; }
-    Text { text: root.heat.count + " 次"; color: Theme.ink; font-size: 14px; font-weight: 600; font-family: Theme.font-display; vertical-alignment: center; }
+    Text { text: @tr("{} 次", root.heat.count); color: Theme.ink; font-size: 14px; font-weight: 600; font-family: Theme.font-display; vertical-alignment: center; }
 }
 
 export component CollectionPanel inherits Rectangle {
@@ -152,11 +152,11 @@ export component CollectionPanel inherits Rectangle {
                 padding-right: 18px;
                 padding-bottom: 16px;
                 spacing: 10px;
-                SettingsHeader { text: "应用"; }
+                SettingsHeader { text: @tr("应用"); }
                 SettingsGroup {
                     SettingRow {
-                        title: "要设置的应用";
-                        description: CollectionState.apps.length == 0 ? "还没有已记录的应用，可以直接选择一个 EXE。" : "从已记录的应用中选择，或指定一个 EXE。规则只影响之后的记录。";
+                        title: @tr("要设置的应用");
+                        description: CollectionState.apps.length == 0 ? @tr("还没有已记录的应用，可以直接选择一个 EXE。") : @tr("从已记录的应用中选择，或指定一个 EXE。规则只影响之后的记录。");
                         icon: @image-url("icons/app-window.svg");
                         HorizontalLayout {
                             spacing: 8px;
@@ -167,21 +167,21 @@ export component CollectionPanel inherits Rectangle {
                                 enabled: !CollectionState.busy && CollectionState.apps.length > 0;
                                 selected(value) => { CollectionState.merge-confirmed = false; CollectionState.delete-confirmed = false; CollectionState.choose(CollectionState.app-index); }
                             }
-                            Action { text: "选择 EXE"; enabled: !CollectionState.busy; clicked => { CollectionState.action(1); } }
+                            Action { text: @tr("选择 EXE"); enabled: !CollectionState.busy; clicked => { CollectionState.action(1); } }
                         }
                     }
                 }
 
                 Rectangle { height: 8px; }
-                SettingsHeader { text: "排除规则"; }
-                Note { text: "三份名单相互独立，切换后立即生效，不影响已有记录和图片。"; font-size: 12px; }
+                SettingsHeader { text: @tr("排除规则"); }
+                Note { text: @tr("三份名单相互独立，切换后立即生效，不影响已有记录和图片。"); font-size: 12px; }
                 SettingsGroup {
                     SettingRow {
-                        title: "不记录活动";
-                        description: "不记录这个应用的身份与使用时间。";
+                        title: @tr("不记录活动");
+                        description: @tr("不记录这个应用的身份与使用时间。");
                         icon: @image-url("icons/activity.svg");
                         Switch {
-                            label: "不记录活动";
+                            label: @tr("不记录活动");
                             checked: CollectionState.activity;
                             enabled: !CollectionState.busy && CollectionState.app-index >= 0;
                             toggled(on) => { CollectionState.activity = on; CollectionState.action(2); }
@@ -189,11 +189,11 @@ export component CollectionPanel inherits Rectangle {
                     }
                     Rule { }
                     SettingRow {
-                        title: "不记录输入";
-                        description: "只保留匿名的每日总数。";
+                        title: @tr("不记录输入");
+                        description: @tr("只保留匿名的每日总数。");
                         icon: @image-url("icons/keyboard.svg");
                         Switch {
-                            label: "不记录输入";
+                            label: @tr("不记录输入");
                             checked: CollectionState.input;
                             enabled: !CollectionState.busy && CollectionState.app-index >= 0;
                             toggled(on) => { CollectionState.input = on; CollectionState.action(2); }
@@ -201,11 +201,11 @@ export component CollectionPanel inherits Rectangle {
                     }
                     Rule { }
                     SettingRow {
-                        title: "不拍摄快照";
-                        description: "这个应用显示在屏幕上时，跳过它所在的屏幕。";
+                        title: @tr("不拍摄快照");
+                        description: @tr("这个应用显示在屏幕上时，跳过它所在的屏幕。");
                         icon: @image-url("icons/camera.svg");
                         Switch {
-                            label: "不拍摄快照";
+                            label: @tr("不拍摄快照");
                             checked: CollectionState.snapshots;
                             enabled: !CollectionState.busy && CollectionState.app-index >= 0;
                             toggled(on) => { CollectionState.snapshots = on; CollectionState.action(2); }
@@ -213,19 +213,19 @@ export component CollectionPanel inherits Rectangle {
                     }
                     Rule { }
                     SettingExpander {
-                        title: "全部排除名单";
-                        description: "所有应用的活动、输入与快照排除。";
+                        title: @tr("全部排除名单");
+                        description: @tr("所有应用的活动、输入与快照排除。");
                         icon: @image-url("icons/file-description.svg");
-                        Note { text: CollectionState.rules != "" ? CollectionState.rules : "尚无排除规则。"; color: Theme.ink-2; font-size: 12px; }
+                        Note { text: CollectionState.rules != "" ? CollectionState.rules : @tr("尚无排除规则。"); color: Theme.ink-2; font-size: 12px; }
                     }
                 }
 
                 Rectangle { height: 8px; }
-                SettingsHeader { text: "合并显示"; }
+                SettingsHeader { text: @tr("合并显示"); }
                 SettingsGroup {
                     SettingExpander {
-                        title: CollectionState.app-index >= 0 ? "把「" + CollectionState.app-name + "」与另一个应用合并" : "与另一个应用合并显示";
-                        description: "同一款软件的不同版本可以合并成一项显示，原始记录不改写，可随时解除。";
+                        title: CollectionState.app-index >= 0 ? @tr("把「{}」与另一个应用合并", CollectionState.app-name) : @tr("与另一个应用合并显示");
+                        description: @tr("同一款软件的不同版本可以合并成一项显示，原始记录不改写，可随时解除。");
                         icon: @image-url("icons/link.svg");
                         HorizontalLayout {
                             spacing: 8px;
@@ -237,49 +237,49 @@ export component CollectionPanel inherits Rectangle {
                                 selected(value) => { CollectionState.merge-chosen(CollectionState.merge-index); }
                             }
                             Action {
-                                text: "合并…";
+                                text: @tr("合并…");
                                 enabled: !CollectionState.busy && CollectionState.app-index >= 0 && CollectionState.merge-index >= 0 && CollectionState.merge-index != CollectionState.app-index;
                                 clicked => { CollectionState.confirm = 2; }
                             }
                         }
                         Note {
-                            text: CollectionState.merge-preview != "" ? CollectionState.merge-preview : "选择要合并的另一个应用，这里会列出合并后两者共用的规则。";
+                            text: CollectionState.merge-preview != "" ? CollectionState.merge-preview : @tr("选择要合并的另一个应用，这里会列出合并后两者共用的规则。");
                             color: Theme.ink-2; font-size: 12px;
                         }
                     }
                     Rule { }
                     SettingExpander {
-                        title: "已有合并";
-                        description: CollectionState.links.length == 0 ? "当前没有合并关联。" : CollectionState.links.length + " 组合并关联";
+                        title: @tr("已有合并");
+                        description: CollectionState.links.length == 0 ? @tr("当前没有合并关联。") : @tr("{n} 组合并关联" | "{n} 组合并关联" % CollectionState.links.length);
                         icon: @image-url("icons/layout-grid.svg");
                         for link[index] in CollectionState.links : HorizontalLayout {
                             spacing: 8px;
                             Text { text: link; color: Theme.ink; font-size: 13px; vertical-alignment: center; horizontal-stretch: 1; overflow: elide; }
                             Action {
                                 quiet: true;
-                                text: "解除";
-                                accessible-label: "解除合并 " + link;
+                                text: @tr("解除");
+                                accessible-label: @tr("解除合并 {}", link);
                                 enabled: !CollectionState.busy;
                                 clicked => { CollectionState.link-index = index; CollectionState.action(4); }
                             }
                         }
-                        Note { text: "解除后恢复合并前的规则；合并期间新增的排除默认保留给双方。"; font-size: 12px; }
+                        Note { text: @tr("解除后恢复合并前的规则；合并期间新增的排除默认保留给双方。"); font-size: 12px; }
                     }
                 }
 
                 Rectangle { height: 8px; }
-                SettingsHeader { text: "删除历史"; color: Theme.danger; }
+                SettingsHeader { text: @tr("删除历史"); color: Theme.danger; }
                 SettingsGroup {
                     border-color: Theme.danger-line;
                     SettingExpander {
-                        title: CollectionState.app-index >= 0 ? "删除「" + CollectionState.app-name + "」的全部历史" : "删除所选应用的全部历史";
-                        description: "此操作无法撤销。";
+                        title: CollectionState.app-index >= 0 ? @tr("删除「{}」的全部历史", CollectionState.app-name) : @tr("删除所选应用的全部历史");
+                        description: @tr("此操作无法撤销。");
                         icon: @image-url("icons/trash.svg");
-                        Note { text: CollectionState.impact != "" ? CollectionState.impact : "先在上方选择一个应用，这里会显示受影响的窗口。"; color: Theme.ink-2; }
-                        Note { text: "匿名累计总数和无法归属应用的每日键位总数会保留，快照图片与外部文件也会保留。"; font-size: 12px; }
+                        Note { text: CollectionState.impact != "" ? CollectionState.impact : @tr("先在上方选择一个应用，这里会显示受影响的窗口。"); color: Theme.ink-2; }
+                        Note { text: @tr("匿名累计总数和无法归属应用的每日键位总数会保留，快照图片与外部文件也会保留。"); font-size: 12px; }
                         HorizontalLayout {
                             Action {
-                                text: CollectionState.app-index >= 0 ? "删除「" + CollectionState.app-name + "」的历史…" : "删除历史…";
+                                text: CollectionState.app-index >= 0 ? @tr("删除「{}」的历史…", CollectionState.app-name) : @tr("删除历史…");
                                 danger: true;
                                 enabled: !CollectionState.busy && CollectionState.app-index >= 0;
                                 clicked => { CollectionState.confirm = 1; }
@@ -300,11 +300,11 @@ export component CollectionPanel inherits Rectangle {
                 spacing: 16px;
                 HorizontalLayout {
                     spacing: 10px;
-                    SectionTitle { text: "物理键位热度"; vertical-alignment: center; }
+                    SectionTitle { text: @tr("物理键位热度"); vertical-alignment: center; }
                     VerticalLayout { alignment: center; Badge { text: CollectionState.scope; tone: Theme.brand-ink; fill: Theme.brand-soft; } }
                     Rectangle { horizontal-stretch: 1; }
                 }
-                Note { text: "按键抬起后再次按下计为一次。键帽标记物理位置，不代表输入内容。" + (CollectionState.partial-day ? "键位与鼠标按整天保存，这里显示所选时段所在日期的全天数据。" : ""); }
+                Note { text: CollectionState.partial-day ? @tr("按键抬起后再次按下计为一次。键帽标记物理位置，不代表输入内容。键位与鼠标按整天保存，这里显示所选时段所在日期的全天数据。") : @tr("按键抬起后再次按下计为一次。键帽标记物理位置，不代表输入内容。"); }
                 keyboard-scroll := ScrollView {
                     height: root.key-unit * 6.5 + 14px;
                     vertical-stretch: 0;
@@ -337,19 +337,19 @@ export component CollectionPanel inherits Rectangle {
                 }
                 HorizontalLayout {
                     spacing: 6px;
-                    Note { text: "少"; }
+                    Note { text: @tr("少"); }
                     Rectangle { width: 22px; height: 12px; border-radius: 2px; background: Theme.heat-cold; }
                     Rectangle { width: 22px; height: 12px; border-radius: 2px; background: Theme.heat-hot.mix(Theme.heat-cold, 0.25); }
                     Rectangle { width: 22px; height: 12px; border-radius: 2px; background: Theme.heat-hot.mix(Theme.heat-cold, 0.5); }
                     Rectangle { width: 22px; height: 12px; border-radius: 2px; background: Theme.heat-hot.mix(Theme.heat-cold, 0.75); }
                     Rectangle { width: 22px; height: 12px; border-radius: 2px; background: Theme.heat-hot; }
-                    Note { text: "多"; }
+                    Note { text: @tr("多"); }
                     Rectangle { horizontal-stretch: 1; }
                 }
                 if CollectionState.unplaced-keys != "" : Note { text: CollectionState.unplaced-keys; font-size: 12px; }
                 Rule { }
-                SectionTitle { text: "鼠标按键热度"; }
-                Note { text: "鼠标左键、中键和右键的按下次数，范围与颜色都与上方键位相同。"; }
+                SectionTitle { text: @tr("鼠标按键热度"); }
+                Note { text: @tr("鼠标左键、中键和右键的按下次数，范围与颜色都与上方键位相同。"); }
                 HorizontalLayout {
                     spacing: 32px;
                     padding-left: 8px;
@@ -358,16 +358,16 @@ export component CollectionPanel inherits Rectangle {
                         alignment: center;
                         horizontal-stretch: 0;
                         spacing: 10px;
-                        MouseLegend { label: "左键"; heat: CollectionState.mouse-left; }
-                        MouseLegend { label: "中键（滚轮按下）"; heat: CollectionState.mouse-middle; }
-                        MouseLegend { label: "右键"; heat: CollectionState.mouse-right; }
+                        MouseLegend { label: @tr("左键"); heat: CollectionState.mouse-left; }
+                        MouseLegend { label: @tr("中键（滚轮按下）"); heat: CollectionState.mouse-middle; }
+                        MouseLegend { label: @tr("右键"); heat: CollectionState.mouse-right; }
                     }
                     Rectangle { horizontal-stretch: 1; }
                 }
                 Rule { }
-                SectionTitle { text: "系统状态"; }
-                Note { text: "空闲、锁屏、睡眠等系统状态在所选范围内的时长，按时长排列。"; }
-                if CollectionState.system.length == 0 && CollectionState.system-marks == "" : Note { text: "此范围没有系统状态记录。"; color: Theme.ink; }
+                SectionTitle { text: @tr("系统状态"); }
+                Note { text: @tr("空闲、锁屏、睡眠等系统状态在所选范围内的时长，按时长排列。"); }
+                if CollectionState.system.length == 0 && CollectionState.system-marks == "" : Note { text: @tr("此范围没有系统状态记录。"); color: Theme.ink; }
                 VerticalLayout {
                     spacing: 8px;
                     for row in CollectionState.system : HorizontalLayout {
@@ -386,12 +386,12 @@ export component CollectionPanel inherits Rectangle {
                 }
                 if CollectionState.system-marks != "" : Note { text: CollectionState.system-marks; font-size: 12px; }
                 Rule { }
-                SectionTitle { text: "自开始使用以来"; }
+                SectionTitle { text: @tr("自开始使用以来"); }
                 Note { text: CollectionState.totals; color: Theme.ink; }
-                Note { text: "这里的累计不受保留期清理影响，也包含不记录输入的应用的匿名计数，所以可能比上方按范围统计的次数多。"; font-size: 12px; }
+                Note { text: @tr("这里的累计不受保留期清理影响，也包含不记录输入的应用的匿名计数，所以可能比上方按范围统计的次数多。"); font-size: 12px; }
             }
         }
 
-        if CollectionState.busy : StatusLine { busy: true; text: "正在处理，请稍候…"; }
+        if CollectionState.busy : StatusLine { busy: true; text: @tr("正在处理，请稍候…"); }
     }
 }

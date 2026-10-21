@@ -60,15 +60,15 @@ export component AboutPage inherits VerticalLayout {
     private property <float> burst: clamp((root.now - root.rewind-at) / 1100ms, 0, 1);
     private property <bool> rewound: root.taps >= 7;
     private property <[string]> lines: [
-        "时间被倒拨了三圈——可惜只在这枚图标里有效。",
-        "专注不是从不分心，而是每次分心后都愿意回来。",
-        "休息也是时间线的一部分，不必把它涂成灰色。",
-        "今天不必完美，记下来就已经很好了。",
-        "这里的每一分钟都只留在这台电脑上，只有你看得见。",
-        "再转下去，透镜要晕了。",
+        @tr("时间被倒拨了三圈——可惜只在这枚图标里有效。"),
+        @tr("专注不是从不分心，而是每次分心后都愿意回来。"),
+        @tr("休息也是时间线的一部分，不必把它涂成灰色。"),
+        @tr("今天不必完美，记下来就已经很好了。"),
+        @tr("这里的每一分钟都只留在这台电脑上，只有你看得见。"),
+        @tr("再转下去，透镜要晕了。"),
     ];
     private property <string> line: root.taps < 3 ? ""
-        : root.taps < 7 ? "再点 " + (7 - root.taps) + " 下，看看时间会怎样"
+        : root.taps < 7 ? @tr("再点 {n} 下，看看时间会怎样" | "再点 {n} 下，看看时间会怎样" % (7 - root.taps))
         : root.lines[Math.mod(root.taps - 7, root.lines.length)];
 
     alignment: start;
@@ -122,7 +122,7 @@ export component AboutPage inherits VerticalLayout {
             horizontal-alignment: center;
             color: Theme.ink; font-family: Theme.font-display; font-size: 26px; font-weight: 700;
         }
-        Note { text: "在本机回看应用活动、输入统计和快照。"; horizontal-alignment: center; }
+        Note { text: @tr("在本机回看应用活动、输入统计和快照。"); horizontal-alignment: center; }
         // Room for the hint is kept, so the page below does not jump.
         Text {
             min-height: 20px;
@@ -134,28 +134,28 @@ export component AboutPage inherits VerticalLayout {
         }
     }
 
-    SettingsHeader { text: "版本与更新"; }
+    SettingsHeader { text: @tr("版本与更新"); }
     SettingsGroup {
         SettingRow {
-            title: "当前版本";
-            description: "Timelens " + root.version + "，适用于 Windows 11。";
+            title: @tr("当前版本");
+            description: @tr("Timelens {}，适用于 Windows 11。", root.version);
             icon: @image-url("icons/info-circle.svg");
             Badge { text: "v" + root.version; tone: Theme.brand-ink; fill: Theme.brand-soft; }
         }
         Rule { }
         SettingRow {
-            title: "检查更新";
-            description: "在浏览器中打开发布页，查看是否有新版本。Timelens 本身不联网。";
+            title: @tr("检查更新");
+            description: @tr("在浏览器中打开发布页，查看是否有新版本。Timelens 本身不联网。");
             icon: @image-url("icons/refresh.svg");
-            Action { text: "打开发布页"; icon: @image-url("icons/arrow-right-circle.svg"); clicked => { root.check-updates(); } }
+            Action { text: @tr("打开发布页"); icon: @image-url("icons/arrow-right-circle.svg"); clicked => { root.check-updates(); } }
         }
         Rule { }
         SettingRow {
-            title: "项目主页";
-            description: "查看源代码、更新记录，或反馈问题。";
+            title: @tr("项目主页");
+            description: @tr("查看源代码、更新记录，或反馈问题。");
             icon: @image-url("icons/link.svg");
-            Action { text: "打开"; clicked => { root.open-project(); } }
+            Action { text: @tr("打开"); clicked => { root.open-project(); } }
         }
     }
-    Note { text: "界面图标使用 Tabler Icons，遵循 MIT 许可。"; color: Theme.ink-4; font-size: 12px; }
+    Note { text: @tr("界面图标使用 Tabler Icons，遵循 MIT 许可。"); color: Theme.ink-4; font-size: 12px; }
 }
