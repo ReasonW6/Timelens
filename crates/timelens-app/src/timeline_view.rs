@@ -5,7 +5,9 @@
 
 use std::collections::BTreeMap;
 
-use chrono::{Days, Duration, Local, NaiveDateTime, Offset, TimeZone, Timelike};
+use chrono::{
+    DateTime, Datelike, Days, Duration, Local, NaiveDate, NaiveDateTime, Offset, TimeZone, Timelike,
+};
 use timelens_storage::TimelineSnapshot;
 
 type Interval = (i64, i64);
@@ -17,6 +19,7 @@ pub(crate) const BRIEF_ABSENCE_MS: i64 = 3 * 60_000;
 const UNRECORDED_JOIN_MS: i64 = 5 * 60_000;
 /// Interruptions missing less than this in total are restart seams, not news.
 const MIN_UNRECORDED_MS: u64 = 2 * 60_000;
+const WEEKDAYS: [&str; 7] = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"];
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ActivityEntry {
@@ -602,6 +605,81 @@ fn resolve_local_boundary<Tz: TimeZone>(timezone: &Tz, local: NaiveDateTime) -> 
             .map(|datetime| datetime.timestamp_millis());
     }
     None
+}
+
+fn at<Tz: TimeZone>(zone: &Tz, ms: i64) -> Option<DateTime<Tz>> {
+    DateTime::from_timestamp_millis(ms).map(|t| t.with_timezone(zone))
+}
+fn date_text(day: NaiveDate, today: NaiveDate, weekday: bool) -> String {
+    let year = if day.year() == today.year() {
+        String::new()
+    } else {
+        format!("{}年", day.year())
+    };
+    let weekday = if weekday {
+        format!(
+            " {}",
+            WEEKDAYS[day.weekday().num_days_from_monday() as usize]
+        )
+    } else {
+        String::new()
+    };
+    format!("{year}{}月{}日{weekday}", day.month(), day.day())
+}
+/// A readable local span such as "10月15日 周四 00:00–14:32" or "10月14日 周三 全天".
+/// `brief` drops the weekday and names today and yesterday.
+pub(crate) fn range_text<Tz: TimeZone>(
+    start: i64,
+    end: i64,
+    now: i64,
+    zone: &Tz,
+    brief: bool,
+) -> String {
+    let (Some(s), Some(e), Some(n)) = (at(zone, start), at(zone, end), at(zone, now)) else {
+        return String::new();
+    };
+    let today = n.date_naive();
+    let day = |d: NaiveDate, named: bool| {
+        if brief && named && d == today {
+            "今天".to_owned()
+        } else if brief && named && Some(d) == today.pred_opt() {
+            "昨天".to_owned()
+        } else {
+            date_text(d, today, !brief)
+        }
+    };
+    let midnight = |t: &DateTime<Tz>| t.hour() == 0 && t.minute() == 0 && t.second() == 0;
+    let clock = |t: &DateTime<Tz>| format!("{:02}:{:02}", t.hour(), t.minute());
+    let first = s.date_naive();
+    // An end at midnight closes the day before it.
+    let last = if midnight(&e) {
+        e.date_naive().pred_opt().unwrap_or(first).max(first)
+    } else {
+        e.date_naive()
+    };
+    if midnight(&s) && midnight(&e) {
+        return if first == last {
+            format!("{} 全天", day(first, true))
+        } else {
+            format!("{} – {}", day(first, false), day(last, false))
+        };
+    }
+    if first == last {
+        let end = if midnight(&e) {
+            "24:00".to_owned()
+        } else {
+            clock(&e)
+        };
+        format!("{} {}–{end}", day(first, true), clock(&s))
+    } else {
+        format!(
+            "{} {} – {} {}",
+            day(first, false),
+            clock(&s),
+            day(e.date_naive(), false),
+            clock(&e)
+        )
+    }
 }
 
 #[cfg(test)]
@@ -1278,5 +1356,69 @@ mod tests {
                 started
             );
         }
+    }
+
+    #[test]
+    fn ranges_read_as_local_days_and_times() {
+        let now = timestamp(2026, 10, 15, 14, 32);
+        let z = zone();
+        let today = (timestamp(2026, 10, 15, 0, 0), now);
+        assert_eq!(
+            range_text(today.0, today.1, now, &z, false),
+            "10月15日 周四 00:00–14:32"
+        );
+        assert_eq!(
+            range_text(today.0, today.1, now, &z, true),
+            "今天 00:00–14:32"
+        );
+        let yesterday = (timestamp(2026, 10, 14, 0, 0), timestamp(2026, 10, 15, 0, 0));
+        assert_eq!(
+            range_text(yesterday.0, yesterday.1, now, &z, false),
+            "10月14日 周三 全天"
+        );
+        assert_eq!(
+            range_text(yesterday.0, yesterday.1, now, &z, true),
+            "昨天 全天"
+        );
+        assert_eq!(
+            range_text(
+                timestamp(2026, 10, 14, 20, 0),
+                timestamp(2026, 10, 15, 0, 0),
+                now,
+                &z,
+                true
+            ),
+            "昨天 20:00–24:00"
+        );
+        assert_eq!(
+            range_text(
+                timestamp(2026, 10, 13, 22, 0),
+                timestamp(2026, 10, 14, 1, 30),
+                now,
+                &z,
+                true
+            ),
+            "10月13日 22:00 – 10月14日 01:30"
+        );
+        assert_eq!(
+            range_text(
+                timestamp(2026, 10, 5, 0, 0),
+                timestamp(2026, 10, 12, 0, 0),
+                now,
+                &z,
+                false
+            ),
+            "10月5日 周一 – 10月11日 周日"
+        );
+        assert_eq!(
+            range_text(
+                timestamp(2025, 12, 31, 0, 0),
+                timestamp(2026, 1, 1, 0, 0),
+                now,
+                &z,
+                true
+            ),
+            "2025年12月31日 全天"
+        );
     }
 }

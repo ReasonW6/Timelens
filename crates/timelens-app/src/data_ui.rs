@@ -16,6 +16,15 @@ use timelens_ipc::{
 };
 use timelens_storage::{BackupOptions, ExportFormat, PreparedRestore, RelocationStep, Storage};
 
+static DATA_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+pub fn data_generation() -> u64 {
+    DATA_GENERATION.load(std::sync::atomic::Ordering::Acquire)
+}
+pub fn dataset_changed() {
+    DATA_GENERATION.fetch_add(1, std::sync::atomic::Ordering::Release);
+    crate::snapshot::wake_scheduler();
+}
+
 fn lock(s: &Arc<Mutex<Storage>>) -> Result<std::sync::MutexGuard<'_, Storage>> {
     s.lock().map_err(|_| anyhow!("存储锁不可用"))
 }
@@ -406,15 +415,12 @@ pub fn install(
                             .map_err(|_| anyhow!("恢复锁不可用"))?
                             .take()
                             .context("请先重新校验备份")?;
-                        let _ai = crate::ai::pause_and_wait()?;
                         crate::snapshot::run_heavy_task(|| {
                             let directory = lock(&storage)?.control_directory().to_path_buf();
                             let _collector = pause_collector(&directory)?;
                             lock(&storage)?.replace_from_backup(prepared, true)?;
-                            crate::ai_ui::dataset_changed();
-                            Ok(Update::Done(
-                                "数据集已恢复。请重新配置 AI 凭据、测试连接后启用计划。".into(),
-                            ))
+                            dataset_changed();
+                            Ok(Update::Done("数据集已恢复。".into()))
                         })
                     }
                     5 | 6 => {
@@ -466,7 +472,6 @@ pub fn install(
                     9 => {
                         let moved = (|| {
                             let target = move_target(&destination)?;
-                            let _ai = crate::ai::pause_and_wait()?;
                             crate::snapshot::run_heavy_task(|| {
                                 let control = lock(&storage)?.control_directory().to_path_buf();
                                 let _collector = pause_collector(&control)?;

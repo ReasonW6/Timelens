@@ -101,7 +101,7 @@ pub fn open(data: Result<PathBuf>, control: &Path, force: bool) -> Result<Storag
                         let prepared=Storage::prepare_restore(&archive,if password.is_empty(){None}else{Some(password.as_str())},parent)?;
                         let storage=Storage::open(&destination)?;
                         storage.replace_from_backup(prepared,true)?;storage.verify_integrity()?;
-                        Ok(Update::Ready(storage,"备份已恢复并通过校验。切换后请重新配置凭据、测试连接并启用 AI 计划。".into()))
+                        Ok(Update::Ready(storage,"备份已恢复并通过校验。".into()))
                     },
                     2=>Ok(Update::Ready(Storage::open(&destination)?,"已建立空数据集。原件继续保留在原位置。".into())),
                     3=>{

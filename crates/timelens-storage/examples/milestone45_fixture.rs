@@ -1,9 +1,5 @@
 //! Synthetic UI acceptance data; refuses to write a non-empty dataset.
 use std::{error::Error, fs, io::Cursor, path::PathBuf};
-use timelens_ai::{
-    Capability, Model, ProviderProfile,
-    credentials::{self, Secrets},
-};
 use timelens_ipc::{
     CollectorEvent, EventBatch, IdentitySource, InputMinute, PhysicalKeyCount, WindowObservation,
     WindowTransition, WindowTransitionKind, collector_event,
@@ -13,13 +9,9 @@ use timelens_storage::{SnapshotDisplay, SnapshotStoreRequest, SnapshotTrigger, S
 fn main() -> Result<(), Box<dyn Error>> {
     let mut args = std::env::args().skip(1);
     let directory = PathBuf::from(args.next().ok_or("expected empty fixture directory")?);
-    let endpoint = args.next().ok_or("expected loopback fixture endpoint")?;
     let mode = args.next().unwrap_or_else(|| "ui".into());
-    if args.next().is_some()
-        || !endpoint.starts_with("http://127.0.0.1:")
-        || !["ui", "normal", "idle", "ai"].contains(&mode.as_str())
-    {
-        return Err("loopback fixture only".into());
+    if args.next().is_some() || !["ui", "normal", "idle"].contains(&mode.as_str()) {
+        return Err("expected mode ui, normal or idle".into());
     }
     if directory.exists() && fs::read_dir(&directory)?.next().is_some() {
         return Err("fixture directory is not empty".into());
@@ -114,43 +106,14 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut policy = storage.collection_policy()?;
     policy.paused = mode == "ui" || mode == "idle";
     storage.set_collection_policy(policy)?;
-    let id = if mode == "ui" {
-        "acceptance-ui-84d2c6a9".into()
-    } else {
-        format!("acceptance-{mode}-{}-{now}", std::process::id())
-    };
-    let mut profile = ProviderProfile::preset(0, id);
-    profile.name = "本机验收（合成数据）".into();
-    profile.base_url = endpoint;
-    profile.allow_local_http = true;
-    profile.model = Model::unknown("fixture-v1");
-    profile.model.vision = Capability::Supported;
-    profile.credential_revision = 1;
-    profile.idle_timeout_seconds = Some(15);
-    if mode == "ai" {
-        // This fixture can address only its synthetic loopback server.
-        profile.tested_revision = Some(profile.revision());
-    }
-    storage.save_ai_profile(&profile)?;
-    credentials::save(
-        &profile.id,
-        &Secrets {
-            api_key: "local-fixture".into(),
-            headers: Default::default(),
-        },
-    )?;
     storage.generate_local_report(start, end, now)?;
-    if mode == "ai" {
-        storage.enqueue_ai_summary(&profile.id, "default", start, end, &[], now)?;
-    }
     storage.verify_integrity()?;
     storage.checkpoint()?;
     println!(
-        "synthetic dataset: {}\nrange {}..{}\ncredential {}",
+        "synthetic dataset: {}\nrange {}..{}",
         directory.display(),
         start,
-        end,
-        profile.id
+        end
     );
     Ok(())
 }

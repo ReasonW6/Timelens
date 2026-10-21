@@ -119,29 +119,6 @@ pub(crate) fn owned_snapshot_name(name: &str) -> bool {
         .is_some_and(|s| s.len() == 32 && s.bytes().all(|b| b.is_ascii_hexdigit()))
 }
 impl Storage {
-    /// Read only the credential identifiers owned by this dataset. This permits
-    /// scoped maintenance without enumerating other profiles in Credential Manager.
-    pub fn dataset_credential_ids(directory: &Path) -> Result<Vec<String>> {
-        let directory = validate_fixed_directory(directory)?;
-        let database = directory.join(DATABASE_FILE);
-        if !database.exists() {
-            return Ok(vec![]);
-        }
-        let key = load_key(&directory.join(KEY_FILE))?;
-        let connection = open_encrypted(&database, &key, true)?;
-        let exists: bool = connection.query_row(
-            "SELECT EXISTS(SELECT 1 FROM sqlite_schema WHERE type='table' AND name='ai_profiles')",
-            [],
-            |r| r.get(0),
-        )?;
-        if !exists {
-            return Ok(vec![]);
-        }
-        Ok(connection
-            .prepare("SELECT id FROM ai_profiles")?
-            .query_map([], |r| r.get(0))?
-            .collect::<rusqlite::Result<Vec<_>>>()?)
-    }
     pub fn control_directory(&self) -> &Path {
         &self.control_directory
     }
@@ -374,7 +351,7 @@ mod tests {
     use super::*;
     #[test]
     fn failed_pointer_publish_preserves_source_and_verified_destination() {
-        let (source, mut storage) = ai::tests::fixture();
+        let (source, mut storage) = fixtures::storage();
         let parent = tempfile::tempdir().unwrap();
         let target = parent.path().join("new-dataset");
         storage.checkpoint().unwrap();
@@ -391,7 +368,7 @@ mod tests {
     }
     #[test]
     fn relocation_fills_an_existing_empty_directory_without_leaving_its_stage() {
-        let (_source, mut storage) = ai::tests::fixture();
+        let (_source, mut storage) = fixtures::storage();
         let parent = tempfile::tempdir().unwrap();
         let target = parent.path().join("prepared");
         fs::create_dir(&target).unwrap();
@@ -428,7 +405,7 @@ mod tests {
     }
     #[test]
     fn relocation_works_in_a_prepared_directory_under_a_read_only_parent() {
-        let (_source, mut storage) = ai::tests::fixture();
+        let (_source, mut storage) = fixtures::storage();
         let parent = tempfile::tempdir().unwrap();
         let target = parent.path().join("Data");
         fs::create_dir(&target).unwrap();
@@ -459,7 +436,7 @@ mod tests {
     }
     #[test]
     fn relocation_and_uninstall_leave_unrelated_exports_intact() {
-        let (source, mut storage) = ai::tests::fixture();
+        let (source, mut storage) = fixtures::storage();
         let parent = tempfile::tempdir().unwrap();
         let target = parent.path().join("new-dataset");
         fs::write(source.path().join("my-backup.zip"), b"user-owned").unwrap();
@@ -485,7 +462,7 @@ mod tests {
     }
     #[test]
     fn uninstall_removes_daily_snapshot_containers() {
-        let (source, storage) = ai::tests::fixture();
+        let (source, storage) = fixtures::storage();
         storage
             .store_snapshot(&snapshot_container::tests::request(1_700_000_000_000, 10))
             .unwrap();
@@ -495,7 +472,7 @@ mod tests {
     }
     #[test]
     fn relocation_first_finishes_cleanup_a_deletion_postponed() {
-        let (source, mut storage) = ai::tests::fixture();
+        let (source, mut storage) = fixtures::storage();
         let a = snapshot_container::tests::request(1_700_000_000_000, 10);
         let b = snapshot_container::tests::request(a.slot_started_utc_ms + 1000, 20);
         let first = storage.store_snapshot(&a).unwrap();

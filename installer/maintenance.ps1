@@ -58,6 +58,7 @@ if ($Mode -eq 'PrepareUpgrade' -and $oldCoreTask) {
 # Earlier builds kept the collector beside the core; current ones keep it in the
 # protected elevated directory.
 $collectors = @((Join-Path $targetDir 'Timelens.Collector.exe'), (Join-Path $elevatedDir 'Timelens.Collector.exe'))
+# Earlier builds also ran an on-demand AI worker beside the core.
 $worker = Join-Path $targetDir 'Timelens.AI.exe'
 foreach ($task in $tasks) {
     $expected = if ($task.TaskName -eq 'Core') { @($core) } else { $collectors }

@@ -273,9 +273,8 @@ impl Storage {
             .map(|id| Ok((id.clone(), self.application_display_name(&id)?)))
             .collect()
     }
-    pub fn application_deletion_impact(&self, identity: &str) -> Result<(u64, u64, u64)> {
+    pub fn application_deletion_impact(&self, identity: &str) -> Result<(u64, u64)> {
         let mut reports = BTreeSet::new();
-        let mut versions = BTreeSet::new();
         let mut windows = 0;
         for member in self.merged_members(identity)? {
             windows += self
@@ -287,9 +286,8 @@ impl Storage {
                 )?
                 .max(0) as u64;
             reports.extend(self.connection.prepare("SELECT report_id FROM local_report_applications WHERE application_identity=?")?.query_map([&member],|r|r.get::<_,i64>(0))?.collect::<rusqlite::Result<Vec<_>>>()?);
-            versions.extend(self.connection.prepare("SELECT j.job_id FROM ai_jobs j JOIN ai_version_sources s ON s.job_id=j.job_id WHERE s.application_identity=?")?.query_map([&member],|r|r.get::<_,i64>(0))?.collect::<rusqlite::Result<Vec<_>>>()?);
         }
-        Ok((windows, reports.len() as u64, versions.len() as u64))
+        Ok((windows, reports.len() as u64))
     }
     pub fn delete_application_history(&self, identity: &str) -> Result<u64> {
         self.timeline_cache
@@ -300,7 +298,6 @@ impl Storage {
         let mut rows = 0;
         for member in members {
             let range=tx.query_row("SELECT MIN(opened_utc_ms),MAX(COALESCE(closed_utc_ms,?2)) FROM window_instances WHERE application_identity=?1",params![member,unix_time_ms()],|r|Ok((r.get::<_,Option<i64>>(0)?,r.get::<_,Option<i64>>(1)?)))?;
-            tx.execute("DELETE FROM ai_jobs WHERE job_id IN (SELECT job_id FROM ai_version_sources WHERE application_identity=?)",[&member])?;
             tx.execute("DELETE FROM local_reports WHERE report_id IN (SELECT report_id FROM local_report_applications WHERE application_identity=?)",[&member])?;
             rows+=tx.execute("DELETE FROM window_state_intervals WHERE window_instance_id IN (SELECT instance_id FROM window_instances WHERE application_identity=?)",[&member])? as u64;
             for (table, column) in [
@@ -356,7 +353,7 @@ mod tests {
     use timelens_ipc::{WindowTransition, WindowTransitionKind};
     #[test]
     fn anonymous_input_is_only_daily_and_idempotent() {
-        let (_dir, s) = ai::tests::fixture();
+        let (_dir, s) = fixtures::storage();
         let batch = EventBatch {
             collector_run_id: vec![1; 16],
             first_sequence: 3,
@@ -399,7 +396,7 @@ mod tests {
     }
     #[test]
     fn input_totals_sum_minute_buckets_over_an_inclusive_date_range() {
-        let (_dir, s) = ai::tests::fixture();
+        let (_dir, s) = fixtures::storage();
         // Minutes in UTC+8: local midnight is 16:00 UTC the day before.
         let at = |day: u32, hour: u32| {
             chrono::NaiveDate::from_ymd_opt(2026, 9, day)
@@ -436,7 +433,7 @@ mod tests {
     }
     #[test]
     fn key_frequencies_sum_over_an_inclusive_date_range() {
-        let (_dir, s) = ai::tests::fixture();
+        let (_dir, s) = fixtures::storage();
         for (date, code, count) in [
             ("2026-09-04", 30, 5),
             ("2026-09-05", 30, 2),
@@ -469,7 +466,7 @@ mod tests {
     }
     #[test]
     fn merge_is_reversible_and_uses_real_interval_union() {
-        let (_dir, s) = ai::tests::fixture();
+        let (_dir, s) = fixtures::storage();
         let left = "path:c:\\private\\editor.exe";
         let right = "path:c:\\public\\other.exe";
         let event = |now, kind| CollectorEvent {
@@ -525,16 +522,14 @@ mod tests {
     }
     #[test]
     fn explicit_app_deletion_removes_derived_artifacts_and_keeps_rules() {
-        let (_dir, s) = ai::tests::fixture();
-        let version = ai::tests::summary(&s, 7000);
+        let (_dir, s) = fixtures::storage();
         let report = s.generate_local_report(1000, 6000, 7000).unwrap();
         let id = "path:c:\\private\\editor.exe";
         let mut p = s.collection_policy().unwrap();
         p.input.insert(id.into());
         s.set_collection_policy(p).unwrap();
-        assert_eq!(s.application_deletion_impact(id).unwrap(), (1, 1, 1));
+        assert_eq!(s.application_deletion_impact(id).unwrap(), (1, 1));
         s.delete_application_history(id).unwrap();
-        assert!(s.ai_version(version).is_err());
         assert!(s.load_local_report(report.id).is_err());
         assert!(
             s.timeline_snapshot(1000, 6000)
@@ -547,8 +542,8 @@ mod tests {
         s.verify_integrity().unwrap();
     }
     #[test]
-    fn system_intervals_are_coalesced_without_excluded_identities() {
-        let (_dir, s) = ai::tests::fixture();
+    fn system_intervals_are_coalesced() {
+        let (_dir, s) = fixtures::storage();
         let event = |start, end| CollectorEvent {
             observed_at_utc_ms: end,
             monotonic_ms: end as u64,
@@ -573,8 +568,5 @@ mod tests {
                 .unwrap(),
             1
         );
-        let env = s.ai_envelope(1000, 8000).unwrap();
-        assert_eq!(env.system_ms["global_pause"], 2000);
-        assert!(env.missing.iter().any(|g| g.reason == "global_pause"));
     }
 }

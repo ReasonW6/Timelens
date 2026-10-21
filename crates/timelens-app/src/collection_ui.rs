@@ -108,10 +108,9 @@ fn select(w: &AppWindow, d: &Data, s: &Storage, index: i32) -> Result<()> {
     g.set_activity(p.activity.contains(id));
     g.set_input(p.input.contains(id));
     g.set_snapshots(s.snapshot_exclusions()?.contains(id));
-    let (windows, reports, ai) = s.application_deletion_impact(id)?;
+    let (windows, reports) = s.application_deletion_impact(id)?;
     g.set_impact(
-        format!("将删除「{name}」的 {windows} 个窗口实例、{reports} 份本地报告和 {ai} 个引用它的 AI 任务。")
-            .into(),
+        format!("将删除「{name}」的 {windows} 个窗口实例和 {reports} 份本地报告。").into(),
     );
     g.set_delete_confirmed(false);
     g.set_merge_confirmed(false);
@@ -260,11 +259,6 @@ pub fn install(
                         path.to_string_lossy().replace('/', "\\").to_lowercase()
                     )));
                 }
-                let _ai = if action == 5 {
-                    Some(crate::ai::pause_and_wait()?)
-                } else {
-                    None
-                };
                 crate::snapshot::run_heavy_task(|| {
                     let _collector = if action == 5 {
                         let control = lock(&storage)?.control_directory().to_path_buf();
@@ -317,7 +311,7 @@ pub fn install(
                                 return Err(anyhow!("请确认删除影响"));
                             }
                             s.delete_application_history(&id.context("请选择应用")?)?;
-                            crate::ai_ui::dataset_changed();
+                            crate::data_ui::dataset_changed();
                         }
                         _ => return Err(anyhow!("未知操作")),
                     }

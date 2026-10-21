@@ -1,7 +1,5 @@
 [workspace]
 members = [
-    "crates/timelens-ai",
-    "crates/timelens-ai-worker",
     "crates/timelens-app",
     "crates/timelens-collector",
     "crates/timelens-ipc",
@@ -22,7 +20,6 @@ base64 = "0.22.1"
 chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-url = "2.5"
 crc32fast = "1.5.0"
 embed-resource = "3"
 hex = "0.4.3"
@@ -76,11 +73,9 @@ windows-sys = { version = "0.61.2", features = [
     "Win32_Security_Authorization",
     "Win32_Security_Cryptography",
     "Win32_Security_Credentials",
-    "Win32_Networking_WinHttp",
     "Win32_Storage_CloudFilters",
     "Win32_Storage_FileSystem",
     "Win32_System_IO",
-    "Win32_System_JobObjects",
     "Win32_System_Memory",
     "Win32_System_Pipes",
     "Win32_System_Registry",

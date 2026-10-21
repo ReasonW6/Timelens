@@ -45,11 +45,14 @@ SetupLogging=yes
 [Files]
 Source: "..\target\release\timelens.exe"; DestDir: "{app}"; DestName: "Timelens.exe"; Flags: ignoreversion
 Source: "..\target\release\timelens-collector.exe"; DestDir: "{commonpf64}\{#ProductName}"; DestName: "Timelens.Collector.exe"; Flags: ignoreversion
-Source: "..\target\release\timelens-ai-worker.exe"; DestDir: "{app}"; DestName: "Timelens.AI.exe"; Flags: ignoreversion
 Source: "maintenance.ps1"; DestDir: "{commonpf64}\{#ProductName}\internal"; Flags: ignoreversion
 Source: "path-safety.ps1"; DestDir: "{commonpf64}\{#ProductName}\internal"; Flags: ignoreversion
 Source: "register-tasks.ps1"; DestDir: "{commonpf64}\{#ProductName}\internal"; Flags: ignoreversion
 Source: "unregister-tasks.ps1"; DestDir: "{commonpf64}\{#ProductName}\internal"; Flags: ignoreversion
+
+; Earlier versions shipped an AI worker beside the core.
+[InstallDelete]
+Type: files; Name: "{app}\Timelens.AI.exe"
 
 [Icons]
 Name: "{autoprograms}\{#ProductName}"; Filename: "{app}\Timelens.exe"

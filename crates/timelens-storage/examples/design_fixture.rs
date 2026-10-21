@@ -3,7 +3,6 @@
 //! Usage: design_fixture <existing-empty-absolute-directory>
 //!        [vscode.exe] [obsidian.exe] [edge.exe] [explorer.exe]
 //! The optional EXE paths are metadata only: they are never launched or read here.
-//! This example never creates an AI provider, credentials, a job, or a schedule.
 use chrono::{Local, NaiveDate, NaiveTime, TimeZone};
 use serde_json::json;
 use std::{error::Error, fs, io::Cursor, path::PathBuf};
@@ -333,8 +332,6 @@ fn main() -> FixtureResult<()> {
         "local_report_id": report.id,
         "collection_paused": true,
         "snapshots_enabled": false,
-        "ai_provider_count": 0,
-        "ai_schedule_count": 0,
         "verified_from_storage": true
     });
     println!("{}", serde_json::to_string_pretty(&metadata)?);
@@ -606,10 +603,8 @@ fn verify_fixture(
             != Some(199 * MINUTE_MS as u64)
         || !storage.collection_policy()?.paused
         || storage.snapshot_policy()?.enabled
-        || !storage.ai_profiles()?.is_empty()
-        || !storage.ai_schedules()?.is_empty()
     {
-        return Err("fixture coverage or disabled collection/AI state is incorrect".into());
+        return Err("fixture coverage or disabled collection state is incorrect".into());
     }
     Ok(())
 }

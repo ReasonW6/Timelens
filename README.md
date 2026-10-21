@@ -1,12 +1,14 @@
 # Timelens
 
-Timelens 是一款面向 Windows 11 的轻量级、本地优先活动观察应用，用时间轴记录应用窗口状态、输入设备统计和定时快照，并支持由用户自备 API 密钥的 AI 总结。
+Timelens 是一款面向 Windows 11 的轻量级、本地优先活动观察应用，用时间轴记录应用窗口状态、输入设备统计和定时快照，并在本机生成确定性的使用报告。
 
 > 当前状态：正在开发中/未完成。
 
 > 界面重构（2026-09-06）：已实施用户选定的 Paper 原生界面，涵盖六个主页面与恢复窗口。设计对照、窗口缩放、实际操作和最新回归证据见 [界面验收](design-qa.md)及[设计实施记录](docs/design/rebuild-20260905/README.md)。重构实现与验收记录已归档至提交 `b535a6f`；完整发布验收仍待完成。
 
 > 界面调整（2026-10-09）：首页改为按日连续滚动的时间线，每一行归属该时段聚焦最久的应用，短暂切换作为穿插应用归入同一行。主导航为时间线、统计与报告（应用、本地报告、键位与系统）、快照和 AI 总结；应用统计默认显示全部记录的累计时间，可切换为今天。定时快照会跳过桌面复制返回的只含鼠标的黑帧。
+
+> 移除 AI（2026-10-21）：AI 总结只能看到与统计页相同的聚合事实，因此连同 AI worker、提供商凭据和 AI 设置一起移除，见[票据 18](docs/wayfinder/timelens-v1/issues/18-remove-ai-summaries.md)。升级时会删除已有的 AI 总结与对话，并清除 Windows 凭据管理器中保存的提供商密钥；回顾一段时间改用本地报告。
 
 应用图标统一从本机注册信息或已记录的 EXE 提取，浅色透明图案自动增加深色底衬，不使用应用名称白名单。
 
@@ -17,7 +19,7 @@ Timelens 是一款面向 Windows 11 的轻量级、本地优先活动观察应�
 - 只记录用户窗口，不展示或统计无窗口辅助进程。
 - 同一应用的多个窗口归组展示，重叠时间不重复累计。
 - 不采集窗口标题、网址、文档内容、剪贴板或原始按键序列。
-- UI 与 AI 网络代码保持普通权限，窄职责采集器独立提权运行。
+- UI 保持普通权限，窄职责采集器独立提权运行；Timelens 不发起任何网络请求。
 - 数据默认保存在本机，并提供清理、清空和便携备份能力。
 - 以低 CPU、低内存占用和小安装体积作为硬性设计约束。
 
@@ -38,8 +40,6 @@ Timelens 是一款面向 Windows 11 的轻量级、本地优先活动观察应�
 - `crates/timelens-ipc`：版本化、限长的 Protobuf 协议和 Windows 命名管道认证。
 - `crates/timelens-observer`：不读取标题的用户窗口分类、应用身份解析和虚拟桌面事实查询。
 - `crates/timelens-storage`：DPAPI 封装的数据密钥、SQLCipher、WAL 与可恢复迁移。
-- `crates/timelens-ai`：提供商协议、模型能力、凭据、调度和上下文规则。
-- `crates/timelens-ai-worker`：按需运行的普通权限网络进程，支持三种协议与流式回答。
 - `installer`：Inno Setup 安装脚本和 Limited/Highest 登录任务注册脚本。
 
 ## 本地验证
@@ -54,13 +54,13 @@ cargo test --workspace --release -- --test-threads=2
 cargo build --workspace --release
 cargo run -p timelens-collector -- --observe-windows-once
 cargo run -p timelens-collector -- --observe-window-events-seconds 10
-cargo run --release -p timelens-storage --example milestone2_capacity -- --data-dir C:\path\to\empty-data-dir --include-ai
+cargo run --release -p timelens-storage --example milestone2_capacity -- --data-dir C:\path\to\empty-data-dir
 & '.\docs\wayfinder\timelens-v1\performance-validation\verify-milestone2-privacy.ps1' -DataDirectory C:\path\to\capacity-data
 ```
 
 调试构建可设置 `TIMELENS_QA_CAPTURE=<目录>`，依次截取主要页面后自动退出；配合 `--data-dir` 使用隔离数据。核心是单实例的，运行前需先关闭已安装的 Timelens。
 
-DPAPI 与 Credential Manager 回归需要当前 Windows 用户的凭据上下文。完整进程组性能、按需截图和独立安装验收的前置条件及入口见[里程碑 4、5 报告](docs/wayfinder/timelens-v1/performance-validation/milestone-4-5-report.md)。
+DPAPI 回归需要当前 Windows 用户的凭据上下文。完整进程组性能、按需截图和独立安装验收的前置条件及入口见[里程碑 4、5 报告](docs/wayfinder/timelens-v1/performance-validation/milestone-4-5-report.md)。
 
 安装包使用 Inno Setup 7 编译：
 
@@ -68,7 +68,7 @@ DPAPI 与 Credential Manager 回归需要当前 Windows 用户的凭据上下文
 & 'C:\path\to\ISCC.exe' 'installer\Timelens.iss'
 ```
 
-Core 与 Collector 只在校验同一用户、同一会话、Windows 返回的真实 PID、固定可执行文件名和对端路径后握手：对端须与自身同目录，或位于管理员专属登录任务定义登记的目录。主程序（core、AI worker）可安装到任意本地固定磁盘目录；以管理员身份运行的采集器、卸载程序和维护脚本固定安装在 `Common Files\Timelens`。安装器将两处目录收紧为 SYSTEM/Administrators 可写、普通用户只读执行，并检查提权目录的祖先目录不能被普通用户用于替换载荷；没有代码签名时，这是防止同名二进制替换提权的必要安全边界。首次安装时可以选择数据位置：默认是当前用户的 `AppData\Local\Timelens`，也可以选本地固定磁盘上的任意空文件夹（在安装目录内仅限其中的 `Data` 文件夹），安装器会创建该文件夹并授予当前用户写入权限；已有数据的用户继续使用原位置，升级也不改变数据位置。升级由用户主动运行安装器；卸载可选择保留或删除本地数据，外部导出不随卸载删除。
+Core 与 Collector 只在校验同一用户、同一会话、Windows 返回的真实 PID、固定可执行文件名和对端路径后握手：对端须与自身同目录，或位于管理员专属登录任务定义登记的目录。主程序可安装到任意本地固定磁盘目录；以管理员身份运行的采集器、卸载程序和维护脚本固定安装在 `Common Files\Timelens`。安装器将两处目录收紧为 SYSTEM/Administrators 可写、普通用户只读执行，并检查提权目录的祖先目录不能被普通用户用于替换载荷；没有代码签名时，这是防止同名二进制替换提权的必要安全边界。首次安装时可以选择数据位置：默认是当前用户的 `AppData\Local\Timelens`，也可以选本地固定磁盘上的任意空文件夹（在安装目录内仅限其中的 `Data` 文件夹），安装器会创建该文件夹并授予当前用户写入权限；已有数据的用户继续使用原位置，升级也不改变数据位置。升级由用户主动运行安装器；卸载可选择保留或删除本地数据，外部导出不随卸载删除。
 
 ## 文档
 
@@ -83,6 +83,6 @@ Core 与 Collector 只在校验同一用户、同一会话、Windows 返回的�
 
 ## 开发状态
 
-仓库保存完整 Wayfinder 决策链、窗口与输入采集、加密快照、本地报告、AI 总结和分支对话、便携备份恢复、数据迁移与安装维护实现。协议为 v4，SQLCipher schema 为 v12。
+仓库保存完整 Wayfinder 决策链、窗口与输入采集、加密快照、本地报告、便携备份恢复、数据迁移与安装维护实现。协议为 v4，SQLCipher schema 为 v14。
 
-当前 30 天非图片合成负载包含 90 个 AI 总结，含 Collector 预留共 78.17 MiB；三轮正常采集 CPU 最大 0.0792%，进程组峰值工作集最大 54.15 MiB，AI 流式三进程峰值 64.65 MiB。真实 UI 手动截图的采样峰值为 142.69 MiB，结束时回落至 83.41 MiB；这是单独记录的按需峰值，100 MiB 门槛用于常驻场景。所有产物均为 `NotSigned`。
+2026-09-05 验收时，30 天非图片合成负载包含 90 个 AI 总结，含 Collector 预留共 78.17 MiB；三轮正常采集 CPU 最大 0.0792%，进程组峰值工作集最大 54.15 MiB，AI 流式三进程峰值 64.65 MiB。真实 UI 手动截图的采样峰值为 142.69 MiB，结束时回落至 83.41 MiB；这是单独记录的按需峰值，100 MiB 门槛用于常驻场景。所有产物均为 `NotSigned`。

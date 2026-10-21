@@ -282,14 +282,13 @@ impl Storage {
             repaired.connection.execute("INSERT INTO data_availability(data_class,status,started_utc_ms,ended_utc_ms,reason,item_count) VALUES(?,'monitoring_gap',?,?,'recovery_corruption',?)",params![category,earliest.unwrap_or(now).min(now),now,report.discarded_rows as i64])?;
         }
         // Exclusions may have been on an unreadable page. Review them before any
-        // collection or scheduled network request resumes.
+        // collection resumes.
         let mut policy = repaired.collection_policy()?;
         policy.paused = true;
         repaired.set_collection_policy(policy)?;
         let mut snapshots = repaired.snapshot_policy()?;
         snapshots.enabled = false;
         repaired.set_snapshot_policy(snapshots, now)?;
-        repaired.initialize_ai()?;
         repaired.verify_integrity()?;
         repaired.checkpoint()?;
         drop(repaired);
@@ -306,7 +305,7 @@ mod tests {
     use super::*;
     #[test]
     fn any_sqlite_corruption_error_latches_read_only_before_next_operation() {
-        let (source, s) = ai::tests::fixture();
+        let (source, s) = fixtures::storage();
         let damaged = source.path().join("synthetic-damaged.sqlite3");
         fs::write(&damaged, b"not a database").unwrap();
         assert!(
@@ -318,13 +317,17 @@ mod tests {
                 .is_err()
         );
         assert!(s.is_quarantined());
-        assert!(s.connection.execute("DELETE FROM ai_profiles", []).is_err());
+        assert!(
+            s.connection
+                .execute("DELETE FROM local_reports", [])
+                .is_err()
+        );
         assert!(s.ensure_writable().is_err());
         s.timeline_snapshot(1000, 6000).unwrap();
     }
     #[test]
     fn recovery_keeps_original_and_removes_orphans_without_inventing_parents() {
-        let (source, s) = ai::tests::fixture();
+        let (source, s) = fixtures::storage();
         s.connection
             .execute_batch(
                 "PRAGMA foreign_keys=OFF; DELETE FROM window_instances; PRAGMA foreign_keys=ON;",
@@ -341,7 +344,6 @@ mod tests {
         repaired.verify_integrity().unwrap();
         assert!(repaired.collection_policy().unwrap().paused);
         assert!(!repaired.snapshot_policy().unwrap().enabled);
-        assert!(repaired.ai_schedules().unwrap().iter().all(|s| !s.enabled));
         assert_eq!(fs::read(source.path().join(DATABASE_FILE)).unwrap(), before);
         assert_eq!(fs::read(source.path().join(KEY_FILE)).unwrap(), key);
         assert_ne!(fs::read(dest.join(KEY_FILE)).unwrap(), key);
@@ -360,7 +362,7 @@ mod tests {
     #[test]
     fn recovery_restores_an_image_from_a_later_day_when_the_first_copy_is_damaged() {
         use snapshot_container::tests::{request, store_on_day};
-        let (source, s) = ai::tests::fixture();
+        let (source, s) = fixtures::storage();
         let a = request(1_700_000_000_000, 10);
         let first = store_on_day(&s, &a, "2023-11-14");
         let mut later = a.clone();
@@ -391,7 +393,7 @@ mod tests {
     }
     #[test]
     fn unreadable_header_does_not_replace_original_or_publish_target() {
-        let (source, s) = ai::tests::fixture();
+        let (source, s) = fixtures::storage();
         drop(s);
         let database = source.path().join(DATABASE_FILE);
         fs::write(&database, b"damaged encrypted database").unwrap();
@@ -404,7 +406,7 @@ mod tests {
 
     #[test]
     fn startup_recovers_interrupted_upgrade_before_inspecting_migration_notice() {
-        let (source, s) = ai::tests::fixture();
+        let (source, s) = fixtures::storage();
         s.checkpoint().unwrap();
         drop(s);
         let db = source.path().join(DATABASE_FILE);

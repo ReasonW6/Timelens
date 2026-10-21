@@ -125,7 +125,7 @@ export component RecoveryWindow inherits Window {
                     }
                     if root.other-methods-open : VerticalLayout {
                         spacing: 14px;
-                        Note { text: "可以尝试从可读取的记录建立新数据集。无法恢复的记录会明确标记为缺失；采集、快照和 AI 计划保持暂停，供你先检查排除规则。"; }
+                        Note { text: "可以尝试从可读取的记录建立新数据集。无法恢复的记录会明确标记为缺失；采集和快照保持暂停，供你先检查排除规则。"; }
                         HorizontalLayout {
                             spacing: 8px;
                             Action { width: 224px; text: "尝试恢复可读取的记录"; enabled: !root.busy; clicked => { root.action(3); } }

@@ -44,11 +44,6 @@ fn main() -> Result<(), Box<dyn Error>> {
     println!("applications={}", timeline.applications.len());
     println!("monitoring_gaps={}", timeline.monitoring_gaps.len());
     println!("collection_paused={}", storage.collection_policy()?.paused);
-    let jobs = storage.ai_jobs(100)?;
-    println!("ai_versions={}", storage.ai_versions()?.len());
-    for job in jobs {
-        println!("ai_job={} state={}", job.id, job.state);
-    }
     for (kind, duration) in storage.system_totals(range_started_utc_ms, range_ended_utc_ms)? {
         println!("system_interval={kind} duration_ms={duration}");
     }

@@ -32,8 +32,7 @@ foreach ($directory in @($resolvedInstallDir, $resolvedElevatedDir)) {
 
 $corePath = Join-Path $resolvedInstallDir 'Timelens.exe'
 $collectorPath = Join-Path $resolvedElevatedDir 'Timelens.Collector.exe'
-$workerPath = Join-Path $resolvedInstallDir 'Timelens.AI.exe'
-foreach ($path in @($corePath, $collectorPath, $workerPath)) {
+foreach ($path in @($corePath, $collectorPath)) {
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
         throw "Required Timelens executable is missing: $path"
     }

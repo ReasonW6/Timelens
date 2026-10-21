@@ -1,18 +1,16 @@
 #![cfg(windows)]
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-mod ai;
-mod ai_ui;
 mod app_icon;
 mod appearance;
 mod collection_ui;
 mod collector_task;
+mod credentials;
 mod data_ui;
 mod general_ui;
 mod history;
 mod icon_cache;
 mod local_config;
-mod markdown;
 mod pause;
 #[cfg(debug_assertions)]
 mod qa;
@@ -59,14 +57,44 @@ const COLLECTOR_NAMES: &[&str] = &["timelens-collector.exe", "Timelens.Collector
 
 slint::slint! {
     export { AppWindow, AppRow, WindowRow, SegmentRow, SnapshotRow, ReportAppRow,
-             HistoryItem, DayAnchor, Participant, ShareSlice, StackApp, AiState, DataState,
+             HistoryItem, DayAnchor, Participant, ShareSlice, StackApp, DataState,
              CollectionState, KeyCell, ButtonHeat, SystemRow, AppIcons, Theme }
         from "ui/main-window.slint";
-    export { AiHistoryRow, AiConnectionRow, AiStat, MdBlock } from "ui/ai-panel.slint";
 }
+/// Timelens runs as the signed-in user; only the collector is elevated.
+fn require_ordinary_privilege() -> Result<()> {
+    use windows_sys::Win32::{
+        Foundation::CloseHandle,
+        Security::{GetTokenInformation, TOKEN_ELEVATION, TOKEN_QUERY, TokenElevation},
+        System::Threading::{GetCurrentProcess, OpenProcessToken},
+    };
+    let mut token = std::ptr::null_mut();
+    if unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) } == 0 {
+        bail!("无法检查 Timelens 进程权限");
+    }
+    let mut elevation = TOKEN_ELEVATION::default();
+    let mut returned = 0;
+    let success = unsafe {
+        GetTokenInformation(
+            token,
+            TokenElevation,
+            (&mut elevation as *mut TOKEN_ELEVATION).cast(),
+            std::mem::size_of::<TOKEN_ELEVATION>() as u32,
+            &mut returned,
+        )
+    };
+    unsafe {
+        CloseHandle(token);
+    }
+    if success == 0 || elevation.TokenIsElevated != 0 {
+        bail!("Timelens 只允许以普通权限运行，请正常启动 Timelens");
+    }
+    Ok(())
+}
+
 fn main() -> Result<()> {
     let options = Options::parse(env::args_os().skip(1))?;
-    timelens_ai::credentials::require_ordinary_privilege().map_err(anyhow::Error::msg)?;
+    require_ordinary_privilege()?;
     if options.shutdown {
         tray::activate_existing(true);
         return Ok(());
@@ -90,12 +118,8 @@ fn main() -> Result<()> {
             SingleInstanceGuard::acquire_collector().context("删除数据前必须先停止采集器")?;
         let data = options.data_directory()?;
         let control = options.control_directory()?;
-        if options.data_directory.is_some() {
-            for id in Storage::dataset_credential_ids(&data)? {
-                timelens_ai::credentials::delete(&id).map_err(anyhow::Error::msg)?;
-            }
-        } else {
-            timelens_ai::credentials::delete_all().map_err(anyhow::Error::msg)?;
+        if options.data_directory.is_none() {
+            credentials::remove_ai_credentials()?;
         }
         Storage::delete_owned_dataset(&data)?;
         if data != control {
@@ -143,6 +167,10 @@ fn main() -> Result<()> {
         Ok(()) => {}
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
         Err(e) => return Err(e.into()),
+    }
+    // AI summaries were removed; the provider keys they used go with them.
+    if !qa_headless && let Err(error) = credentials::remove_ai_credentials() {
+        eprintln!("earlier AI credentials could not be removed: {error}");
     }
     let mut storage = recovery::open(
         options.data_directory(),
@@ -218,7 +246,6 @@ fn main() -> Result<()> {
     if let Some(task) = &collector_task {
         collector_task::spawn_watchdog(task.clone());
     }
-    let ai_service = ai::spawn(Arc::clone(&storage));
     let maintenance_storage = Arc::clone(&storage);
     thread::spawn(move || {
         loop {
@@ -238,7 +265,6 @@ fn main() -> Result<()> {
         storage,
         data_directory,
         pipe_name,
-        ai_service,
         options.background,
         collector_task,
     )
@@ -378,7 +404,6 @@ fn run_window(
     storage: Arc<Mutex<Storage>>,
     data_directory: PathBuf,
     pipe_name: String,
-    ai_service: ai::AiService,
     background: bool,
     collector_task: Option<String>,
 ) -> Result<()> {
@@ -569,12 +594,6 @@ fn run_window(
     refresh_timeline(&window, &storage, &ui_state)?;
     history::refresh(&window, &storage, &history_state)?;
 
-    let _ai_timer = ai_ui::install(
-        &window,
-        Arc::clone(&storage),
-        Rc::clone(&ui_state),
-        ai_service,
-    )?;
     let _data_timer = data_ui::install(
         &window,
         Arc::clone(&storage),
@@ -604,7 +623,7 @@ fn run_window(
     let mut pending_report = None;
     let timer = Timer::default();
     let mut recovery_shown = false;
-    let mut data_generation = ai_ui::data_generation();
+    let mut data_generation = data_ui::data_generation();
     let started = Instant::now();
     let mut collector_seen: Option<Instant> = None;
     // The native window exists only once shown, possibly later from the tray.
@@ -648,11 +667,6 @@ fn run_window(
                     .is_none_or(|(shown, _)| *shown != scope),
             );
         }
-        window.global::<AiState>().set_open(
-            ui_active
-                && (window.get_page() == 4
-                    || (window.get_settings_open() && window.get_settings_tab() == 4)),
-        );
         if !recovery_shown && timer_storage.try_lock().is_ok_and(|s| s.is_quarantined()) {
             recovery_shown = true;
             window.global::<DataState>().set_open(true);
@@ -684,8 +698,8 @@ fn run_window(
             collector_reset_active(&control_directory),
         ));
         let mut refresh_requested = false;
-        if ai_ui::data_generation() != data_generation {
-            data_generation = ai_ui::data_generation();
+        if data_ui::data_generation() != data_generation {
+            data_generation = data_ui::data_generation();
             *timer_snapshot_state.borrow_mut() = SnapshotUiState::default();
             clear_snapshot_preview(&window);
             window.set_snapshot_selected_index(-1);
@@ -695,7 +709,6 @@ fn run_window(
             window.set_report_summary("数据已变更，请重新生成本地报告".into());
             timer_state.borrow_mut().report = None;
             timer_state.borrow_mut().report_checked = None;
-            window.global::<DataState>().set_clear_credentials(false);
             history::reset(&timer_history);
             timer_state.borrow_mut().apps = AppsState::default();
             pending_report = None;
@@ -1404,7 +1417,6 @@ fn install_clear_callback(
     busy: Arc<AtomicBool>,
     sender: mpsc::Sender<ActionStatus>,
 ) {
-    let weak = window.as_weak();
     window.on_clear_all(move || {
         if busy.swap(true, Ordering::AcqRel) {
             return;
@@ -1412,49 +1424,24 @@ fn install_clear_callback(
         let storage = Arc::clone(&storage);
         let busy = Arc::clone(&busy);
         let sender = sender.clone();
-        let delete_credentials = weak
-            .upgrade()
-            .is_some_and(|w| w.global::<DataState>().get_clear_credentials());
         let _ = sender.send(ActionStatus {
             message: "正在暂停采集器并轮换全部数据密钥…".to_owned(),
             refresh: false,
             report: None,
         });
         thread::spawn(move || {
-            let result = (|| -> Result<String> {
-                let _ai = ai::pause_and_wait()?;
-                snapshot::run_heavy_task(|| -> Result<String> {
-                    let storage = storage
-                        .lock()
-                        .map_err(|_| anyhow::anyhow!("storage lock poisoned"))?;
-                    let report = storage.clear_all_coordinated(Duration::from_secs(12))?;
-                    ai_ui::dataset_changed();
-                    let mut credential_failures = 0;
-                    if delete_credentials {
-                        for mut profile in storage.ai_profiles()? {
-                            if timelens_ai::credentials::delete(&profile.id).is_err() {
-                                credential_failures += 1;
-                            }
-                            profile.tested_revision = None;
-                            profile.credential_revision =
-                                profile.credential_revision.saturating_add(1);
-                            storage.save_ai_profile(&profile)?;
-                        }
-                    }
-                    storage.record_component_health("core", PROTOCOL_VERSION, None)?;
-                    Ok(format!(
-                        "已清空 {} 行本地数据并轮换数据密钥{}",
-                        report.deleted_rows,
-                        if credential_failures > 0 {
-                            format!("；有 {credential_failures} 项凭据未能删除，请检查提供商页")
-                        } else if delete_credentials {
-                            "；当前提供商凭据已删除".into()
-                        } else {
-                            String::new()
-                        }
-                    ))
-                })
-            })();
+            let result = snapshot::run_heavy_task(|| -> Result<String> {
+                let storage = storage
+                    .lock()
+                    .map_err(|_| anyhow::anyhow!("storage lock poisoned"))?;
+                let report = storage.clear_all_coordinated(Duration::from_secs(12))?;
+                data_ui::dataset_changed();
+                storage.record_component_health("core", PROTOCOL_VERSION, None)?;
+                Ok(format!(
+                    "已清空 {} 行本地数据并轮换数据密钥",
+                    report.deleted_rows
+                ))
+            });
             busy.store(false, Ordering::Release);
             let _ = sender.send(ActionStatus {
                 message: result.unwrap_or_else(|error| format!("清空失败：{error}")),
@@ -2458,7 +2445,7 @@ fn report_freshness(window: &AppWindow, state: &UiState) {
         window.set_report_stale_text(
             format!(
                 "这份报告是 {} 的，当前选择的是 {}。",
-                ai_ui::range_text(start, end, unix_time_ms(), &chrono::Local, true),
+                timeline_view::range_text(start, end, unix_time_ms(), &chrono::Local, true),
                 window.get_range_title()
             )
             .into(),

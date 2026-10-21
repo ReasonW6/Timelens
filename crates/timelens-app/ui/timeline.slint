@@ -262,7 +262,6 @@ export component HistoryRow inherits Rectangle {
     if root.entry : ContextMenuArea {
         Menu {
             MenuItem { title: "查看这段的快照"; activated => { root.act(0); } }
-            MenuItem { title: "为这段生成总结"; activated => { root.act(1); } }
             MenuItem { title: "这个应用的规则"; activated => { root.act(2); } }
         }
         Rectangle {

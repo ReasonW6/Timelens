@@ -1,4 +1,4 @@
-use crate::{AiState, AppWindow, CollectionState};
+use crate::{AppWindow, CollectionState};
 use anyhow::{Result, anyhow};
 use slint::ComponentHandle;
 use std::{
@@ -28,8 +28,6 @@ static COLLECTION_MENU: Mutex<CollectionMenu> = Mutex::new(CollectionMenu {
 static NOTICE: Mutex<Option<Notice>> = Mutex::new(None);
 static HIDE_EXPLAINED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 struct Notice {
-    /// The AI job a click opens; general notices open nothing.
-    job: Option<i64>,
     title: &'static str,
     text: String,
     success: bool,
@@ -58,7 +56,6 @@ impl CollectionMenu {
 #[cfg_attr(test, derive(Debug, PartialEq))]
 enum Event {
     Open,
-    Summary(i64),
     SetPaused(bool),
     PauseFor(i32),
     Capture,
@@ -74,25 +71,12 @@ fn emit(event: Event) {
         && let Some(sink) = &*sink
     {
         match event {
-            Event::Open | Event::Summary(_) => {
+            Event::Open => {
                 // Handle the user's activation immediately, while Windows still
                 // allows this process to take foreground focus.
                 let _ = sink.window.upgrade_in_event_loop(move |w| {
                     if let Err(error) = crate::window_chrome::show_and_activate(&w) {
                         w.set_action_status(format!("打开窗口失败：{error}").into());
-                        return;
-                    }
-                    if let Event::Summary(id) = event {
-                        // The settings would cover the summary.
-                        if w.get_settings_open() {
-                            if w.get_settings_tab() == 4 {
-                                w.global::<AiState>().invoke_flush_settings();
-                            }
-                            w.set_settings_open(false);
-                        }
-                        w.invoke_navigate(4);
-                        w.global::<AiState>()
-                            .invoke_open_job(i32::try_from(id).unwrap_or(-1));
                     }
                 });
             }
@@ -275,13 +259,7 @@ unsafe extern "system" fn procedure(hwnd: HWND, message: u32, w: WPARAM, l: LPAR
         CALLBACK => {
             match l as u32 & 0xffff {
                 WM_LBUTTONUP | WM_LBUTTONDBLCLK | NIN_SELECT => emit(Event::Open),
-                NIN_BALLOONUSERCLICK => {
-                    if let Ok(n) = NOTICE.lock()
-                        && let Some(notice) = &*n
-                    {
-                        emit(notice.job.map_or(Event::Open, Event::Summary));
-                    }
-                }
+                NIN_BALLOONUSERCLICK => emit(Event::Open),
                 WM_RBUTTONUP | WM_CONTEXTMENU => unsafe {
                     let state = COLLECTION_MENU
                         .lock()
@@ -379,23 +357,9 @@ pub fn activate_existing(stop: bool) -> bool {
         PostMessageW(hwnd, if stop { STOP } else { SHOW }, 0, 0) != 0
     }
 }
-pub fn notify(id: i64, success: bool) {
-    show_notice(Notice {
-        job: Some(id),
-        title: "Timelens AI",
-        text: if success {
-            "总结已完成，点击查看。"
-        } else {
-            "AI 任务失败，点击查看原因与保留的内容。"
-        }
-        .into(),
-        success,
-    });
-}
 /// A notice for a result the hidden window cannot show; a click opens Timelens.
 pub fn show_message(title: &'static str, text: String, success: bool) {
     show_notice(Notice {
-        job: None,
         title,
         text,
         success,
@@ -478,7 +442,6 @@ pub fn install(
         if !HIDE_EXPLAINED.swap(true, std::sync::atomic::Ordering::AcqRel) && !marker.exists() {
             let _ = std::fs::create_dir_all(&control).and_then(|()| std::fs::write(&marker, b"1"));
             show_notice(Notice {
-                job: None,
                 title: "Timelens 仍在后台记录",
                 text: "窗口已收起到通知区域，记录照常进行。点击托盘图标可重新打开；右键可以暂停记录或退出。".into(),
                 success: true,
@@ -498,7 +461,7 @@ pub fn install(
             };
             while let Ok(event) = receiver.try_recv() {
                 match event {
-                    Event::Open | Event::Summary(_) => unreachable!("activation bypasses polling"),
+                    Event::Open => unreachable!("activation bypasses polling"),
                     Event::SetPaused(paused) => {
                         let state = w.global::<CollectionState>();
                         if !quitting && !state.get_busy() {
@@ -521,47 +484,37 @@ pub fn install(
                             continue;
                         }
                         quitting = true;
-                        // A field edited in the AI settings applies on Enter or when
-                        // it loses focus; quitting from the tray does neither.
-                        if w.get_settings_open() && w.get_settings_tab() == 4 {
-                            w.global::<AiState>().invoke_flush_settings();
-                        }
                         crate::collector_task::suspend();
                         w.set_action_status("正在保存并退出 Timelens…".into());
                         let storage = Arc::clone(&storage);
                         thread::spawn(move || {
-                            let result: Result<()> = (|| {
-                                let ai = crate::ai::pause_and_wait()?;
-                                crate::snapshot::run_heavy_task(|| {
-                                    let stop = {
-                                        let s = storage
-                                            .lock()
-                                            .map_err(|_| anyhow!("storage lock poisoned"))?;
-                                        s.control_directory().join("collector-stop.request")
-                                    };
-                                    std::fs::write(&stop, b"stop")?;
-                                    let start = std::time::Instant::now();
-                                    loop {
-                                        if let Ok(_collector) =
-                                            timelens_ipc::SingleInstanceGuard::acquire_collector()
-                                        {
-                                            break;
-                                        }
-                                        if start.elapsed() > std::time::Duration::from_secs(15) {
-                                            return Err(anyhow!("采集器未能完成停止，请重试"));
-                                        }
-                                        thread::sleep(std::time::Duration::from_millis(50));
-                                    }
-                                    let _ = std::fs::remove_file(stop);
-                                    storage
+                            let result: Result<()> = crate::snapshot::run_heavy_task(|| {
+                                let stop = {
+                                    let s = storage
                                         .lock()
-                                        .map_err(|_| anyhow!("storage lock poisoned"))?
-                                        .checkpoint()?;
-                                    Ok(())
-                                })?;
-                                ai.keep_paused();
+                                        .map_err(|_| anyhow!("storage lock poisoned"))?;
+                                    s.control_directory().join("collector-stop.request")
+                                };
+                                std::fs::write(&stop, b"stop")?;
+                                let start = std::time::Instant::now();
+                                loop {
+                                    if let Ok(_collector) =
+                                        timelens_ipc::SingleInstanceGuard::acquire_collector()
+                                    {
+                                        break;
+                                    }
+                                    if start.elapsed() > std::time::Duration::from_secs(15) {
+                                        return Err(anyhow!("采集器未能完成停止，请重试"));
+                                    }
+                                    thread::sleep(std::time::Duration::from_millis(50));
+                                }
+                                let _ = std::fs::remove_file(stop);
+                                storage
+                                    .lock()
+                                    .map_err(|_| anyhow!("storage lock poisoned"))?
+                                    .checkpoint()?;
                                 Ok(())
-                            })();
+                            });
                             match result {
                                 Ok(()) => emit(Event::QuitReady),
                                 Err(e) => emit(Event::QuitFailed(e.to_string())),

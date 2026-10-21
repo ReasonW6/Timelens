@@ -2,10 +2,9 @@ import { LineEdit, ListView, ScrollView, Palette } from "std-widgets.slint";
 import { Theme, AppIcons, Action, NavItem, Label, Note, PageTitle, Eyebrow, Figure, Rule, DetailRow, ConfirmationDialog, CheckBox, Card, Badge, Dot, AppIcon, Segmented, Segment, Switch, SettingRow, SettingsHeader, SettingsGroup, SettingExpander, StatusLine } from "theme.slint";
 import { AppRow, WindowRow, SegmentRow, SnapshotRow, ReportAppRow, HistoryItem, DayAnchor, Participant, ShareSlice, StackApp } from "models.slint";
 import { HistoryRow, StickyDay, ParticipantItem, AppTimes } from "timeline.slint";
-import { AiPanel, AiState } from "ai-panel.slint";
 import { DataPanel, DataState, MoveDialog } from "data-panel.slint";
 import { CollectionPanel, CollectionState, KeyCell, ButtonHeat, SystemRow } from "collection-panel.slint";
-export { Theme, AppIcons, AiState, DataState, CollectionState, KeyCell, ButtonHeat, SystemRow, AppRow, WindowRow, SegmentRow, SnapshotRow, ReportAppRow, HistoryItem, DayAnchor, Participant, ShareSlice, StackApp }
+export { Theme, AppIcons, DataState, CollectionState, KeyCell, ButtonHeat, SystemRow, AppRow, WindowRow, SegmentRow, SnapshotRow, ReportAppRow, HistoryItem, DayAnchor, Participant, ShareSlice, StackApp }
 
 component WindowItem inherits Rectangle {
     in property <WindowRow> item;
@@ -838,7 +837,7 @@ export component AppWindow inherits Window {
     in-out property <int> snapshot-selected-index: -1;
     in-out property <int> page: 0;
     // 0 recording and privacy, 1 snapshots, 2 application rules, 3 data and
-    // storage, 4 AI, 5 about, 6 general.
+    // storage, 5 about, 6 general.
     in-out property <int> settings-tab: 6;
     in property <bool> startup-enabled: false;
     in property <bool> startup-available: false;
@@ -880,10 +879,8 @@ export component AppWindow inherits Window {
     private property <bool> pending-retention-snapshots: false;
     private property <bool> retention-confirm-open: root.pending-retention-days >= 0;
     private property <int> pending-space-mib: -1;
-    private property <bool> any-modal-open: CollectionState.confirm != 0 || root.clear-confirm-open || root.delete-snapshot-confirm || root.delete-checked-confirm || root.retention-confirm-open || root.pending-space-mib >= 0 || DataState.restore-confirm != 0 || DataState.move-phase != 0 || root.snapshot-viewer-open || AiState.confirm-kind != 0;
+    private property <bool> any-modal-open: CollectionState.confirm != 0 || root.clear-confirm-open || root.delete-snapshot-confirm || root.delete-checked-confirm || root.retention-confirm-open || root.pending-space-mib >= 0 || DataState.restore-confirm != 0 || DataState.move-phase != 0 || root.snapshot-viewer-open;
     changed any-modal-open => { Theme.modal-open = root.any-modal-open; }
-    // Asks the settings to take the keyboard back once a dialog over them closes.
-    private property <bool> refocus-settings: false;
     // The viewer shows only while there is an image; without one it closes
     // rather than leaving an invisible modal behind.
     changed snapshot-preview => {
@@ -928,8 +925,8 @@ export component AppWindow inherits Window {
     // Selects the activity before (-1) or after (1) the selected one.
     callback history-step(int);
     callback history-detail-ready;
-    // On the activity with this key: 0 show its snapshots, 1 summarize it,
-    // 2 select its application.
+    // On the activity with this key: 0 show its snapshots, 2 select its
+    // application.
     callback detail-action(string, int);
     // Puts back the range a page had before the timeline set it.
     callback range-origin-restore;
@@ -998,28 +995,13 @@ export component AppWindow inherits Window {
         root.apps-scope-changed();
         if root.stats-tab == 1 { CollectionState.action(7); }
     }
-    // 0 show its snapshots, 1 summarize it, 2 open its application's rules.
+    // 0 show its snapshots, 2 open its application's rules.
     function act-on-activity(key: string, action: int) {
         root.detail-action(key, action);
         // The rules page opens on the application the activity selected.
         if action == 2 { root.open-settings(2); }
     }
     pure function two(value: int) -> string { return (value < 10 ? "0" : "") + value; }
-    // Summarizes what the timeline shows: the selected activity, the day
-    // scrolled to, or today.
-    function summarize-timeline() {
-        if root.activity-detail && root.history-selected != "" {
-            root.act-on-activity(root.history-selected, 1);
-        } else if !root.history-follow && root.history-day-label != "" {
-            AiState.page = 0;
-            root.date-selected(floor(root.history-day-ymd / 10000) + "-" + root.two(Math.mod(floor(root.history-day-ymd / 100), 100)) + "-" + root.two(Math.mod(root.history-day-ymd, 100)));
-            root.navigate(4);
-        } else {
-            AiState.page = 0;
-            root.today-selected();
-            root.navigate(4);
-        }
-    }
     function delay-search() { search-delay.start(); search-delay.restart(); }
     function stop-search-delay() { search-delay.stop(); }
     // Whether the window is too narrow for every label in the toolbar. Set on
@@ -1044,21 +1026,16 @@ export component AppWindow inherits Window {
         if root.settings-tab != tab { root.show-settings(tab); }
     }
     function close-settings() {
-        if root.settings-tab == 4 { AiState.flush-settings(); }
         root.settings-open = false;
         root.snapshot-open = root.page == 2;
-        AiState.open = root.page == 4;
         // Settings and the statistics page share the collection panel.
         if root.page == 3 && root.stats-tab == 1 { CollectionState.page = 1; CollectionState.action(7); }
     }
     function show-settings(tab: int) {
-        if root.settings-open && root.settings-tab == 4 && tab != 4 { AiState.flush-settings(); }
         root.settings-tab = tab;
         root.snapshot-open = tab == 1;
-        AiState.open = tab == 4;
         if tab == 1 { root.snapshot-opened(); }
         if tab == 2 { CollectionState.page = 0; CollectionState.opened(); }
-        if tab == 4 { AiState.opened(); }
         if tab == 6 { root.general-opened(); }
     }
     // Resuming is one click; pausing asks for how long.
@@ -1161,7 +1138,6 @@ export component AppWindow inherits Window {
                 NavItem { compact: root.rail; text: "时间线"; icon: @image-url("icons/clock.svg"); selected: root.page == 0; clicked => { root.sidebar-navigate(0); } }
                 NavItem { compact: root.rail; text: "统计与报告"; icon: @image-url("icons/chart-bar.svg"); selected: root.page == 3; clicked => { root.sidebar-navigate(3); } }
                 snapshots-nav := NavItem { compact: root.rail; text: "快照"; icon: @image-url("icons/photo.svg"); selected: root.page == 2; clicked => { root.sidebar-navigate(2); } }
-                ai-nav := NavItem { compact: root.rail; text: "AI 总结"; icon: @image-url("icons/sparkles.svg"); selected: root.page == 4; clicked => { root.sidebar-navigate(4); } }
                 Rectangle { vertical-stretch: 1; }
                 // A narrow sidebar keeps only the state dot and the switch.
                 if root.rail : VerticalLayout {
@@ -1260,13 +1236,6 @@ export component AppWindow inherits Window {
                                             earliest-ymd: root.earliest-ymd;
                                             current-ymd: root.history-follow ? root.today-ymd : root.history-day-ymd;
                                             jump(date) => { root.history-jump(date); }
-                                        }
-                                        Action {
-                                            text: root.activity-detail && root.history-selected != "" ? "总结这段"
-                                                : !root.history-follow && root.history-day-label != "" ? "总结 " + root.history-day-label
-                                                : "总结今天";
-                                            icon: @image-url("icons/sparkles.svg"); accent: true;
-                                            clicked => { root.summarize-timeline(); }
                                         }
                                     }
                                     if root.page == 0 && root.history-query != "" : Note { text: root.history-search-status; font-size: 12px; }
@@ -1533,7 +1502,7 @@ export component AppWindow inherits Window {
                                             }
                                             Text { text: "这段时间没有快照"; color: Theme.ink; font-size: 17px; font-weight: 600; horizontal-alignment: center; }
                                             Note {
-                                                text: root.snapshot-enabled ? "定时快照已开启，新的快照会按设置的间隔出现在这里。快照只保存在本机，不会自动发送给 AI。" : "定时快照已关闭，可以在快照设置中开启，或者现在拍一张。";
+                                                text: root.snapshot-enabled ? "定时快照已开启，新的快照会按设置的间隔出现在这里。快照只保存在本机。" : "定时快照已关闭，可以在快照设置中开启，或者现在拍一张。";
                                                 horizontal-alignment: center;
                                             }
                                             HorizontalLayout {
@@ -1547,7 +1516,7 @@ export component AppWindow inherits Window {
                                     // ───── Statistics and reports ─────
                                     if root.page == 3 : PageHeader {
                                         title: "统计与报告";
-                                        subtitle: "由本机记录直接计算，不经过 AI";
+                                        subtitle: "由本机记录直接计算";
                                         if root.range-origin != "" && (root.stats-tab == 2 || !root.stats-all) : VerticalLayout { alignment: center; OriginTag { text: root.range-origin; clear => { root.range-origin-restore(); } } }
                                         // One picker for all three tabs; reports always cover a range.
                                         RangePicker {
@@ -1775,27 +1744,6 @@ export component AppWindow inherits Window {
                                     if root.page == 3 && root.stats-tab == 2 && !root.report-ready : Rectangle { vertical-stretch: 1; }
                                     if root.page == 3 && root.stats-tab == 1 : CollectionPanel { vertical-stretch: 1; }
 
-                                    // ───── AI summaries ─────
-                                    // The range is the one the other pages share; AI reads it on every change.
-                                    if root.page == 4 : PageHeader {
-                                        title: "AI 总结";
-                                        subtitle: "把一段时间整理成可以回顾的内容，结果只保存在本机";
-                                        if root.range-origin != "" : VerticalLayout { alignment: center; OriginTag { text: root.range-origin; clear => { root.range-origin-restore(); AiState.opened(); } } }
-                                        RangePicker {
-                                            label: root.range-title; can-next: root.can-next-day; is-today: root.is-today;
-                                            today-ymd: root.today-ymd; selected-ymd: root.selected-ymd;
-                                            start <=> root.manual-start; end <=> root.manual-end;
-                                            step(offset) => { root.day-selected(offset); AiState.opened(); }
-                                            today => { root.today-selected(); AiState.opened(); }
-                                            days-ago(days) => { root.days-ago-selected(days); AiState.opened(); }
-                                            horizon(hours) => { root.horizon-selected(hours); AiState.opened(); }
-                                            day(date) => { root.date-selected(date); AiState.opened(); }
-                                            span(a, b) => { root.time-range-selected(a, b); AiState.opened(); }
-                                        }
-                                        Rectangle { width: 6px; }
-                                        VerticalLayout { alignment: center; Action { text: "AI 设置"; icon: @image-url("icons/settings.svg"); clicked => { root.open-settings(4); } } }
-                                    }
-                                    if root.page == 4 : AiPanel { vertical-stretch: 1; narrow: root.narrow; rail: root.rail; open-settings => { root.open-settings(4); } }
                                 }
                             }
 
@@ -1828,7 +1776,6 @@ export component AppWindow inherits Window {
                                 HorizontalLayout {
                                     spacing: 6px;
                                     Action { text: "快照"; icon: @image-url("icons/photo.svg"); accessible-label: "查看这段的快照"; clicked => { root.act-on-activity(root.history-selected, 0); } }
-                                    Action { text: "总结"; icon: @image-url("icons/sparkles.svg"); accessible-label: "为这段生成总结"; clicked => { root.act-on-activity(root.history-selected, 1); } }
                                     Action { text: "规则"; icon: @image-url("icons/adjustments-horizontal.svg"); accessible-label: "这个应用的规则"; clicked => { root.act-on-activity(root.history-selected, 2); } }
                                     Rectangle { horizontal-stretch: 1; }
                                 }
@@ -1963,7 +1910,6 @@ export component AppWindow inherits Window {
         settings-keys := FocusScope {
             // Not in `init`; see ConfirmationDialog.
             Timer { interval: 1ms; triggered => { settings-keys.focus(); self.running = false; } }
-            Timer { interval: 1ms; running: root.refocus-settings; triggered => { root.refocus-settings = false; settings-keys.focus(); } }
             capture-key-pressed(event) => {
                 if event.text == Key.Escape && !root.any-modal-open { root.close-settings(); return accept; }
                 return reject;
@@ -2004,7 +1950,6 @@ export component AppWindow inherits Window {
                         NavItem { text: "快照"; icon: @image-url("icons/camera.svg"); selected: root.settings-tab == 1; clicked => { root.pick-settings(1); } }
                         NavItem { text: "应用规则"; icon: @image-url("icons/ban.svg"); selected: root.settings-tab == 2; clicked => { root.pick-settings(2); } }
                         NavItem { text: "数据与存储"; icon: @image-url("icons/database.svg"); selected: root.settings-tab == 3; clicked => { root.pick-settings(3); } }
-                        NavItem { text: "AI"; icon: @image-url("icons/sparkles.svg"); selected: root.settings-tab == 4; clicked => { root.pick-settings(4); } }
                         NavItem { text: "关于"; icon: @image-url("icons/info-circle.svg"); selected: root.settings-tab == 5; clicked => { root.pick-settings(5); } }
                     }
                     VerticalLayout {
@@ -2014,7 +1959,7 @@ export component AppWindow inherits Window {
                         VerticalLayout {
                             spacing: 4px;
                             Text {
-                                text: root.settings-tab == 6 ? "常规" : root.settings-tab == 0 ? "记录与隐私" : root.settings-tab == 1 ? "快照" : root.settings-tab == 2 ? "应用规则" : root.settings-tab == 3 ? "数据与存储" : root.settings-tab == 4 ? "AI" : "关于";
+                                text: root.settings-tab == 6 ? "常规" : root.settings-tab == 0 ? "记录与隐私" : root.settings-tab == 1 ? "快照" : root.settings-tab == 2 ? "应用规则" : root.settings-tab == 3 ? "数据与存储" : "关于";
                                 color: Theme.ink; font-size: 20px; font-weight: 600;
                             }
                             Note {
@@ -2023,7 +1968,6 @@ export component AppWindow inherits Window {
                                     : root.settings-tab == 1 ? "定时拍摄屏幕快照，帮你回忆当时在做什么。"
                                     : root.settings-tab == 2 ? "为单个应用设置排除、合并显示或删除历史。"
                                     : root.settings-tab == 3 ? "保留时长、备份、导出与存储位置。"
-                                    : root.settings-tab == 4 ? "连接你自己的 AI 服务，并设置总结与对话的保留方式。"
                                     : "版本与本机状态。";
                             }
                         }
@@ -2082,7 +2026,7 @@ export component AppWindow inherits Window {
                                         VerticalLayout {
                                             spacing: 4px; horizontal-stretch: 1;
                                             Text { text: "记录只保存在这台电脑上"; color: Theme.ink; font-size: 14px; font-weight: 600; }
-                                            Note { text: "加密存放在本机，不上传、不同步。只有你主动生成 AI 总结时，才会把预览过的内容发送给你配置的服务。"; color: Theme.ink-2; font-size: 12px; }
+                                            Note { text: "加密存放在本机，不上传、不同步。"; color: Theme.ink-2; font-size: 12px; }
                                         }
                                     }
                                 }
@@ -2183,7 +2127,7 @@ export component AppWindow inherits Window {
                                         }
                                     }
                                 }
-                                Note { text: "快照只保存在本机，不会自动发送给 AI；要用于 AI 总结时需要逐张查看并授权。"; font-size: 12px; }
+                                Note { text: "快照只保存在本机，不会发送到任何地方。"; font-size: 12px; }
                             }
                         }
 
@@ -2209,7 +2153,7 @@ export component AppWindow inherits Window {
                                     Rule { }
                                     SettingRow {
                                         title: "空间上限";
-                                        description: "无论保留多久，数据库超过上限时都会先清理最早的一天。快照图片和 AI 内容另有上限。";
+                                        description: "无论保留多久，数据库超过上限时都会先清理最早的一天。快照图片另有上限。";
                                         icon: @image-url("icons/database.svg");
                                         Segmented {
                                             Segment { text: "100 MiB"; selected: root.retention-mib == 100; enabled: !root.action-busy; clicked => { root.choose-space(100); } }
@@ -2233,17 +2177,14 @@ export component AppWindow inherits Window {
                                     border-color: Theme.danger-line;
                                     SettingRow {
                                         title: "清空全部本地记录";
-                                        description: "删除活动、输入、快照、报告和 AI 内容，并轮换数据密钥。此操作无法撤销。";
+                                        description: "删除活动、输入、快照和报告，并轮换数据密钥。此操作无法撤销。";
                                         icon: @image-url("icons/trash.svg");
                                         Action { text: "清空…"; danger: true; enabled: !root.action-busy; clicked => { root.clear-confirm-open = true; } }
                                     }
-                                    HorizontalLayout { padding-left: 60px; padding-right: 16px; padding-bottom: 12px; CheckBox { text: "清空时同时删除 AI 凭据"; font-size: 13px; checked <=> DataState.clear-credentials; } }
                                 }
                                 if DataState.busy : StatusLine { busy: true; text: "正在处理，请稍候…"; }
                             }
                         }
-
-                        if root.settings-tab == 4 : AiPanel { vertical-stretch: 1; settings-mode: true; }
 
                         if root.settings-tab == 5 : ScrollView {
                             horizontal-scrollbar-policy: always-off;
@@ -2306,9 +2247,9 @@ export component AppWindow inherits Window {
         z: 100;
         title: DataState.restore-confirm == 1 ? "用这份备份替换当前全部记录？" : "退出并打开修复工具？";
         explanation: DataState.restore-confirm == 1
-            ? "当前的活动、输入、快照、报告和 AI 内容会被备份里的内容整体替换，不会合并，无法撤销。"
+            ? "当前的活动、输入、快照和报告会被备份里的内容整体替换，不会合并，无法撤销。"
             : "Timelens 会退出并打开修复工具，修复完成前不会记录活动和输入。";
-        detail: DataState.restore-confirm == 1 ? "想留一份现在的数据，先取消，在上方「创建便携备份」导出一份。恢复后需要重新配置 AI 凭据。" : "修复工具只在你确认后才会替换数据。";
+        detail: DataState.restore-confirm == 1 ? "想留一份现在的数据，先取消，在上方「创建便携备份」导出一份。" : "修复工具只在你确认后才会替换数据。";
         accept-text: DataState.restore-confirm == 1 ? "替换数据" : "退出并打开";
         dismissed => { DataState.restore-confirm = 0; Theme.modal-open = false; settings-nav.focus(); }
         accepted => {
@@ -2327,8 +2268,8 @@ export component AppWindow inherits Window {
     if root.clear-confirm-open : ConfirmationDialog {
         z: 100;
         title: "清空全部本地记录？";
-        explanation: "活动、输入、快照、本地报告、AI 总结和对话将被删除，数据密钥也会轮换。此操作无法撤销。";
-        detail: "普通设置与排除规则保留。外部备份和导出文件不会删除。" + (DataState.clear-credentials ? "本次也会删除 AI 凭据。" : "本次保留 AI 凭据。");
+        explanation: "活动、输入、快照和本地报告将被删除，数据密钥也会轮换。此操作无法撤销。";
+        detail: "普通设置与排除规则保留。外部备份和导出文件不会删除。";
         accept-text: "确认清空";
         dismissed => { root.clear-confirm-open = false; Theme.modal-open = false; settings-nav.focus(); }
         accepted => { root.clear-confirm-open = false; Theme.modal-open = false; root.clear-all(); settings-nav.focus(); }
@@ -2359,37 +2300,6 @@ export component AppWindow inherits Window {
         dismissed => { root.delete-checked-confirm = false; Theme.modal-open = false; snapshots-nav.focus(); }
         accepted => { root.delete-checked-confirm = false; Theme.modal-open = false; root.snapshot-delete-checked(); snapshots-nav.focus(); }
     }
-    if AiState.confirm-kind != 0 : ConfirmationDialog {
-        z: 100;
-        title: AiState.confirm-kind == 1 ? "删除这个总结版本？"
-            : AiState.confirm-kind == 2 ? "清空这一版的追问？"
-            : AiState.confirm-kind == 3 ? "删除这个 AI 连接？"
-            : AiState.confirm-kind == 5 ? "删除这条总结记录？"
-            : "删除这个总结模板？";
-        explanation: AiState.confirm-kind == 1 ? "会删除这一版的回答、追问和当时发送的数据快照。其他版本和原始活动记录不受影响。"
-            : AiState.confirm-kind == 2 ? "会删除这一版下的全部追问和回答，保留最初的总结。"
-            : AiState.confirm-kind == 3 ? "会同时删除保存在 Windows 凭据管理器中的密钥。用到它的自动总结会暂停，已有的总结仍然保留。"
-            : AiState.confirm-kind == 5 ? "这条记录没有生成总结，删除后从总结记录中移除。原始活动记录不受影响。"
-            : "用到它的自动总结会暂停，已有的总结仍然保留。";
-        detail: "此操作无法撤销。";
-        accept-text: AiState.confirm-kind == 2 ? "清空" : AiState.confirm-kind == 3 ? "删除连接" : AiState.confirm-kind == 4 ? "删除模板" : "删除";
-        dismissed => {
-            AiState.confirm-kind = 0;
-            Theme.modal-open = root.any-modal-open;
-            if root.settings-open { root.refocus-settings = true; } else { ai-nav.focus(); }
-        }
-        accepted => {
-            let kind = AiState.confirm-kind;
-            AiState.confirm-kind = 0;
-            Theme.modal-open = root.any-modal-open;
-            if kind == 1 { AiState.delete-version(); }
-            else if kind == 2 { AiState.clear-conversation(); }
-            else if kind == 3 { AiState.delete-provider(); }
-            else if kind == 4 { AiState.delete-prompt(); }
-            else if kind == 5 { AiState.delete-job(); }
-            if root.settings-open { root.refocus-settings = true; } else { ai-nav.focus(); }
-        }
-    }
     if root.snapshot-viewer-open && root.snapshot-preview.width > 0 : PhotoViewer {
         z: 90;
         source: root.snapshot-preview;
@@ -2409,7 +2319,7 @@ export component AppWindow inherits Window {
         z: 100;
         title: "把空间上限降到 " + (root.pending-space-mib >= 1024 ? (root.pending-space-mib / 1024) + " GiB" : root.pending-space-mib + " MiB") + "？";
         explanation: "记录已用约 " + root.retention-used-mib + " MiB，超过新的上限。最早的活动、输入明细和本地报告会按天立即删除，直到低于上限，无法恢复。";
-        detail: "永久累计的输入总数保留。快照与 AI 内容使用各自的上限。外部备份和导出文件不会删除。";
+        detail: "永久累计的输入总数保留。快照使用自己的上限。外部备份和导出文件不会删除。";
         accept-text: "删除并降低上限";
         dismissed => { root.pending-space-mib = -1; Theme.modal-open = false; settings-nav.focus(); }
         accepted => {
@@ -2427,8 +2337,8 @@ export component AppWindow inherits Window {
             ? "早于 " + root.pending-retention-days + " 天的快照图片会立即删除，无法恢复。时间线中保留对应的清理记录。"
             : root.retention-cutoff(root.pending-retention-days) + " 之前的应用活动、输入明细和本地报告会立即删除，无法恢复。";
         detail: root.pending-retention-snapshots
-            ? "活动记录与 AI 内容使用各自的保留策略，不受影响。外部备份和导出文件不会删除。"
-            : "永久累计的输入总数保留。快照与 AI 内容使用各自的保留策略。外部备份和导出文件不会删除。";
+            ? "活动记录使用自己的保留策略，不受影响。外部备份和导出文件不会删除。"
+            : "永久累计的输入总数保留。快照使用自己的保留策略。外部备份和导出文件不会删除。";
         accept-text: "删除并缩短";
         dismissed => {
             root.pending-retention-days = -1;
