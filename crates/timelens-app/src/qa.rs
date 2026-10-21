@@ -25,7 +25,7 @@ use slint::{
     },
 };
 
-use crate::{AiState, AppWindow, CollectionState, DataState, markdown};
+use crate::{AppWindow, CollectionState, DataState};
 
 static HEADLESS: AtomicBool = AtomicBool::new(false);
 
@@ -139,7 +139,6 @@ fn settings(window: &AppWindow, tab: i32) {
     window.set_settings_open(true);
     window.set_settings_tab(tab);
     window.set_snapshot_open(tab == 1);
-    window.global::<AiState>().set_open(tab == 4);
     match tab {
         1 => window.invoke_snapshot_opened(),
         2 => {
@@ -147,7 +146,6 @@ fn settings(window: &AppWindow, tab: i32) {
             window.global::<CollectionState>().set_page(0);
             window.global::<CollectionState>().invoke_opened();
         }
-        4 => window.global::<AiState>().invoke_opened(),
         _ => {}
     }
 }
@@ -208,116 +206,10 @@ const STEPS: &[Step] = &[
         w.invoke_navigate(3);
         w.invoke_report_generate();
     }),
-    ("07-ai", |w| w.invoke_navigate(4)),
-    ("07a-ai-reader", |w| {
-        let ai = w.global::<AiState>();
-        if ai.get_history().row_count() > 0 {
-            ai.invoke_choose_history(0);
-        }
-    }),
-    ("07b-ai-snapshots", |w| {
-        let ai = w.global::<AiState>();
-        ai.invoke_list_images();
-        ai.set_page(6);
-    }),
-    // The fixture has no AI connection; these fill the panel's state directly.
-    ("07c-ai-compose", |w| {
-        let ai = w.global::<AiState>();
-        ai.set_providers(slint::ModelRc::new(slint::VecModel::from(vec![
-            "DeepSeek".into(),
-        ])));
-        ai.set_use_provider_index(0);
-        ai.set_use_vision(0);
-        ai.set_prepared(true);
-        ai.set_preview_state(1);
-        ai.set_status("".into());
-        ai.set_history(slint::ModelRc::new(slint::VecModel::from(
-            [
-                (
-                    "今天 00:00–13:40",
-                    "手动 · 第 2 版 · deepseek-flash",
-                    0,
-                    true,
-                ),
-                ("今天 00:00–12:10", "手动 · 失败 · deepseek-flash", 2, false),
-                ("10月19日 周一", "每日 · 第 1 版 · deepseek-flash", 0, false),
-                ("10月18日 周日", "每日 · 第 1 版 · deepseek-flash", 0, false),
-                ("10月17日 周六", "每日 · 已跳过 · deepseek-flash", 3, false),
-            ]
-            .into_iter()
-            .enumerate()
-            .map(|(i, (title, detail, state, pinned))| crate::AiHistoryRow {
-                key: format!("q{i}").into(),
-                title: title.into(),
-                detail: detail.into(),
-                state,
-                pinned,
-            })
-            .collect::<Vec<_>>(),
-        )));
-        ai.set_page(0);
-        ai.set_preview_state(1);
-        ai.set_preview_target("DeepSeek · deepseek-flash".into());
-        ai.set_preview_stats(slint::ModelRc::new(slint::VecModel::from(
-            [
-                ("34%", "有记录"),
-                ("17", "个应用"),
-                ("4", "段缺失"),
-                ("1", "次请求"),
-                ("0", "张快照"),
-            ]
-            .map(|(value, label)| crate::AiStat {
-                value: value.into(),
-                label: label.into(),
-            })
-            .to_vec(),
-        )));
-        ai.set_preview_missing_count(4);
-        ai.set_preview_missing(
-            "今天 00:00–09:04 · 采集器未运行\n今天 12:10–12:40 · 电脑睡眠\n今天 13:02–13:05 · 记录过多，部分丢失\n今天 15:20–15:31 · 已暂停记录".into(),
-        );
-    }),
-    ("07d-ai-markdown", |w| {
-        let ai = w.global::<AiState>();
-        ai.set_page(4);
-        ai.set_reader_state(0);
-        ai.set_history_index(0);
-        ai.set_reader_title("10月20日 周二 00:00–13:40".into());
-        ai.set_reader_meta(
-            "手动 · 第 2 版 · DeepSeek / deepseek-flash · 模板「Timelens 默认」· 13:42 生成".into(),
-        );
-        ai.set_has_follow_ups(true);
-        ai.set_exposed_reasoning("先看各应用的聚焦时长，再对照按小时的输入趋势……".into());
-        ai.set_token_label("输入 6,214 · 输出 1,083 Token".into());
-        let answer = "## 简洁总结\n上午主要在 **Zen** 和 Claude 之间切换，下午集中在代码编辑器里。\n\n## 主要应用\n| 应用 | 显示时长 | 聚焦时长 | 后台时长 |\n|---|---:|---:|---:|\n| zen | 4h33m | 3h48m | 0.8s |\n| claude | 2h49m | 34m19s | 1h43m |\n| AyuGram（合并分块） | 13m02s | 3m26s | 1h03m |\n\n## 要点\n- 09:00–11:30 是一天里最专注的一段，几乎没有切换。\n- 午后切换明显增多，平均每 6 分钟换一次应用。";
-        let asked = "下午为什么切换这么多？";
-        let reply = "下午 14:00 之后同时开着浏览器、聊天和编辑器，**聚焦时长**被拆成很多短段。\n\n> 建议：把需要专注的工作放在上午。";
-        let mut blocks = markdown::blocks(answer);
-        blocks.push(markdown::question(asked));
-        blocks.push(markdown::speaker(""));
-        blocks.extend(markdown::blocks(reply));
-        ai.set_reader_blocks(markdown::model(blocks));
-        ai.set_conversation(format!("{answer}\n\n————————\n你：\n{asked}\n\nAI：\n{reply}").into());
-    }),
-    ("07dm-ai-menu", |w| {
-        w.global::<AiState>().set_reader_menu(true)
-    }),
-    ("07e-ai-failed", |w| {
-        let ai = w.global::<AiState>();
-        ai.set_reader_menu(false);
-        ai.set_conversation("".into());
-        ai.set_reader_blocks(markdown::model(Vec::new()));
-        ai.set_exposed_reasoning("".into());
-        ai.set_token_label("".into());
-        ai.set_history_index(1);
-        ai.set_reader_state(3);
-        ai.set_reader_error("模型的思考过程用完了最大输出（8192 Token），没来得及写正文。".into());
-    }),
     ("08-settings-privacy", |w| settings(w, 0)),
     ("09-settings-snapshots", |w| settings(w, 1)),
     ("10-settings-rules", |w| settings(w, 2)),
     ("11-settings-data", |w| settings(w, 3)),
-    ("12-settings-ai", |w| settings(w, 4)),
     ("13-settings-about", |w| settings(w, 5)),
     ("14-move-progress", |w| {
         let data = w.global::<DataState>();
@@ -352,7 +244,6 @@ const STEPS: &[Step] = &[
         w.global::<CollectionState>().invoke_action(7);
     }),
     ("19-dark-snapshots", |w| w.invoke_navigate(2)),
-    ("20-dark-ai", |w| w.invoke_navigate(4)),
     ("21-dark-settings-general", |w| settings(w, 6)),
     ("22-dark-settings-data", |w| settings(w, 3)),
 ];

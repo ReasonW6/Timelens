@@ -117,66 +117,7 @@ pub(crate) fn sanitize(c: &Connection, schema: &str, has_snapshots: bool) -> Res
     c.execute_batch(&format!(
         "UPDATE {prefix}.storage_checks SET last_full_check_utc_ms=0;"
     ))?;
-    c.execute_batch(&format!("DELETE FROM {prefix}.runtime_health; DELETE FROM {prefix}.ai_image_authorizations; UPDATE {prefix}.ai_jobs SET state='canceled',error_json=NULL WHERE state IN ('queued','running');"))?;
-    let profiles = c
-        .prepare(&format!("SELECT id,config_json FROM {prefix}.ai_profiles"))?
-        .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?
-        .collect::<rusqlite::Result<Vec<_>>>()?;
-    for (id, raw) in profiles {
-        let mut p: timelens_ai::ProviderProfile =
-            serde_json::from_str(&raw).map_err(|_| invalid("备份提供商设置无效"))?;
-        p.tested_revision = None;
-        p.credential_revision = 0;
-        c.execute(
-            &format!("UPDATE {prefix}.ai_profiles SET config_json=? WHERE id=?"),
-            params![
-                String::from_utf8(json(&p)?).map_err(|_| invalid("配置编码无效"))?,
-                id
-            ],
-        )?;
-    }
-    let schedules = c
-        .prepare(&format!(
-            "SELECT id,schedule_json FROM {prefix}.ai_schedules"
-        ))?
-        .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?
-        .collect::<rusqlite::Result<Vec<_>>>()?;
-    for (id, raw) in schedules {
-        let mut p: timelens_ai::schedule::Schedule =
-            serde_json::from_str(&raw).map_err(|_| invalid("备份计划设置无效"))?;
-        p.enabled = false;
-        p.paused_reason = Some("恢复后请重新配置凭据、测试连接并启用计划".into());
-        c.execute(
-            &format!("UPDATE {prefix}.ai_schedules SET schedule_json=? WHERE id=?"),
-            params![
-                String::from_utf8(json(&p)?).map_err(|_| invalid("配置编码无效"))?,
-                id
-            ],
-        )?;
-    }
-    // Device-local credential revision stamps in historical public snapshots carry no
-    // credentials, but must never authorize a restored request against a local vault.
-    for (table, column, key) in [
-        ("ai_jobs", "spec_json", "job_id"),
-        ("ai_versions", "snapshot_json", "version_id"),
-    ] {
-        let values = c
-            .prepare(&format!("SELECT {key},{column} FROM {prefix}.{table}"))?
-            .query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))?
-            .collect::<rusqlite::Result<Vec<_>>>()?;
-        for (id, raw) in values {
-            let mut value: serde_json::Value =
-                serde_json::from_str(&raw).map_err(|_| invalid("AI 快照格式无效"))?;
-            if let Some(provider) = value.get_mut("provider") {
-                provider["tested_revision"] = serde_json::Value::Null;
-                provider["credential_revision"] = 0.into();
-            }
-            c.execute(
-                &format!("UPDATE {prefix}.{table} SET {column}=? WHERE {key}=?"),
-                params![value.to_string(), id],
-            )?;
-        }
-    }
+    c.execute_batch(&format!("DELETE FROM {prefix}.runtime_health;"))?;
     if !has_snapshots {
         c.execute_batch(&format!("UPDATE {prefix}.snapshot_slots SET blob_id=NULL,result='missing',missing_reason='backup_omitted' WHERE blob_id IS NOT NULL; DELETE FROM {prefix}.snapshot_blobs;"))?;
         c.execute_batch(&format!("DELETE FROM {prefix}.snapshot_slot_days;"))?;
@@ -468,7 +409,7 @@ impl Storage {
         })
     }
 
-    /// Caller must suspend the AI worker and collector, and hold the shared storage
+    /// Caller must suspend the collector, and hold the shared storage
     /// lock. No original database copy is made or retained.
     pub fn replace_from_backup(
         &self,
@@ -479,7 +420,11 @@ impl Storage {
             .borrow_mut()
             .clear(self.connection.total_changes());
         self.ensure_writable()?;
-        let populated:bool=self.connection.query_row("SELECT EXISTS(SELECT 1 FROM collector_runs UNION ALL SELECT 1 FROM ai_versions UNION ALL SELECT 1 FROM snapshot_slots)",[],|r|r.get(0))?;
+        let populated: bool = self.connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM collector_runs UNION ALL SELECT 1 FROM snapshot_slots)",
+            [],
+            |r| r.get(0),
+        )?;
         if populated && !confirm_replace {
             return Err(invalid("替换非空数据集需要确认；可先主动导出安全备份"));
         }
@@ -704,9 +649,8 @@ fn verified_entry<R: Read + Seek>(
 mod tests {
     use super::*;
     #[test]
-    fn portable_roundtrip_uses_new_key_and_preserves_ai_and_filtered_exports() {
-        let (_source, source) = ai::tests::fixture();
-        let version = ai::tests::summary(&source, 7000);
+    fn portable_roundtrip_uses_new_key_and_filtered_exports() {
+        let (_source, source) = fixtures::storage();
         let folder = tempfile::tempdir().unwrap();
         let archive = folder.path().join("portable.zip");
         source
@@ -751,11 +695,6 @@ mod tests {
         let prepared = Storage::prepare_restore(&archive, None, folder.path()).unwrap();
         target.replace_from_backup(prepared, false).unwrap();
         assert_eq!(
-            target.ai_version(version).unwrap().answer,
-            "answer-private-marker"
-        );
-        assert!(!target.ai_profile("fixture").unwrap().is_tested());
-        assert_eq!(
             target.timeline_snapshot(1000, 6000).unwrap().applications,
             source.timeline_snapshot(1000, 6000).unwrap().applications
         );
@@ -766,20 +705,23 @@ mod tests {
         assert!(
             !fs::read(target.database_path())
                 .unwrap()
-                .windows(21)
-                .any(|s| s == b"answer-private-marker")
+                .windows(10)
+                .any(|s| s == b"editor.exe")
         );
-        let before = target.ai_versions().unwrap().len();
+        let before = target.timeline_snapshot(1000, 6000).unwrap().applications;
         let prepared = Storage::prepare_restore(&archive, None, folder.path()).unwrap();
         assert!(target.replace_from_backup(prepared, false).is_err());
-        assert_eq!(before, target.ai_versions().unwrap().len());
+        assert_eq!(
+            before,
+            target.timeline_snapshot(1000, 6000).unwrap().applications
+        );
         let prepared = Storage::prepare_restore(&archive, None, folder.path()).unwrap();
         target.replace_from_backup(prepared, true).unwrap();
         target.verify_integrity().unwrap();
     }
     #[test]
     fn password_and_tampering_fail_before_replacement() {
-        let (_source, source) = ai::tests::fixture();
+        let (_source, source) = fixtures::storage();
         let folder = tempfile::tempdir().unwrap();
         let path = folder.path().join("locked.zip");
         source
@@ -810,13 +752,13 @@ mod tests {
         }
         c.pragma_update(None, "user_version", LATEST_SCHEMA_VERSION)
             .unwrap();
-        c.execute_batch("CREATE TRIGGER malicious AFTER INSERT ON applications BEGIN DELETE FROM ai_versions; END;").unwrap();
+        c.execute_batch("CREATE TRIGGER malicious AFTER INSERT ON applications BEGIN DELETE FROM local_reports; END;").unwrap();
         assert!(validate_schema(&c, LATEST_SCHEMA_VERSION).is_err());
         assert_eq!(csv_cell("=RUN()".into()), "\"'=RUN()\"");
     }
     #[test]
     fn snapshot_pixels_are_portable_and_authenticated() {
-        let (_source, source) = ai::tests::fixture();
+        let (_source, source) = fixtures::storage();
         let image = image::RgbaImage::from_pixel(8, 8, image::Rgba([40, 80, 120, 255]));
         let mut bytes = std::io::Cursor::new(Vec::new());
         image

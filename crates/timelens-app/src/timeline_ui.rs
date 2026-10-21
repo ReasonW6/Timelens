@@ -1,7 +1,7 @@
 //! Native presentation wiring. Storage remains the source of every displayed fact.
 use crate::{
-    AiState, AppWindow, CollectionState, DataState, UiState, refresh_timeline, timeline_view,
-    ui_model, unix_time_ms,
+    AppWindow, CollectionState, DataState, UiState, refresh_timeline, timeline_view, ui_model,
+    unix_time_ms,
 };
 use chrono::{Datelike, Local, TimeZone};
 use slint::{ComponentHandle, Model};
@@ -76,12 +76,9 @@ pub fn install(
             window.invoke_snapshot_check_all(false);
             window.set_snapshot_selecting(false);
         }
-        window.set_page(page.clamp(0, 4));
+        window.set_page(page.clamp(0, 3));
         window.set_snapshot_open(page == 2);
         window.set_report_open(page == 3);
-        window
-            .global::<AiState>()
-            .set_open(page == 4 || (window.get_settings_open() && window.get_settings_tab() == 4));
         window.global::<DataState>().set_open(false);
         window.global::<CollectionState>().set_open(false);
         match page {
@@ -91,7 +88,6 @@ pub fn install(
                 window.global::<CollectionState>().set_page(1);
                 window.global::<CollectionState>().invoke_action(7);
             }
-            4 => window.global::<AiState>().invoke_opened(),
             _ => {}
         }
     });
@@ -317,7 +313,7 @@ fn range_title(state: &UiState, now: i64) -> String {
     let Some(day) = state.calendar_day else {
         if !state.follow_now {
             // A fixed stretch over several days, such as a summary's.
-            return crate::ai_ui::range_text(
+            return crate::timeline_view::range_text(
                 state.range_started_utc_ms,
                 state.range_ended_utc_ms,
                 now,

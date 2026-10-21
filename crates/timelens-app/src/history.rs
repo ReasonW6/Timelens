@@ -19,8 +19,8 @@ use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 use timelens_storage::{Storage, TimelineSnapshot};
 
 use crate::{
-    AiState, AppWindow, DayAnchor, HistoryItem, Participant, RangeOrigin, SegmentRow, ShareSlice,
-    StackApp, UiState, app_icon, format_duration, grouped_count, refresh_timeline,
+    AppWindow, DayAnchor, HistoryItem, Participant, RangeOrigin, SegmentRow, ShareSlice, StackApp,
+    UiState, app_icon, format_duration, grouped_count, refresh_timeline,
     timeline_view::{self, ActivityEntry, ParticipantRole, Unrecorded},
     unix_time_ms,
 };
@@ -1195,13 +1195,8 @@ pub fn install(
                 return;
             }
             focus_range(&window, &storage, &ui_state, &entry);
-            match action {
-                0 => window.invoke_navigate(2),
-                1 => {
-                    window.global::<AiState>().set_page(0);
-                    window.invoke_navigate(4);
-                }
-                _ => {}
+            if action == 0 {
+                window.invoke_navigate(2);
             }
         });
     }

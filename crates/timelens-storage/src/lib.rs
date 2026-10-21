@@ -1,6 +1,5 @@
 #![cfg(windows)]
 
-mod ai;
 mod collection;
 mod milestone3;
 mod portable;
@@ -13,11 +12,6 @@ pub use portable::{BackupInfo, BackupOptions, ExportFormat, PreparedRestore};
 pub use recovery::RecoveryReport;
 pub use relocation::RelocationStep;
 pub use timeline_series::TimelineSeries;
-
-pub use ai::{
-    AiJob, AiJobKind, AiJobSpec, AiMessage, AiRetentionOutcome, AiSettings, AiVersion,
-    SnapshotConsent,
-};
 
 pub use milestone3::{
     LocalReport, LocalReportApplication, LocalReportGap, LocalReportSnapshotReason,
@@ -65,7 +59,7 @@ const BACKUP_FILE: &str = "timelens.sqlite3.migration-backup";
 const KEY_MAGIC: &[u8; 8] = b"TLKEY\0\0\x01";
 const KEY_BYTES: usize = 32;
 const DPAPI_ENTROPY: &[u8] = b"Timelens local data key v1";
-const LATEST_SCHEMA_VERSION: i64 = 13;
+const LATEST_SCHEMA_VERSION: i64 = 14;
 
 #[derive(Debug, thiserror::Error)]
 pub enum StorageError {
@@ -111,7 +105,7 @@ impl StorageError {
 }
 
 /// Before the next database access, latch corruption reported by any statement.
-/// All storage entrypoints use this connection, including UI and AI operations.
+/// All storage entrypoints use this connection, including UI operations.
 struct GuardedConnection {
     raw: Connection,
     quarantined: std::cell::Cell<bool>,
@@ -314,7 +308,6 @@ impl Storage {
             eprintln!("snapshot storage reconciliation failed; originals retained: {error}");
         }
         storage.sync_collection_policy()?;
-        storage.initialize_ai()?;
         Ok(storage)
     }
 
@@ -1138,12 +1131,6 @@ impl Storage {
             Transaction::new_unchecked(&self.connection, TransactionBehavior::Exclusive)?;
         let tables = [
             "system_intervals",
-            "ai_image_authorizations",
-            "ai_version_sources",
-            "ai_compressions",
-            "ai_messages",
-            "ai_versions",
-            "ai_jobs",
             "local_report_snapshot_reasons",
             "local_report_gaps",
             "local_report_applications",
@@ -1847,6 +1834,22 @@ const MIGRATIONS: &[Migration] = &[
     Migration {
         version: 13,
         sql: include_str!("snapshot-container-schema.sql"),
+    },
+    // AI summaries were removed; their history goes with them.
+    Migration {
+        version: 14,
+        sql: "
+        DROP TABLE IF EXISTS ai_image_authorizations;
+        DROP TABLE IF EXISTS ai_version_sources;
+        DROP TABLE IF EXISTS ai_compressions;
+        DROP TABLE IF EXISTS ai_messages;
+        DROP TABLE IF EXISTS ai_versions;
+        DROP TABLE IF EXISTS ai_jobs;
+        DROP TABLE IF EXISTS ai_schedules;
+        DROP TABLE IF EXISTS ai_settings;
+        DROP TABLE IF EXISTS ai_prompts;
+        DROP TABLE IF EXISTS ai_profiles;
+    ",
     },
 ];
 
@@ -3075,6 +3078,43 @@ mod tests {
     }
 
     #[test]
+    fn upgrade_drops_ai_summaries_and_their_history() {
+        let directory = tempfile::tempdir().unwrap();
+        let database_path = directory.path().join(DATABASE_FILE);
+        let backup_path = directory.path().join(BACKUP_FILE);
+        let key = load_or_create_key(&directory.path().join(KEY_FILE)).unwrap();
+        let connection =
+            migrate_database(&database_path, &backup_path, &key, &MIGRATIONS[..13]).unwrap();
+        connection
+            .execute_batch(
+                "INSERT INTO ai_profiles VALUES('p','{}');
+                 INSERT INTO ai_jobs(job_id,state,priority,group_key,started_utc_ms,ended_utc_ms,created_utc_ms,updated_utc_ms,next_attempt_utc_ms,spec_json)
+                    VALUES(1,'completed',0,'g',1000,6000,7000,7000,7000,'{}');
+                 INSERT INTO ai_versions(version_id,job_id,group_key,created_utc_ms,answer,reasoning,usage_json,snapshot_json)
+                    VALUES(1,1,'g',7000,'answer-private-marker','','{}','{}');
+                 INSERT INTO ai_jobs(job_id,state,priority,group_key,started_utc_ms,ended_utc_ms,created_utc_ms,updated_utc_ms,next_attempt_utc_ms,spec_json,target_version)
+                    VALUES(2,'queued',0,'g',1000,6000,8000,8000,8000,'{}',1);
+                 INSERT INTO ai_messages(message_id,version_id,role,body,created_utc_ms) VALUES(1,1,'user','q',8000);
+                 INSERT INTO ai_version_sources VALUES(1,'path:c:\\private\\editor.exe');",
+            )
+            .unwrap();
+        drop(connection);
+
+        let upgraded = Storage::open(directory.path()).unwrap();
+        assert_eq!(upgraded.schema_version().unwrap(), LATEST_SCHEMA_VERSION);
+        let ai_tables: i64 = upgraded
+            .connection
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_schema WHERE name LIKE 'ai\\_%' ESCAPE '\\'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(ai_tables, 0);
+        upgraded.verify_integrity().unwrap();
+    }
+
+    #[test]
     fn upgrades_schema_two_with_batch_content_checksums() {
         let directory = tempfile::tempdir().unwrap();
         let database_path = directory.path().join(DATABASE_FILE);
@@ -4259,5 +4299,48 @@ mod tests {
         haystack
             .windows(needle.len())
             .any(|window| window == needle)
+    }
+}
+
+#[cfg(test)]
+pub(crate) mod fixtures {
+    use super::*;
+    use timelens_ipc::{WindowTransition, WindowTransitionKind};
+    /// A dataset holding one editor window open from 1000 to 6000.
+    pub(crate) fn storage() -> (tempfile::TempDir, Storage) {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = Storage::open(dir.path()).unwrap();
+        let event = |time, kind| CollectorEvent {
+            observed_at_utc_ms: time,
+            monotonic_ms: time as u64,
+            body: Some(collector_event::Body::WindowTransition(WindowTransition {
+                kind: kind as i32,
+                window: Some(WindowObservation {
+                    window_id: 1,
+                    process_id: 2,
+                    process_started_at_100ns: 3,
+                    application_identity: "path:c:\\private\\editor.exe".into(),
+                    identity_source: IdentitySource::ExecutablePath as i32,
+                    executable_path: Some("C:\\private\\editor.exe".into()),
+                    app_user_model_id: None,
+                    package_identity: None,
+                    displayed: true,
+                    focused: true,
+                    on_current_virtual_desktop: Some(true),
+                    virtual_desktop_id: None,
+                }),
+            })),
+        };
+        storage
+            .ingest_event_batch(&EventBatch {
+                collector_run_id: vec![1; 16],
+                first_sequence: 1,
+                events: vec![
+                    event(1000, WindowTransitionKind::Opened),
+                    event(6000, WindowTransitionKind::Closed),
+                ],
+            })
+            .unwrap();
+        (dir, storage)
     }
 }

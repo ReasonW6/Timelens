@@ -4302,31 +4302,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "timelens-ai"
-version = "0.1.0"
-dependencies = [
- "base64",
- "chrono",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror 2.0.20",
- "url",
- "windows-sys 0.61.2",
- "zeroize",
-]
-
-[[package]]
-name = "timelens-ai-worker"
-version = "0.1.0"
-dependencies = [
- "embed-resource",
- "serde_json",
- "timelens-ai",
- "windows-sys 0.61.2",
-]
-
-[[package]]
 name = "timelens-app"
 version = "0.1.0"
 dependencies = [
@@ -4337,10 +4312,8 @@ dependencies = [
  "image",
  "raw-window-handle",
  "serde",
- "serde_json",
  "slint",
  "tempfile",
- "timelens-ai",
  "timelens-ipc",
  "timelens-observer",
  "timelens-storage",
@@ -4388,7 +4361,6 @@ dependencies = [
 name = "timelens-storage"
 version = "0.1.0"
 dependencies = [
- "base64",
  "chrono",
  "crc32fast",
  "hex",
@@ -4399,7 +4371,6 @@ dependencies = [
  "serde_json",
  "tempfile",
  "thiserror 2.0.20",
- "timelens-ai",
  "timelens-ipc",
  "windows-sys 0.61.2",
  "zeroize",

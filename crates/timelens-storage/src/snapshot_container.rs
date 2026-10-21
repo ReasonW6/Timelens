@@ -1161,6 +1161,11 @@ pub(crate) mod tests {
             fs::remove_file(storage.snapshot_directory().join(name)).unwrap();
         }
         storage.connection.execute_batch("DROP TABLE snapshot_slot_days; DROP TABLE snapshot_container_records; DROP TABLE snapshot_containers; PRAGMA user_version=12;").unwrap();
+        // Schema 12 still held the AI tables that a later migration drops.
+        storage
+            .connection
+            .execute_batch(include_str!("ai-schema.sql"))
+            .unwrap();
         storage.checkpoint().unwrap();
         originals
     }
@@ -1685,7 +1690,10 @@ pub(crate) mod tests {
         let originals = make_legacy(&storage);
         drop(storage);
         let migrated = Storage::open(directory.path()).unwrap();
-        assert_eq!(migrated.schema_version().unwrap(), 13);
+        assert_eq!(
+            migrated.schema_version().unwrap(),
+            crate::LATEST_SCHEMA_VERSION
+        );
         assert_eq!(migrated.snapshot_policy().unwrap(), policy);
         assert_eq!(files(&migrated).len(), 2);
         assert!(originals.iter().all(|(p, _)| !p.exists()));
@@ -2180,7 +2188,10 @@ pub(crate) mod tests {
         let target = Storage::open(target_directory.path()).unwrap();
         let prepared = Storage::prepare_restore(&backup, None, target_directory.path()).unwrap();
         target.replace_from_backup(prepared, false).unwrap();
-        assert_eq!(target.schema_version().unwrap(), 13);
+        assert_eq!(
+            target.schema_version().unwrap(),
+            crate::LATEST_SCHEMA_VERSION
+        );
         assert_eq!(files(&target).len(), 2);
         assert_eq!(target.load_snapshot_image(first).unwrap().webp, a.webp);
         assert_eq!(target.load_snapshot_image(second).unwrap().webp, b.webp);

@@ -20,7 +20,6 @@ export global DataState {
     in-out property <bool> replace-confirmed: false;
     in-out property <string> restore-info;
     in-out property <bool> export-paths: false;
-    in-out property <bool> clear-credentials: false;
     in-out property <string> current-directory;
     in-out property <string> destination;
     in-out property <bool> recovery-needed: false;
@@ -67,7 +66,7 @@ export component DataPanel inherits VerticalLayout {
     SettingsGroup {
         SettingExpander {
             title: "创建便携备份";
-            description: "ZIP 包含活动、输入、设置、排除规则、本地报告和 AI 总结；API 凭据与登录任务不进入备份。";
+            description: "ZIP 包含活动、输入、设置、排除规则和本地报告；登录任务不进入备份。";
             icon: @image-url("icons/database.svg");
             expanded <=> DataState.backup-open;
             CheckBox { font-size: 13px; text: "包含快照图片"; checked <=> DataState.snapshots; enabled: !DataState.busy; }
@@ -131,7 +130,7 @@ export component DataPanel inherits VerticalLayout {
                 Rectangle { horizontal-stretch: 1; }
             }
             if DataState.restore-info != "" : Note { text: DataState.restore-info; color: DataState.restore-ready ? Theme.ink-2 : Theme.danger; }
-            Note { text: "恢复会整体替换现有记录，不会合并。恢复后需要重新配置 AI 凭据。"; font-size: 12px; }
+            Note { text: "恢复会整体替换现有记录，不会合并。"; font-size: 12px; }
             HorizontalLayout {
                 Action { text: "用此备份替换当前数据…"; danger: true; enabled: !DataState.busy && DataState.restore-ready; clicked => { DataState.restore-confirm = 1; } }
                 Rectangle { horizontal-stretch: 1; }

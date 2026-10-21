@@ -543,21 +543,11 @@ impl Storage {
             .map(|(_, reason, slot_count)| LocalReportSnapshotReason { reason, slot_count })
             .collect::<Vec<_>>();
 
-        let (covered_ms, availability) =
-            self.data_coverage(range_started_utc_ms, range_ended_utc_ms)?;
+        let (covered_ms, gaps) = self.data_coverage(range_started_utc_ms, range_ended_utc_ms)?;
         let applications = timeline
             .applications
             .iter()
             .map(local_report_application)
-            .collect::<Vec<_>>();
-        let gaps = availability
-            .into_iter()
-            .map(|gap| LocalReportGap {
-                data_class: gap.category,
-                started_utc_ms: gap.started_utc_ms,
-                ended_utc_ms: gap.ended_utc_ms,
-                reason: gap.reason,
-            })
             .collect::<Vec<_>>();
 
         let transaction =
@@ -681,6 +671,79 @@ impl Storage {
             gaps,
             snapshot_reasons,
         })
+    }
+
+    /// How much of the range was observed, and every interval with missing data.
+    pub fn data_coverage(&self, start: i64, end: i64) -> Result<(u64, Vec<LocalReportGap>)> {
+        let mut observed = self.connection.prepare("SELECT first_observed_utc_ms,last_observed_utc_ms FROM collector_runs WHERE first_observed_utc_ms<?2 AND last_observed_utc_ms>?1")?;
+        let mut intervals = observed
+            .query_map(params![start, end], |r| {
+                Ok((r.get::<_, i64>(0)?.max(start), r.get::<_, i64>(1)?.min(end)))
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        intervals.sort_unstable();
+        let mut union = Vec::<(i64, i64)>::new();
+        for (s, e) in intervals {
+            if let Some(last) = union.last_mut()
+                && s <= last.1
+            {
+                last.1 = last.1.max(e);
+            } else {
+                union.push((s, e));
+            }
+        }
+        let mut missing = vec![];
+        let mut cursor = start;
+        for (s, e) in &union {
+            if *s > cursor {
+                missing.push(LocalReportGap {
+                    started_utc_ms: cursor,
+                    ended_utc_ms: *s,
+                    data_class: "activity".into(),
+                    reason: "unobserved".into(),
+                });
+            }
+            cursor = cursor.max(*e);
+        }
+        if cursor < end {
+            missing.push(LocalReportGap {
+                started_utc_ms: cursor,
+                ended_utc_ms: end,
+                data_class: "activity".into(),
+                reason: "unobserved".into(),
+            });
+        }
+        let mut gaps = self.connection.prepare("SELECT data_class,started_utc_ms,ended_utc_ms,reason FROM data_availability WHERE started_utc_ms<?2 AND ended_utc_ms>?1")?;
+        for row in gaps.query_map(params![start, end], |r| {
+            Ok(LocalReportGap {
+                data_class: r.get(0)?,
+                started_utc_ms: r.get::<_, i64>(1)?.max(start),
+                ended_utc_ms: r.get::<_, i64>(2)?.min(end),
+                reason: r.get(3)?,
+            })
+        })? {
+            missing.push(row?);
+        }
+        let mut system=self.connection.prepare("SELECT kind,started_utc_ms,ended_utc_ms FROM system_intervals WHERE kind IN ('global_pause','privacy_exclusion','session_disconnected','secure_desktop','clock_discontinuity') AND started_utc_ms<?2 AND ended_utc_ms>?1")?;
+        for row in system.query_map(params![start, end], |r| {
+            Ok(LocalReportGap {
+                data_class: "activity".into(),
+                reason: r.get(0)?,
+                started_utc_ms: r.get::<_, i64>(1)?.max(start),
+                ended_utc_ms: r.get::<_, i64>(2)?.min(end),
+            })
+        })? {
+            missing.push(row?);
+        }
+        let uncovered = missing
+            .iter()
+            .filter(|g| g.data_class == "activity")
+            .map(|g| (g.started_utc_ms, g.ended_utc_ms))
+            .collect::<Vec<_>>();
+        Ok((
+            (end - start) as u64 - super::union_duration_ms(&uncovered).min((end - start) as u64),
+            missing,
+        ))
     }
 
     pub fn load_local_report(&self, report_id: i64) -> Result<LocalReport> {

@@ -26,8 +26,7 @@ $externalHash = (Get-FileHash -LiteralPath $external -Algorithm SHA256).Hash
 $keyHash = (Get-FileHash -LiteralPath $keyPath -Algorithm SHA256).Hash
 $corePath = Join-Path $install 'Timelens.exe'
 $collectorPath = Join-Path $elevated 'Timelens.Collector.exe'
-$workerPath = Join-Path $install 'Timelens.AI.exe'
-$paths = @($corePath, $collectorPath, $workerPath)
+$paths = @($corePath, $collectorPath)
 $checks = [ordered]@{}
 $result = [ordered]@{ startedAt = [DateTimeOffset]::Now.ToString('O'); checks = $checks; completed = $false; error = $null }
 $reportPath = Join-Path $root 'installer-result.json'
@@ -45,7 +44,7 @@ function Invoke-Setup([string] $Label) {
     Start-Sleep -Seconds 5
 }
 function Product-Processes {
-    @(Get-Process -Name Timelens, Timelens.Collector, Timelens.AI -ErrorAction SilentlyContinue | Where-Object { $_.Path -in $paths })
+    @(Get-Process -Name Timelens, Timelens.Collector -ErrorAction SilentlyContinue | Where-Object { $_.Path -in $paths })
 }
 function Invoke-Uninstall([string] $DataMode) {
     $uninstaller = Join-Path $elevated 'unins000.exe'
@@ -66,15 +65,6 @@ public static class TimelensAcceptanceToken {
     [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr handle);
     [DllImport("advapi32.dll", SetLastError=true)] static extern bool OpenProcessToken(IntPtr process, uint access, out IntPtr token);
     [DllImport("advapi32.dll", SetLastError=true)] static extern bool GetTokenInformation(IntPtr token, int type, out int value, int size, out int returned);
-    [DllImport("advapi32.dll", CharSet=CharSet.Unicode, SetLastError=true)] static extern bool CredReadW(string target, int type, int flags, out IntPtr credential);
-    [DllImport("advapi32.dll")] static extern void CredFree(IntPtr credential);
-    public static bool SyntheticCredentialExists() {
-        IntPtr credential;
-        if (CredReadW("Timelens/ai/acceptance-ui-84d2c6a9", 1, 0, out credential)) { CredFree(credential); return true; }
-        int error = Marshal.GetLastWin32Error();
-        if (error != 1168) throw new Win32Exception(error);
-        return false;
-    }
     public static bool IsElevated(int id) {
         IntPtr process = OpenProcess(0x1000, false, id), token = IntPtr.Zero;
         if (process == IntPtr.Zero) throw new Win32Exception();
@@ -90,8 +80,7 @@ public static class TimelensAcceptanceToken {
 try {
     Assert-Check 'new-isolated-installation' (-not (Test-Path -LiteralPath $install))
     Assert-Check 'no-existing-acceptance-tasks' (@(Get-ScheduledTask -TaskPath $taskPath -ErrorAction SilentlyContinue).Count -eq 0)
-    Assert-Check 'no-running-timelens' (@(Get-Process -Name Timelens, timelens-collector, Timelens.Collector, timelens-ai-worker, Timelens.AI -ErrorAction SilentlyContinue).Count -eq 0)
-    Assert-Check 'synthetic-credential-exists-before-install' ([TimelensAcceptanceToken]::SyntheticCredentialExists())
+    Assert-Check 'no-running-timelens' (@(Get-Process -Name Timelens, timelens-collector, Timelens.Collector -ErrorAction SilentlyContinue).Count -eq 0)
     Invoke-Setup 'install'
     $coreTask = Get-ScheduledTask -TaskPath $taskPath -TaskName Core
     $collectorTask = Get-ScheduledTask -TaskPath $taskPath -TaskName Collector
@@ -104,8 +93,7 @@ try {
     Assert-Check 'resident-processes-running' ($core.Count -eq 1 -and $collector.Count -eq 1)
     Assert-Check 'core-process-not-elevated' (-not [TimelensAcceptanceToken]::IsElevated($core[0].Id))
     Assert-Check 'collector-process-elevated' ([TimelensAcceptanceToken]::IsElevated($collector[0].Id))
-    Assert-Check 'ai-worker-is-on-demand' (@($processes | Where-Object Path -eq $workerPath).Count -eq 0)
-    Assert-Check 'three-payloads-present' ((Test-Path -LiteralPath $corePath) -and (Test-Path -LiteralPath $collectorPath) -and (Test-Path -LiteralPath $workerPath))
+    Assert-Check 'two-payloads-present' ((Test-Path -LiteralPath $corePath) -and (Test-Path -LiteralPath $collectorPath))
     . (Join-Path $repo 'installer\path-safety.ps1')
     Assert-Check 'protected-elevated-ancestors' ((Assert-InstallDirectory $elevated -RequireProtectedAncestors) -eq $elevated)
     $ordinaryWriteRules = @(foreach ($directory in @($install, $elevated)) {
@@ -125,7 +113,6 @@ try {
     Invoke-Uninstall 'delete'
     Assert-Check 'delete-removed-active-encrypted-data' (-not (Test-Path -LiteralPath $keyPath) -and -not (Test-Path -LiteralPath (Join-Path $data 'timelens.sqlite3')))
     Assert-Check 'delete-removed-location-pointer' (-not (Test-Path -LiteralPath $pointer))
-    Assert-Check 'delete-removed-synthetic-credential' (-not [TimelensAcceptanceToken]::SyntheticCredentialExists())
     Assert-Check 'external-export-preserved' ((Get-FileHash -LiteralPath $external -Algorithm SHA256).Hash -eq $externalHash)
     $result.completed = $true
 } catch {
