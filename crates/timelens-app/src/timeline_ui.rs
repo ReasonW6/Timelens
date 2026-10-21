@@ -1,4 +1,5 @@
 //! Native presentation wiring. Storage remains the source of every displayed fact.
+use crate::i18n::{tr, trn};
 use crate::{
     AppWindow, CollectionState, DataState, UiState, refresh_timeline, timeline_view, ui_model,
     unix_time_ms,
@@ -128,7 +129,7 @@ pub fn install(
                 w.set_action_status("".into());
                 refresh(&w, &storage, &state);
             } else {
-                w.set_action_status("请输入有效日期（YYYY-MM-DD），日期不能晚于今天".into());
+                w.set_action_status(tr!("请输入有效日期（YYYY-MM-DD），日期不能晚于今天").into());
             }
         });
     }
@@ -239,7 +240,7 @@ fn local_time_range(
     let day = Local
         .timestamp_millis_opt(anchor)
         .single()
-        .ok_or("所选日期不可用")?
+        .ok_or(tr!("所选日期不可用"))?
         .date_naive();
     let parse = |value: &str, end_boundary: bool| {
         let local = if value.trim() == "24:00" && end_boundary {
@@ -252,20 +253,20 @@ fn local_time_range(
             .earliest()
             .map(|date| date.timestamp_millis())
     };
-    let start = parse(start, false).ok_or("请输入有效的开始时间，格式为 HH:MM")?;
-    let end = parse(end, true).ok_or("请输入有效的结束时间，格式为 HH:MM")?;
+    let start = parse(start, false).ok_or(tr!("请输入有效的开始时间，格式为 HH:MM"))?;
+    let end = parse(end, true).ok_or(tr!("请输入有效的结束时间，格式为 HH:MM"))?;
     if end <= start {
-        return Err("结束时间需要晚于开始时间");
+        return Err(tr!("结束时间需要晚于开始时间"));
     }
     if start >= now {
-        return Err("所选时段还没有开始，请选择当前时刻之前的开始时间");
+        return Err(tr!("所选时段还没有开始，请选择当前时刻之前的开始时间"));
     }
     Ok((start, end))
 }
 
 fn refresh(window: &AppWindow, storage: &Arc<Mutex<Storage>>, state: &Rc<RefCell<UiState>>) {
     if let Err(error) = refresh_timeline(window, storage, state) {
-        window.set_action_status(format!("刷新失败：{error}").into());
+        window.set_action_status(tr!("刷新失败：{}", error).into());
     }
 }
 
@@ -274,7 +275,7 @@ fn local_label(timestamp: i64, format: &str) -> String {
         .timestamp_millis_opt(timestamp)
         .single()
         .map(|v| v.format(format).to_string())
-        .unwrap_or_else(|| "时间不可用".to_owned())
+        .unwrap_or_else(|| tr!("时间不可用").to_owned())
 }
 
 /// A local date as the number yyyymmdd.
@@ -325,9 +326,9 @@ fn range_title(state: &UiState, now: i64) -> String {
             .saturating_sub(state.horizon_started_utc_ms)
             / 3_600_000;
         return if hours >= 48 && hours % 24 == 0 {
-            format!("最近 {} 天", hours / 24)
+            trn!(hours / 24, "最近 {} 天", hours / 24)
         } else {
-            format!("最近 {hours} 小时")
+            trn!(hours, "最近 {} 小时", hours)
         };
     };
     let date = |timestamp: i64| {
@@ -337,23 +338,27 @@ fn range_title(state: &UiState, now: i64) -> String {
             .map(|d| d.date_naive())
     };
     let (Some(date), Some(today)) = (date(day), date(now)) else {
-        return "时间不可用".to_owned();
+        return tr!("时间不可用").to_owned();
     };
     let name = if date == today {
-        "今天 · "
+        tr!("今天 · ")
     } else if today.pred_opt() == Some(date) {
-        "昨天 · "
+        tr!("昨天 · ")
     } else {
         ""
     };
-    let weekday = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
-        [date.weekday().num_days_from_monday() as usize];
     let format = if date.year() == today.year() {
-        "%-m月%-d日"
+        tr!("%-m月%-d日 {}")
     } else {
-        "%Y年%-m月%-d日"
+        tr!("%Y年%-m月%-d日 {}")
     };
-    let label = format!("{name}{} {weekday}", date.format(format));
+    let label = format!(
+        "{name}{}",
+        crate::i18n::fill(
+            &date.format(format).to_string(),
+            &[&crate::timeline_view::weekday_name(date)]
+        )
+    );
     if whole_day(state) {
         return label;
     }
@@ -411,12 +416,12 @@ pub fn apps_range_label(snapshot: &TimelineSnapshot, range_start: i64, all: bool
         let format = if same_day {
             "%H:%M"
         } else {
-            "%-m月%-d日 %H:%M"
+            tr!("%-m月%-d日 %H:%M")
         };
         format!(
             "{}{}–{}",
             if same_day {
-                local_label(range_start, "%-m月%-d日 ")
+                local_label(range_start, tr!("%-m月%-d日 "))
             } else {
                 String::new()
             },
@@ -427,11 +432,11 @@ pub fn apps_range_label(snapshot: &TimelineSnapshot, range_start: i64, all: bool
             }
         )
     } else if snapshot.applications.is_empty() {
-        "全部记录".to_owned()
+        tr!("全部记录").to_owned()
     } else {
-        format!(
+        tr!(
             "全部记录 · {}起",
-            local_label(range_start, "%Y年%-m月%-d日")
+            local_label(range_start, tr!("%Y年%-m月%-d日"))
         )
     }
 }

@@ -1,0 +1,1674 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: Timelens\n"
+"Language: en\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=2; plural=(n != 1);\n"
+
+#: main.rs
+msgid " · {} 个时段没有拍摄"
+msgid_plural " · {} 个时段没有拍摄"
+msgstr[0] " · {} slot not captured"
+msgstr[1] " · {} slots not captured"
+
+#: main.rs
+msgid " · 显示最近 {} 条"
+msgstr " · showing the latest {}"
+
+#: collection_ui.rs history.rs history_cache.rs timeline_view.rs
+msgid "%-m月%-d日"
+msgstr "%b %-d"
+
+#: timeline_ui.rs
+msgid "%-m月%-d日 "
+msgstr "%b %-d "
+
+#: main.rs timeline_ui.rs
+msgid "%-m月%-d日 %H:%M"
+msgstr "%b %-d %H:%M"
+
+#: timeline_ui.rs timeline_view.rs
+msgid "%-m月%-d日 {}"
+msgstr "{}, %b %-d"
+
+#: history.rs main.rs timeline_ui.rs timeline_view.rs
+msgid "%Y年%-m月%-d日"
+msgstr "%b %-d, %Y"
+
+#: main.rs
+msgid "%Y年%-m月%-d日 %H:%M"
+msgstr "%b %-d, %Y %H:%M"
+
+#: timeline_ui.rs timeline_view.rs
+msgid "%Y年%-m月%-d日 {}"
+msgstr "{}, %b %-d, %Y"
+
+#: main.rs
+msgid "0 次"
+msgstr "0 presses"
+
+#: main.rs
+msgid "0 秒"
+msgstr "0s"
+
+#: tray.rs
+msgid "1 小时"
+msgstr "1 hour"
+
+#: tray.rs
+msgid "15 分钟"
+msgstr "15 minutes"
+
+#: data_ui.rs
+msgid "CSV 表格"
+msgstr "CSV spreadsheet"
+
+#: data_ui.rs
+msgid "JSON 文件"
+msgstr "JSON file"
+
+#: tray.rs
+msgid "Timelens 仍在后台记录"
+msgstr "Timelens is still recording in the background"
+
+#: main.rs
+msgid "Timelens 只允许以普通权限运行，请正常启动 Timelens"
+msgstr "Timelens only runs with standard privileges. Please start Timelens normally"
+
+#: startup.rs
+msgid "Timelens 启动任务的程序配置不正确"
+msgstr "The Timelens startup task points to the wrong program"
+
+#: startup.rs
+msgid "Timelens 启动任务缺少登录触发器，请重新安装"
+msgstr "The Timelens startup task has no sign-in trigger. Please reinstall"
+
+#: startup.rs
+msgid "Timelens 启动任务路径不正确"
+msgstr "The Timelens startup task path is wrong"
+
+#: data_ui.rs
+msgid "Timelens 备份"
+msgstr "Timelens backup"
+
+#: data_ui.rs main.rs
+msgid "Timelens 快照"
+msgstr "Timelens snapshot"
+
+#: data_ui.rs
+msgid "Timelens 快照 {}"
+msgstr "Timelens snapshot {}"
+
+#: data_ui.rs
+msgid "Timelens 文件"
+msgstr "Timelens file"
+
+#: data_ui.rs
+msgid "Timelens 统计"
+msgstr "Timelens statistics"
+
+#: startup.rs
+msgid "Timelens 采集器启动任务的权限配置不正确，请重新安装"
+msgstr "The Timelens collector startup task has the wrong privileges. Please reinstall"
+
+#: startup.rs
+msgid "Timelens 采集器启动任务的程序配置不正确"
+msgstr "The Timelens collector startup task points to the wrong program"
+
+#: data_ui.rs
+msgid "WebP 图片"
+msgstr "WebP image"
+
+#: storage
+msgid "ZIP 包含重复、越界或未知路径"
+msgstr "The ZIP has duplicate, out-of-bounds or unknown paths"
+
+#: storage
+msgid "ZIP 容量溢出"
+msgstr "The ZIP size overflows"
+
+#: storage
+msgid "ZIP 文件数量超出限制"
+msgstr "The ZIP has too many files"
+
+#: storage
+msgid "ZIP 解压大小超出限制"
+msgstr "The ZIP unpacks to more than the limit"
+
+#: data_ui.rs
+msgid "{}\n原来的数据没有改动，Timelens 会继续使用原位置。"
+msgstr "{}\nThe original data is unchanged; Timelens keeps using the original location."
+
+#: recovery.rs
+msgid "{}\n新位置：{}"
+msgstr "{}\nNew location: {}"
+
+#: collection_ui.rs
+msgid "{} {} 次"
+msgid_plural "{} {} 次"
+msgstr[0] "{} {} time"
+msgstr[1] "{} {} times"
+
+#: main.rs
+msgid "{} · {} 次"
+msgstr "{} · ×{}"
+
+#: main.rs
+msgid "{} · 当前允许"
+msgstr "{} · currently allowed"
+
+#: main.rs
+msgid "{} · 当前已排除"
+msgstr "{} · currently excluded"
+
+#: main.rs
+msgid "{} · 每 {} 分钟 · {} · {} / {}"
+msgstr "{} · every {} min · {} · {} / {}"
+
+#: collection_ui.rs
+msgid "{} ✓（来自「{}」）"
+msgstr "{} ✓ (from \"{}\")"
+
+#: history.rs
+msgid "{} 个应用"
+msgid_plural "{} 个应用"
+msgstr[0] "{} app"
+msgstr[1] "{} apps"
+
+#: timeline_view.rs
+msgid "{} 全天"
+msgstr "{}, all day"
+
+#: main.rs
+msgid "{} 天"
+msgid_plural "{} 天"
+msgstr[0] "{} day"
+msgstr[1] "{} days"
+
+#: data_ui.rs
+msgid "{} 已存在且不是空文件夹。Timelens 不会合并或覆盖已有数据，请换一个位置"
+msgstr "{} exists and is not an empty folder. Timelens never merges or overwrites existing data; choose another location"
+
+#: main.rs
+msgid "{} 张快照"
+msgid_plural "{} 张快照"
+msgstr[0] "{} snapshot"
+msgstr[1] "{} snapshots"
+
+#: main.rs
+msgid "{} 期间的 {} 个时段没有拍摄：{}"
+msgstr "{1} slots during {0} not captured: {2}"
+
+#: main.rs
+msgid "{} 次"
+msgid_plural "{} 次"
+msgstr[0] "{} press"
+msgstr[1] "{} presses"
+
+#: history.rs
+msgid "{} 段"
+msgid_plural "{} 段"
+msgstr[0] "{} entry"
+msgstr[1] "{} entries"
+
+#: pause.rs
+msgid "{} 自动继续"
+msgstr "Resumes at {}"
+
+#: history.rs
+msgid "{}、{}"
+msgstr "{}, {}"
+
+#: history.rs
+msgid "{}、{} 等 {} 个"
+msgstr "{}, {} and others ({})"
+
+#: main.rs
+msgid "{}。数据库超过 {} 时，从最早的一天开始清理。"
+msgstr "{}. Once the database exceeds {}, the oldest day is cleaned up first."
+
+#: main.rs
+msgid "{}分"
+msgstr "{}m"
+
+#: main.rs
+msgid "{}分{}秒"
+msgstr "{}m {}s"
+
+#: main.rs
+msgid "{}小时"
+msgstr "{}h"
+
+#: main.rs
+msgid "{}小时{}分"
+msgstr "{}h {}m"
+
+#: main.rs
+msgid "{}秒"
+msgstr "{}s"
+
+#: collection_ui.rs
+msgid "{}（{}）"
+msgstr "{} ({})"
+
+#: collection_ui.rs
+msgid "{}：{}"
+msgstr "{}: {}"
+
+#: history_cache.rs
+msgid "“{}” · 最近一个月 · 找到 {} 段"
+msgid_plural "“{}” · 最近一个月 · 找到 {} 段"
+msgstr[0] "\"{}\" · last month · {} found"
+msgstr[1] "\"{}\" · last month · {} found"
+
+#: collection_ui.rs
+msgid "、"
+msgstr ", "
+
+#: history.rs timeline_view.rs
+msgid "上午"
+msgstr "Morning"
+
+#: data_ui.rs
+msgid "上次检查：{} · 通过"
+msgstr "Last check: {} · passed"
+
+#: history.rs timeline_view.rs
+msgid "下午"
+msgstr "Afternoon"
+
+#: storage
+msgid "不兼容的备份格式版本"
+msgstr "Incompatible backup format version"
+
+#: data_ui.rs
+msgid "不含快照；相关槽将显示已省略"
+msgstr "No snapshots; their slots will show as omitted"
+
+#: collection_ui.rs
+msgid "不拍摄快照"
+msgstr "No snapshots"
+
+#: storage
+msgid "不支持网络数据目录"
+msgstr "Network data folders are not supported"
+
+#: collection_ui.rs
+msgid "不能和自己合并，请选择另一个应用。"
+msgstr "An app can't merge with itself. Choose another app."
+
+#: collection_ui.rs
+msgid "不记录活动"
+msgstr "No activity"
+
+#: history.rs main.rs
+msgid "不记录的应用"
+msgstr "Excluded apps"
+
+#: collection_ui.rs
+msgid "不记录输入"
+msgstr "No input"
+
+#: data_ui.rs
+msgid "两次输入的备份密码不一致"
+msgstr "The backup passwords don't match"
+
+#: history.rs
+msgid "主应用"
+msgstr "Main app"
+
+#: general_ui.rs
+msgid "主程序与采集器的自启动状态不一致，请开启开关同步设置"
+msgstr "The app and the collector disagree on start at sign-in. Turn the switch on to sync them"
+
+#: appearance.rs
+msgid "主题设置未能保存：{}"
+msgstr "Could not save the theme: {}"
+
+#: main.rs
+msgid "之后"
+msgstr "Later"
+
+#: history.rs timeline_view.rs
+msgid "今天"
+msgstr "Today"
+
+#: timeline_ui.rs
+msgid "今天 · "
+msgstr "Today · "
+
+#: main.rs
+msgid "仍打开"
+msgstr "Still open"
+
+#: main.rs
+msgid "从左侧选择一张快照预览"
+msgstr "Choose a snapshot on the left to preview"
+
+#: collection_ui.rs history.rs main.rs
+msgid "会话断开"
+msgstr "Session disconnected"
+
+#: recovery.rs
+msgid "你可以检查原位置，或将数据恢复到另一个目录。"
+msgstr "You can check the original location, or recover the data to another folder."
+
+#: data_ui.rs
+msgid "保存备份"
+msgstr "Save backup"
+
+#: collection_ui.rs
+msgid "保存失败"
+msgstr "Save failed"
+
+#: main.rs
+msgid "保留 {} 天"
+msgid_plural "保留 {} 天"
+msgstr[0] "Keep {} day"
+msgstr[1] "Keep {} days"
+
+#: main.rs
+msgid "保留策略失败：{}"
+msgstr "Retention failed: {}"
+
+#: main.rs
+msgid "保留策略已更新；清理快照 {} 项、活动 {} 项、输入 {} 项"
+msgstr "Retention updated; cleaned up {} snapshots, {} activity items, {} input items"
+
+#: main.rs
+msgid "保留策略已清理"
+msgstr "Cleaned up by retention"
+
+#: main.rs
+msgid "先在主界面选择应用"
+msgstr "Choose an app in the main window first"
+
+#: main.rs
+msgid "全部显示器"
+msgstr "All displays"
+
+#: collection_ui.rs timeline_ui.rs
+msgid "全部记录"
+msgstr "All records"
+
+#: timeline_ui.rs
+msgid "全部记录 · {}起"
+msgstr "All records · since {}"
+
+#: history.rs
+msgid "凌晨"
+msgstr "Night"
+
+#: storage
+msgid "切换未完成，原数据仍使用；已验证的副本位于"
+msgstr "Switch incomplete; the original data stays in use. The verified copy is at"
+
+#: collection_ui.rs
+msgid "切换记录状态失败"
+msgstr "Failed to switch recording state"
+
+#: main.rs
+msgid "列表刷新失败：{}"
+msgstr "List refresh failed: {}"
+
+#: main.rs
+msgid "删除数据前必须先停止采集器"
+msgstr "Stop the collector before deleting data"
+
+#: history.rs main.rs timeline_ui.rs
+msgid "刷新失败：{}"
+msgstr "Refresh failed: {}"
+
+#: data_ui.rs
+msgid "包含快照"
+msgstr "Includes snapshots"
+
+#: data_ui.rs
+msgid "原位置有 {} 个文件未能删除，可以稍后手动检查。"
+msgid_plural "原位置有 {} 个文件未能删除，可以稍后手动检查。"
+msgstr[0] "Could not delete {} file in the original location; you can check it by hand later."
+msgstr[1] "Could not delete {} files in the original location; you can check them by hand later."
+
+#: data_ui.rs
+msgid "原位置的数据已清理，记录已恢复。"
+msgstr "The original location is cleaned up and recording has resumed."
+
+#: history.rs main.rs
+msgid "原因未知"
+msgstr "Unknown reason"
+
+#: main.rs
+msgid "发现数据损坏，已停止写入。请进入恢复界面，保留原件并恢复到新目录。"
+msgstr "Damaged data found; writing has stopped. Open recovery, keep the original and recover to a new folder."
+
+#: data_ui.rs
+msgid "另一个数据维护操作正在进行"
+msgstr "Another data maintenance task is running"
+
+#: collection_ui.rs
+msgid "另有 {} 次按键不在这张键盘图上，例如 Home、Delete 等编辑键或输入法切换键。"
+msgid_plural "另有 {} 次按键不在这张键盘图上，例如 Home、Delete 等编辑键或输入法切换键。"
+msgstr[0] "{} more press isn't on this keyboard map, such as editing keys like Home and Delete or input method keys."
+msgstr[1] "{} more presses aren't on this keyboard map, such as editing keys like Home and Delete or input method keys."
+
+#: main.rs
+msgid "另有 {} 段未列出"
+msgid_plural "另有 {} 段未列出"
+msgstr[0] "{} more not listed"
+msgstr[1] "{} more not listed"
+
+#: main.rs
+msgid "可用空间低于 2 GB"
+msgstr "Less than 2 GB of free space"
+
+#: collection_ui.rs
+msgid "合并后共用规则：{} · {} · {}。"
+msgstr "Shared rules after merging: {} · {} · {}."
+
+#: data_ui.rs
+msgid "同名文件太多，请换一个文件名"
+msgstr "Too many files with this name; choose another name"
+
+#: history.rs
+msgid "同屏"
+msgstr "Alongside"
+
+#: history.rs
+msgid "同屏 {}"
+msgstr "Alongside {}"
+
+#: history.rs
+msgid "含 {}"
+msgstr "Includes {}"
+
+#: history.rs
+msgid "含 {} · {}"
+msgstr "Includes {} · {}"
+
+#: startup.rs
+msgid "启动任务状态与所选设置不一致，请重试"
+msgstr "The startup task doesn't match your choice; please try again"
+
+#: startup.rs
+msgid "启动任务路径不正确"
+msgstr "The startup task path is wrong"
+
+#: startup.rs
+msgid "启动设置包含无效的路径字符"
+msgstr "The startup setting has invalid path characters"
+
+#: startup.rs
+msgid "启动设置组件缺失，请重新安装 Timelens"
+msgstr "A startup component is missing; please reinstall Timelens"
+
+#: timeline_view.rs
+msgid "周一"
+msgstr "Mon"
+
+#: timeline_view.rs
+msgid "周三"
+msgstr "Wed"
+
+#: timeline_view.rs
+msgid "周二"
+msgstr "Tue"
+
+#: timeline_view.rs
+msgid "周五"
+msgstr "Fri"
+
+#: timeline_view.rs
+msgid "周六"
+msgstr "Sat"
+
+#: timeline_view.rs
+msgid "周四"
+msgstr "Thu"
+
+#: timeline_view.rs
+msgid "周日"
+msgstr "Sun"
+
+#: history.rs
+msgid "命中 {}"
+msgstr "Matches {}"
+
+#: storage
+msgid "图片哈希无效"
+msgstr "Invalid image hash"
+
+#: main.rs
+msgid "图片损坏，无法恢复"
+msgstr "The image is damaged and cannot be recovered"
+
+#: storage
+msgid "图片数量与数据库不一致"
+msgstr "Image count doesn't match the database"
+
+#: storage
+msgid "备份包含未知或被修改的数据库结构"
+msgstr "The backup has an unknown or modified database schema"
+
+#: data_ui.rs
+msgid "备份已写出，但回读校验没有通过"
+msgstr "The backup was written, but it didn't pass verification when read back"
+
+#: data_ui.rs
+msgid "备份已创建并通过校验 · {} 个文件 · {}，已导出到 {}"
+msgid_plural "备份已创建并通过校验 · {} 个文件 · {}，已导出到 {}"
+msgstr[0] "Backup created and verified · {} file · {}, exported to {}"
+msgstr[1] "Backup created and verified · {} files · {}, exported to {}"
+
+#: recovery.rs
+msgid "备份已恢复并通过校验。"
+msgstr "Backup restored and verified."
+
+#: storage
+msgid "备份数据库版本无效"
+msgstr "Invalid backup database version"
+
+#: main.rs
+msgid "备份未包含图片"
+msgstr "The backup has no images"
+
+#: storage
+msgid "备份清单无效或密码错误"
+msgstr "Invalid backup manifest, or the password is wrong"
+
+#: storage
+msgid "备份路径无效"
+msgstr "The backup path is invalid"
+
+#: collection_ui.rs data_ui.rs
+msgid "存储锁不可用"
+msgstr "Storage lock unavailable"
+
+#: collection_ui.rs history.rs main.rs
+msgid "安全桌面"
+msgstr "Secure desktop"
+
+#: main.rs
+msgid "安全桌面/UAC"
+msgstr "Secure desktop/UAC"
+
+#: local_config.rs
+msgid "安装器准备的数据目录不存在或不为空：{}"
+msgstr "The data folder prepared by the installer is missing or not empty: {}"
+
+#: startup.rs
+msgid "安装目录不可用"
+msgstr "Install folder unavailable"
+
+#: data_ui.rs
+msgid "完整性与外键检查通过"
+msgstr "Integrity and foreign key checks passed"
+
+#: data_ui.rs
+msgid "导出 Timelens 文件"
+msgstr "Export Timelens file"
+
+#: main.rs
+msgid "导出失败：{}"
+msgstr "Export failed: {}"
+
+#: data_ui.rs
+msgid "导出快照"
+msgstr "Export snapshot"
+
+#: data_ui.rs
+msgid "导出统计"
+msgstr "Export statistics"
+
+#: collection_ui.rs
+msgid "将删除「{}」的 {} 个窗口实例。"
+msgid_plural "将删除「{}」的 {} 个窗口实例。"
+msgstr[0] "{1} window instance of \"{0}\" will be deleted."
+msgstr[1] "{1} window instances of \"{0}\" will be deleted."
+
+#: main.rs
+msgid "尚无应用数据"
+msgstr "No app data yet"
+
+#: main.rs
+msgid "屏 {}"
+msgstr "Display {}"
+
+#: main.rs
+msgid "已从快照排除名单恢复所选应用"
+msgstr "The selected app is off the snapshot exclusion list"
+
+#: main.rs
+msgid "已保存 · {}"
+msgstr "Saved · {}"
+
+#: main.rs
+msgid "已停用"
+msgstr "Off"
+
+#: general_ui.rs
+msgid "已关闭开机自启动"
+msgstr "Start at sign-in turned off"
+
+#: main.rs
+msgid "已删除 {} 张快照，释放 {}"
+msgid_plural "已删除 {} 张快照，释放 {}"
+msgstr[0] "Deleted {} snapshot, freed {}"
+msgstr[1] "Deleted {} snapshots, freed {}"
+
+#: collection_ui.rs
+msgid "已删除「{}」的历史"
+msgstr "Deleted the history of \"{}\""
+
+#: main.rs
+msgid "已删除所选快照"
+msgstr "Deleted the selected snapshot"
+
+#: main.rs
+msgid "已删除所选快照；旧加密数据稍后清理：{}"
+msgstr "Deleted the selected snapshot; old encrypted data is cleaned up later: {}"
+
+#: startup.rs
+msgid "已取消管理员确认，开机自启动保持原设置"
+msgstr "Administrator approval cancelled; start at sign-in is unchanged"
+
+#: collection_ui.rs
+msgid "已合并「{}」，原始记录不改写"
+msgstr "Merged \"{}\"; original records stay unchanged"
+
+#: main.rs
+msgid "已启用"
+msgstr "On"
+
+#: main.rs
+msgid "已将所选应用加入独立快照排除名单"
+msgstr "Added the selected app to the snapshot exclusion list"
+
+#: recovery.rs
+msgid "已建立空数据集。原件继续保留在原位置。"
+msgstr "Empty dataset created. The original stays where it was."
+
+#: general_ui.rs
+msgid "已开启开机自启动"
+msgstr "Start at sign-in turned on"
+
+#: recovery.rs
+msgid "已恢复 {} 行；已知无效记录 {} 行，无法完整读取的表 {} 个，缺失图片 {} 张。采集与快照已暂停，请先检查排除规则。"
+msgstr "Recovered {} rows; {} known invalid rows, {} tables that could not be fully read, {} missing images. Collection and snapshots are paused; check the exclusion rules first."
+
+#: main.rs
+msgid "已手动删除"
+msgstr "Deleted by hand"
+
+#: main.rs
+msgid "已拍摄 {} 的快照"
+msgstr "Captured a snapshot of {}"
+
+#: main.rs
+msgid "已拍摄 {} 的快照 {} 张；{} 块屏幕没有拍摄：{}"
+msgid_plural "已拍摄 {} 的快照 {} 张；{} 块屏幕没有拍摄：{}"
+msgstr[0] "Captured {0}: {1} saved; {2} screen not captured: {3}"
+msgstr[1] "Captured {0}: {1} saved; {2} screens not captured: {3}"
+
+#: main.rs
+msgid "已拍摄 {} 的快照，共 {} 张"
+msgstr "Captured snapshots of {}, {} in total"
+
+#: history.rs
+msgid "已显示保留期内的全部记录"
+msgstr "Showing all records within retention"
+
+#: collection_ui.rs history.rs main.rs tray.rs
+msgid "已暂停记录"
+msgstr "Recording paused"
+
+#: tray.rs
+msgid "已暂停记录 · {}"
+msgstr "Recording paused · {}"
+
+#: collection_ui.rs
+msgid "已更新「{}」的规则，立即生效，不影响已有记录"
+msgstr "Updated the rules for \"{}\"; they apply now and don't affect existing records"
+
+#: main.rs
+msgid "已清理 {} 段"
+msgid_plural "已清理 {} 段"
+msgstr[0] "Cleaned up {} entry"
+msgstr[1] "Cleaned up {} entries"
+
+#: main.rs
+msgid "已清空 {} 行本地数据并轮换数据密钥"
+msgid_plural "已清空 {} 行本地数据并轮换数据密钥"
+msgstr[0] "Cleared {} row of local data and rotated the data key"
+msgstr[1] "Cleared {} rows of local data and rotated the data key"
+
+#: main.rs
+msgid "已用 {} · 最早可回看到 {}"
+msgstr "{} used · back to {}"
+
+#: main.rs
+msgid "已用 {} · 还没有活动记录"
+msgstr "{} used · no activity yet"
+
+#: collection_ui.rs
+msgid "已继续记录，从现在开始记录"
+msgstr "Recording resumed from now"
+
+#: collection_ui.rs
+msgid "已解除合并，恢复合并前的规则"
+msgstr "Merge undone; the rules from before the merge are back"
+
+#: local_config.rs
+msgid "已设置的数据位置不可用：{}。请连接原磁盘或进入恢复界面。"
+msgstr "The configured data location is unavailable: {}. Connect the original disk or open recovery."
+
+#: main.rs
+msgid "已验证采集器 · PID {} · {}"
+msgstr "Verified collector · PID {} · {}"
+
+#: data_ui.rs
+msgid "应用程序"
+msgstr "Programs"
+
+#: general_ui.rs
+msgid "开机自启动仅在安装版中可用"
+msgstr "Start at sign-in is only available in the installed version"
+
+#: main.rs
+msgid "当前显示器"
+msgstr "Current display"
+
+#: startup.rs
+msgid "当前程序与已安装的 Timelens 不同，请在安装版中设置开机自启动"
+msgstr "This program isn't the installed Timelens; set start at sign-in from the installed version"
+
+#: storage
+msgid "快照像素大小超出限制"
+msgstr "Snapshot pixels exceed the size limit"
+
+#: storage
+msgid "快照像素无法校验"
+msgstr "Snapshot pixels cannot be verified"
+
+#: storage
+msgid "快照像素校验失败"
+msgstr "Snapshot pixel verification failed"
+
+#: main.rs
+msgid "快照列表刷新失败：{}"
+msgstr "Snapshot list refresh failed: {}"
+
+#: main.rs
+msgid "快照删除失败：{}"
+msgstr "Snapshot deletion failed: {}"
+
+#: storage
+msgid "快照哈希无效"
+msgstr "Invalid snapshot hash"
+
+#: data_ui.rs
+msgid "快照已导出到 {}"
+msgstr "Snapshot exported to {}"
+
+#: main.rs
+msgid "快照策略失败：{}"
+msgstr "Snapshot settings failed: {}"
+
+#: main.rs
+msgid "快照策略已更新；固定周期从现在重新开始"
+msgstr "Snapshot settings updated; the schedule restarts from now"
+
+#: storage
+msgid "快照记录无效"
+msgstr "Invalid snapshot record"
+
+#: main.rs
+msgid "快照设置刷新失败：{}"
+msgstr "Snapshot settings refresh failed: {}"
+
+#: storage
+msgid "恢复引用包含未知表"
+msgstr "Recovery references include an unknown table"
+
+#: storage
+msgid "恢复引用无法修复"
+msgstr "Recovery references cannot be repaired"
+
+#: recovery.rs
+msgid "恢复状态不可用"
+msgstr "Recovery state unavailable"
+
+#: storage
+msgid "恢复目录必须与原数据目录分开"
+msgstr "The recovery folder must be separate from the original data folder"
+
+#: storage
+msgid "恢复目录无效"
+msgstr "Invalid recovery folder"
+
+#: data_ui.rs
+msgid "恢复锁不可用"
+msgstr "Recovery lock unavailable"
+
+#: timeline_ui.rs
+msgid "所选日期不可用"
+msgstr "The chosen date isn't available"
+
+#: collection_ui.rs
+msgid "所选时段不可用"
+msgstr "The chosen time range isn't available"
+
+#: timeline_ui.rs
+msgid "所选时段还没有开始，请选择当前时刻之前的开始时间"
+msgstr "That range hasn't started yet; choose a start time before now"
+
+#: main.rs
+msgid "所选记录没有可删除的图片"
+msgstr "The selected record has no image to delete"
+
+#: tray.rs
+msgid "打开 Timelens"
+msgstr "Open Timelens"
+
+#: main.rs
+msgid "打开 {} · 显示 {} · {} 个窗口"
+msgid_plural "打开 {} · 显示 {} · {} 个窗口"
+msgstr[0] "Open {} · displayed {} · {} window"
+msgstr[1] "Open {} · displayed {} · {} windows"
+
+#: main.rs
+msgid "打开 {} · 显示 {} · 后台 {}"
+msgstr "Open {} · displayed {} · background {}"
+
+#: tray.rs
+msgid "打开窗口失败：{}"
+msgstr "Failed to open the window: {}"
+
+#: tray.rs
+msgid "托盘锁不可用"
+msgstr "Tray lock unavailable"
+
+#: main.rs
+msgid "批量删除失败：{}"
+msgstr "Bulk delete failed: {}"
+
+#: main.rs
+msgid "拍摄失败：{}"
+msgstr "Capture failed: {}"
+
+#: main.rs
+msgid "捕获失败"
+msgstr "Capture failed"
+
+#: main.rs
+msgid "损坏恢复时丢失"
+msgstr "Lost in damage recovery"
+
+#: main.rs
+msgid "排除设置失败：{}"
+msgstr "Exclusion setting failed: {}"
+
+#: main.rs
+msgid "握手失败：{}"
+msgstr "Handshake failed: {}"
+
+#: data_ui.rs
+msgid "操作失败：{}"
+msgstr "Action failed: {}"
+
+#: storage
+msgid "数据位置不能经过符号链接、联接或云占位目录"
+msgstr "The data location can't go through symbolic links, junctions or cloud placeholder folders"
+
+#: storage
+msgid "数据位置必须是目录"
+msgstr "The data location must be a folder"
+
+#: local_config.rs
+msgid "数据位置设置格式无效"
+msgstr "Invalid data location setting format"
+
+#: local_config.rs
+msgid "数据位置设置过大"
+msgstr "The data location setting is too large"
+
+#: main.rs
+msgid "数据已变更，请重新选择快照"
+msgstr "Data changed; choose a snapshot again"
+
+#: storage
+msgid "数据库完整性检查失败"
+msgstr "Database integrity check failed"
+
+#: storage
+msgid "数据库引用完整性检查失败"
+msgstr "Database referential integrity check failed"
+
+#: storage
+msgid "数据库版本与备份清单不一致"
+msgstr "The database version doesn't match the backup manifest"
+
+#: main.rs
+msgid "数据库状态写入失败：{}"
+msgstr "Failed to write database state: {}"
+
+#: data_ui.rs
+msgid "数据父目录不可用"
+msgstr "Parent data folder unavailable"
+
+#: data_ui.rs
+msgid "数据现在保存在：\n{}\n{}"
+msgstr "Data is now stored in:\n{}\n{}"
+
+#: storage
+msgid "数据目录不能放在云同步目录"
+msgstr "The data folder can't be in a cloud-synced folder"
+
+#: storage
+msgid "数据目录必须位于本地固定磁盘"
+msgstr "The data folder must be on a local fixed disk"
+
+#: storage
+msgid "数据路径无法规范化"
+msgstr "The data path cannot be normalized"
+
+#: data_ui.rs
+msgid "数据集已恢复。"
+msgstr "Dataset recovered."
+
+#: storage
+msgid "数据集快照路径无效"
+msgstr "Invalid dataset snapshot path"
+
+#: data_ui.rs
+msgid "文件夹选择窗口失败：{}"
+msgstr "Folder picker failed: {}"
+
+#: data_ui.rs
+msgid "文件选择窗口失败：{}"
+msgstr "File picker failed: {}"
+
+#: storage
+msgid "新旧数据目录不能相同或互相包含"
+msgstr "The old and new data folders can't be the same or contain each other"
+
+#: recovery.rs
+msgid "新旧目录必须分开，不能互相包含"
+msgstr "The old and new folders must be separate, not inside each other"
+
+#: recovery.rs
+msgid "新目录无效"
+msgstr "Invalid new folder"
+
+#: storage
+msgid "无法在这个位置创建目录。请选择有写入权限的位置，或先建好一个空目录再迁移"
+msgstr "Cannot create a folder here. Choose a location you can write to, or create an empty folder first and then move"
+
+#: startup.rs
+msgid "无法定位 Windows 系统目录"
+msgstr "Cannot locate the Windows system folder"
+
+#: storage
+msgid "无法定位损坏的引用记录"
+msgstr "Cannot locate the damaged reference records"
+
+#: startup.rs
+msgid "无法打开启动设置的管理员确认"
+msgstr "Cannot open the administrator approval for startup settings"
+
+#: data_ui.rs
+msgid "无法打开文件夹选择窗口"
+msgstr "Cannot open the folder picker"
+
+#: main.rs
+msgid "无法检查 Timelens 进程权限"
+msgstr "Cannot check the Timelens process privileges"
+
+#: startup.rs
+msgid "无法确认启动设置是否完成，请重新打开常规查看状态"
+msgstr "Cannot confirm the startup setting finished; reopen General to check its status"
+
+#: storage
+msgid "无法读取原数据库的数据结构"
+msgstr "Cannot read the original database schema"
+
+#: data_ui.rs
+msgid "无法进入恢复：{}"
+msgstr "Cannot open recovery: {}"
+
+#: main.rs
+msgid "无法选择位置：{}"
+msgstr "Cannot choose the location: {}"
+
+#: history.rs
+msgid "无聚焦记录"
+msgstr "No focus recorded"
+
+#: history.rs
+msgid "日期不能晚于今天"
+msgstr "The date can't be after today"
+
+#: timeline_view.rs
+msgid "日期未知"
+msgstr "Date unknown"
+
+#: main.rs timeline_ui.rs
+msgid "时间不可用"
+msgstr "Time unavailable"
+
+#: data_ui.rs
+msgid "时间未知"
+msgstr "Time unknown"
+
+#: pause.rs
+msgid "明天 {} 自动继续"
+msgstr "Resumes tomorrow at {}"
+
+#: main.rs
+msgid "明确缺口 {} 段"
+msgid_plural "明确缺口 {} 段"
+msgstr[0] "{} monitoring gap"
+msgstr[1] "{} monitoring gaps"
+
+#: history.rs
+msgid "星期一"
+msgstr "Monday"
+
+#: history.rs
+msgid "星期三"
+msgstr "Wednesday"
+
+#: history.rs
+msgid "星期二"
+msgstr "Tuesday"
+
+#: history.rs
+msgid "星期五"
+msgstr "Friday"
+
+#: history.rs
+msgid "星期六"
+msgstr "Saturday"
+
+#: history.rs
+msgid "星期四"
+msgstr "Thursday"
+
+#: history.rs
+msgid "星期日"
+msgstr "Sunday"
+
+#: history.rs history_cache.rs timeline_view.rs
+msgid "昨天"
+msgstr "Yesterday"
+
+#: timeline_ui.rs
+msgid "昨天 · "
+msgstr "Yesterday · "
+
+#: history.rs
+msgid "晚上"
+msgstr "Evening"
+
+#: collection_ui.rs
+msgid "暂停"
+msgstr "Paused"
+
+#: tray.rs
+msgid "暂停记录"
+msgstr "Pause recording"
+
+#: startup.rs
+msgid "更改开机自启动失败（{}），请确认 Timelens 安装完整后重试"
+msgstr "Failed to change start at sign-in ({}); make sure Timelens is fully installed and try again"
+
+#: main.rs
+msgid "更早"
+msgstr "Earlier"
+
+#: timeline_ui.rs
+msgid "最近 {} 天"
+msgid_plural "最近 {} 天"
+msgstr[0] "Last {} day"
+msgstr[1] "Last {} days"
+
+#: timeline_ui.rs
+msgid "最近 {} 小时"
+msgid_plural "最近 {} 小时"
+msgstr[0] "Last {} hour"
+msgstr[1] "Last {} hours"
+
+#: history.rs
+msgid "期间没有切换到其他应用"
+msgstr "No switch to other apps in between"
+
+#: history.rs
+msgid "期间还用到 {} 个应用"
+msgid_plural "期间还用到 {} 个应用"
+msgstr[0] "{} other app used in between"
+msgstr[1] "{} other apps used in between"
+
+#: recovery.rs
+msgid "未切换数据位置：{}"
+msgstr "Data location not switched: {}"
+
+#: timeline_view.rs
+msgid "未命名应用"
+msgstr "Unnamed app"
+
+#: startup.rs
+msgid "未找到 Timelens 启动任务，请使用安装版"
+msgstr "No Timelens startup task found; use the installed version"
+
+#: startup.rs
+msgid "未找到 Timelens 采集器启动任务，请重新安装"
+msgstr "No Timelens collector startup task found; please reinstall"
+
+#: main.rs
+msgid "未知原因"
+msgstr "Unknown reason"
+
+#: recovery.rs
+msgid "未知恢复操作"
+msgstr "Unknown recovery action"
+
+#: collection_ui.rs data_ui.rs
+msgid "未知操作"
+msgstr "Unknown action"
+
+#: main.rs
+msgid "未观察 {}"
+msgstr "Unobserved {}"
+
+#: history.rs
+msgid "未记录 {} · {}"
+msgstr "Not recorded {} · {}"
+
+#: data_ui.rs
+msgid "校验通过 · 备份创建于 {} · {} 个文件 · {}。\n来源：{}"
+msgid_plural "校验通过 · 备份创建于 {} · {} 个文件 · {}。\n来源：{}"
+msgstr[0] "Verified · backup created {} · {} file · {}.\nSource: {}"
+msgstr[1] "Verified · backup created {} · {} files · {}.\nSource: {}"
+
+#: collection_ui.rs main.rs
+msgid "桌面空闲"
+msgstr "Desktop idle"
+
+#: storage
+msgid "检测到数据损坏，已停止写入。请进入恢复界面，保留原件后恢复到新目录。"
+msgstr "Damaged data detected; writing has stopped. Open recovery, keep the original, then recover to a new folder."
+
+#: tray.rs
+msgid "正在保存并退出 Timelens…"
+msgstr "Saving and quitting Timelens…"
+
+#: data_ui.rs
+msgid "正在准备…"
+msgstr "Preparing…"
+
+#: data_ui.rs
+msgid "正在切换到新位置…"
+msgstr "Switching to the new location…"
+
+#: data_ui.rs qa.rs
+msgid "正在复制 {} / {}"
+msgstr "Copying {} / {}"
+
+#: main.rs
+msgid "正在安全暂停采集器…"
+msgstr "Safely pausing the collector…"
+
+#: main.rs
+msgid "正在打开…"
+msgstr "Opening…"
+
+#: history_cache.rs
+msgid "正在搜索最近一个月… 已查 {}/{} 天，找到 {} 段"
+msgstr "Searching the last month… {}/{} days checked, {} found"
+
+#: main.rs
+msgid "正在暂停采集器并轮换全部数据密钥…"
+msgstr "Pausing the collector and rotating all data keys…"
+
+#: data_ui.rs
+msgid "正在校验快照 {} / {}"
+msgstr "Verifying snapshots {} / {}"
+
+#: data_ui.rs
+msgid "正在检查当前数据…"
+msgstr "Checking current data…"
+
+#: tray.rs
+msgid "正在记录"
+msgstr "Recording"
+
+#: general_ui.rs
+msgid "正在读取启动设置…"
+msgstr "Reading startup settings…"
+
+#: main.rs
+msgid "永久"
+msgstr "Forever"
+
+#: main.rs
+msgid "永久保留"
+msgstr "Kept forever"
+
+#: main.rs
+msgid "没有拍摄：{}"
+msgstr "Not captured: {}"
+
+#: main.rs
+msgid "没有缺失数据"
+msgstr "No missing data"
+
+#: collection_ui.rs
+msgid "活动名单：{}\n输入名单：{}\n快照名单：{}"
+msgstr "Activity list: {}\nInput list: {}\nSnapshot list: {}"
+
+#: collection_ui.rs
+msgid "活动排除"
+msgstr "Activity exclusion"
+
+#: storage
+msgid "清单与 ZIP 内容不一致"
+msgstr "The manifest doesn't match the ZIP contents"
+
+#: main.rs
+msgid "清理失败：{}"
+msgstr "Cleanup failed: {}"
+
+#: main.rs
+msgid "清理完成：快照 {} 项、活动 {} 项、输入 {} 项、释放 {}"
+msgstr "Cleanup done: {} snapshots, {} activity items, {} input items, freed {}"
+
+#: main.rs
+msgid "清空失败：{}"
+msgstr "Clearing failed: {}"
+
+#: storage
+msgid "独立密码不能为空或超过 1024 字节"
+msgstr "The password can't be empty or longer than 1024 bytes"
+
+#: main.rs
+msgid "现在"
+msgstr "Now"
+
+#: recovery.rs
+msgid "用户关闭了数据恢复窗口；原件仍保留"
+msgstr "The data recovery window was closed; the original is kept"
+
+#: main.rs
+msgid "用户已删除"
+msgstr "Deleted by user"
+
+#: storage
+msgid "目标位于已注册的云同步根目录"
+msgstr "The target is inside a registered cloud sync root"
+
+#: storage
+msgid "目标文件已存在，请选择新文件名"
+msgstr "The file already exists; choose a new name"
+
+#: storage
+msgid "目标父目录不可用"
+msgstr "Target parent folder unavailable"
+
+#: storage
+msgid "目标目录必须为空；V1 不合并数据集"
+msgstr "The target folder must be empty; V1 doesn't merge datasets"
+
+#: tray.rs
+msgid "直到手动继续"
+msgstr "Until I resume"
+
+#: tray.rs
+msgid "直到明天"
+msgstr "Until tomorrow"
+
+#: collection_ui.rs history.rs
+msgid "睡眠"
+msgstr "Sleep"
+
+#: main.rs
+msgid "睡眠/恢复"
+msgstr "Sleep/resume"
+
+#: storage
+msgid "磁盘根路径无效"
+msgstr "Invalid disk root path"
+
+#: history.rs
+msgid "空闲"
+msgstr "Idle"
+
+#: main.rs
+msgid "空间上限保存失败：{}"
+msgstr "Failed to save the space limit: {}"
+
+#: main.rs
+msgid "空间上限已改为 {}"
+msgstr "Space limit set to {}"
+
+#: main.rs
+msgid "空间上限已改为 {}；清理活动 {} 项、输入 {} 项"
+msgstr "Space limit set to {}; cleaned up {} activity items and {} input items"
+
+#: history.rs
+msgid "穿插"
+msgstr "In between"
+
+#: history.rs
+msgid "穿插 {}"
+msgstr "In between: {}"
+
+#: tray.rs
+msgid "窗口已收起到通知区域，记录照常进行。点击托盘图标可重新打开；右键可以暂停记录或退出。"
+msgstr "The window is in the notification area and recording goes on. Click the tray icon to reopen it; right-click to pause recording or quit."
+
+#: tray.rs
+msgid "立即拍摄快照"
+msgstr "Take snapshot now"
+
+#: main.rs
+msgid "等待受信采集器事件…"
+msgstr "Waiting for trusted collector events…"
+
+#: general_ui.rs
+msgid "等待管理员确认…"
+msgstr "Waiting for administrator approval…"
+
+#: tray.rs
+msgid "系统托盘初始化失败"
+msgstr "System tray setup failed"
+
+#: collection_ui.rs history.rs main.rs
+msgid "系统时间跳变"
+msgstr "System clock jump"
+
+#: collection_ui.rs
+msgid "系统正常结束"
+msgstr "System shut down normally"
+
+#: timeline_ui.rs
+msgid "结束时间需要晚于开始时间"
+msgstr "The end time must be after the start time"
+
+#: main.rs
+msgid "统计已导出到 {}"
+msgstr "Statistics exported to {}"
+
+#: tray.rs
+msgid "继续记录"
+msgstr "Resume recording"
+
+#: main.rs
+msgid "缺失 · {}"
+msgstr "Missing · {}"
+
+#: history.rs
+msgid "聚焦 {}"
+msgstr "Focused {}"
+
+#: snapshot.rs
+msgid "解密图片尺寸与元数据不一致"
+msgstr "Decrypted image size doesn't match its metadata"
+
+#: history.rs
+msgid "记录中断 {} 次"
+msgid_plural "记录中断 {} 次"
+msgstr[0] "{} recording gap"
+msgstr[1] "{} recording gaps"
+
+#: history.rs main.rs
+msgid "记录过多，部分丢失"
+msgstr "Too many records; some were lost"
+
+#: i18n.rs
+msgid "语言设置未能保存：{}"
+msgstr "Could not save the language: {}"
+
+#: main.rs
+msgid "请先在主界面选择一个应用"
+msgstr "Choose an app in the main window first"
+
+#: data_ui.rs
+msgid "请先在快照面板选择一张可用图片"
+msgstr "Choose an available image in the snapshot panel first"
+
+#: recovery.rs
+msgid "请先校验一个新数据集"
+msgstr "Verify a new dataset first"
+
+#: data_ui.rs
+msgid "请先选择新的数据位置"
+msgstr "Choose a new data location first"
+
+#: data_ui.rs
+msgid "请先重新校验备份"
+msgstr "Verify the backup again first"
+
+#: collection_ui.rs
+msgid "请确认三份规则各自取并集"
+msgstr "Confirm that each of the three rule lists is combined"
+
+#: collection_ui.rs
+msgid "请确认删除影响"
+msgstr "Confirm what will be deleted"
+
+#: data_ui.rs
+msgid "请确认整体替换"
+msgstr "Confirm the full replacement"
+
+#: timeline_ui.rs
+msgid "请输入有效日期（YYYY-MM-DD），日期不能晚于今天"
+msgstr "Enter a valid date (YYYY-MM-DD) no later than today"
+
+#: history.rs
+msgid "请输入有效日期，格式为 YYYY-MM-DD"
+msgstr "Enter a valid date as YYYY-MM-DD"
+
+#: timeline_ui.rs
+msgid "请输入有效的开始时间，格式为 HH:MM"
+msgstr "Enter a valid start time as HH:MM"
+
+#: timeline_ui.rs
+msgid "请输入有效的结束时间，格式为 HH:MM"
+msgstr "Enter a valid end time as HH:MM"
+
+#: storage
+msgid "请选择一个新的空恢复目录"
+msgstr "Choose a new, empty recovery folder"
+
+#: storage
+msgid "请选择两个不同应用"
+msgstr "Choose two different apps"
+
+#: collection_ui.rs
+msgid "请选择另一个应用"
+msgstr "Choose another app"
+
+#: collection_ui.rs
+msgid "请选择合并关联"
+msgstr "Choose a merge"
+
+#: collection_ui.rs
+msgid "请选择应用"
+msgstr "Choose an app"
+
+#: storage
+msgid "请选择本地固定磁盘的绝对路径"
+msgstr "Choose an absolute path on a local fixed disk"
+
+#: recovery.rs
+msgid "请选择空的新目录"
+msgstr "Choose an empty new folder"
+
+#: history.rs
+msgid "读取历史失败：{}"
+msgstr "Failed to read history: {}"
+
+#: history.rs
+msgid "读取各应用的时间失败：{}"
+msgstr "Failed to read app times: {}"
+
+#: main.rs
+msgid "读取应用统计失败：{}"
+msgstr "Failed to read app statistics: {}"
+
+#: collection_ui.rs
+msgid "读取统计失败：{}"
+msgstr "Failed to read statistics: {}"
+
+#: collection_ui.rs
+msgid "读取规则失败：{}"
+msgstr "Failed to read rules: {}"
+
+#: main.rs
+msgid "超过保留期，已清理"
+msgstr "Past retention, cleaned up"
+
+#: main.rs
+msgid "超过空间上限，已清理"
+msgstr "Over the space limit, cleaned up"
+
+#: history.rs
+msgid "载入更早的记录"
+msgstr "Load earlier records"
+
+#: main.rs
+msgid "输入计数溢出"
+msgstr "Input count overflow"
+
+#: pause.rs
+msgid "还剩 {} 分钟"
+msgid_plural "还剩 {} 分钟"
+msgstr[0] "{} minute left"
+msgstr[1] "{} minutes left"
+
+#: main.rs
+msgid "还没有可导出的记录"
+msgstr "Nothing to export yet"
+
+#: history.rs
+msgid "这一天早于最早的记录"
+msgstr "This day is before the earliest record"
+
+#: history_cache.rs
+msgid "这一天没有记录"
+msgstr "Nothing recorded on this day"
+
+#: main.rs
+msgid "这个时段没有拍摄：{}"
+msgstr "This slot wasn't captured: {}"
+
+#: main.rs
+msgid "这段时间没有快照"
+msgstr "No snapshots in this period"
+
+#: main.rs
+msgid "远程会话"
+msgstr "Remote session"
+
+#: tray.rs
+msgid "退出 Timelens？"
+msgstr "Quit Timelens?"
+
+#: tray.rs
+msgid "退出后不再记录活动、输入和快照，直到下次打开 Timelens。\n\n只想暂时不记录，可以改用「暂停记录」。"
+msgstr "After quitting, no activity, input or snapshots are recorded until you open Timelens again.\n\nTo stop recording only for a while, use \"Pause recording\" instead."
+
+#: tray.rs
+msgid "退出未完成：{}"
+msgstr "Quit incomplete: {}"
+
+#: tray.rs
+msgid "退出（停止记录）…"
+msgstr "Quit (stop recording)…"
+
+#: main.rs
+msgid "选中 {} · {} 个应用"
+msgid_plural "选中 {} · {} 个应用"
+msgstr[0] "Selected {} · {} app"
+msgstr[1] "Selected {} · {} apps"
+
+#: data_ui.rs
+msgid "选择 Timelens 备份"
+msgstr "Choose a Timelens backup"
+
+#: data_ui.rs
+msgid "选择图片"
+msgstr "Choose an image"
+
+#: data_ui.rs
+msgid "选择数据的新位置"
+msgstr "Choose a new location for the data"
+
+#: data_ui.rs
+msgid "选择文件"
+msgstr "Choose a file"
+
+#: data_ui.rs
+msgid "选择要设置规则的应用程序"
+msgstr "Choose the program to set rules for"
+
+#: data_ui.rs
+msgid "采集器未确认暂停，未替换数据"
+msgstr "The collector didn't confirm the pause; data was not replaced"
+
+#: tray.rs
+msgid "采集器未能完成停止，请重试"
+msgstr "The collector could not finish stopping; please try again"
+
+#: history.rs
+msgid "采集器未运行"
+msgstr "Collector not running"
+
+#: main.rs
+msgid "采集器没有运行记录"
+msgstr "Collector wasn't running"
+
+#: startup.rs
+msgid "采集器目录不可用"
+msgstr "Collector folder unavailable"
+
+#: main.rs
+msgid "采集器重启"
+msgstr "Collector restart"
+
+#: collection_ui.rs history.rs main.rs
+msgid "锁屏"
+msgstr "Locked"
+
+#: main.rs
+msgid "键盘 0 · 鼠标 0"
+msgstr "Keyboard 0 · Mouse 0"
+
+#: collection_ui.rs
+msgid "键盘 {} · 左键 {} · 中键 {} · 右键 {}"
+msgstr "Keyboard {} · Left {} · Middle {} · Right {}"
+
+#: main.rs
+msgid "键盘 {} · 鼠标 {}"
+msgstr "Keyboard {} · Mouse {}"
+
+#: main.rs
+msgid "隐私排除"
+msgstr "Privacy exclusion"
+
+#: recovery.rs
+msgid "需要将数据结构从版本 {} 升级到 {}。这会重建快照与缺失记录的约束，保留全部记录。升级期间会锁定数据库，并建立临时加密安全副本；检查成功后删除副本，失败自动回滚。"
+msgstr "The data schema needs upgrading from version {} to {}. This rebuilds the constraints for snapshots and missing records and keeps every record. The database is locked during the upgrade and a temporary encrypted safety copy is made; the copy is deleted once checks pass, and any failure rolls back automatically."
+
+#: main.rs
+msgid "预览失败：{}"
+msgstr "Preview failed: {}"
+
+#: history.rs
+msgid "，其中 {} 没有聚焦记录"
+msgstr ", {} of it without focus"
+
+#: main.rs
+msgid "；旧加密数据稍后清理：{}"
+msgstr "; old encrypted data is cleaned up later: {}"

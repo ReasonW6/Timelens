@@ -1,3 +1,4 @@
+use crate::i18n::{tr, trn};
 use crate::{AppWindow, DataState, SnapshotUiState};
 use anyhow::{Context, Result, anyhow, bail};
 use chrono::TimeZone;
@@ -26,7 +27,7 @@ pub fn dataset_changed() {
 }
 
 fn lock(s: &Arc<Mutex<Storage>>) -> Result<std::sync::MutexGuard<'_, Storage>> {
-    s.lock().map_err(|_| anyhow!("存储锁不可用"))
+    s.lock().map_err(|_| anyhow!(tr!("存储锁不可用")))
 }
 pub fn choose_file(save: bool, extension: &str) -> Result<Option<PathBuf>> {
     choose_named(save, extension, None)
@@ -37,20 +38,35 @@ pub fn choose_named(save: bool, extension: &str, name: Option<&str>) -> Result<O
     use windows_sys::Win32::UI::Controls::Dialogs::*;
     let mut path = vec![0_u16; 32768];
     let (kind, open_title, save_title, default_name) = match extension {
-        "exe" => ("应用程序", "选择要设置规则的应用程序", "", ""),
+        "exe" => (tr!("应用程序"), tr!("选择要设置规则的应用程序"), "", ""),
         "zip" => (
-            "Timelens 备份",
-            "选择 Timelens 备份",
-            "保存备份",
-            "Timelens 备份",
+            tr!("Timelens 备份"),
+            tr!("选择 Timelens 备份"),
+            tr!("保存备份"),
+            tr!("Timelens 备份"),
         ),
-        "webp" => ("WebP 图片", "选择图片", "导出快照", "Timelens 快照"),
-        "json" => ("JSON 文件", "选择文件", "导出统计", "Timelens 统计"),
-        "csv" => ("CSV 表格", "选择文件", "导出统计", "Timelens 统计"),
+        "webp" => (
+            tr!("WebP 图片"),
+            tr!("选择图片"),
+            tr!("导出快照"),
+            tr!("Timelens 快照"),
+        ),
+        "json" => (
+            tr!("JSON 文件"),
+            tr!("选择文件"),
+            tr!("导出统计"),
+            tr!("Timelens 统计"),
+        ),
+        "csv" => (
+            tr!("CSV 表格"),
+            tr!("选择文件"),
+            tr!("导出统计"),
+            tr!("Timelens 统计"),
+        ),
         _ => (
-            "Timelens 文件",
-            "选择文件",
-            "导出 Timelens 文件",
+            tr!("Timelens 文件"),
+            tr!("选择文件"),
+            tr!("导出 Timelens 文件"),
             "Timelens",
         ),
     };
@@ -99,7 +115,7 @@ pub fn choose_named(save: bool, extension: &str, name: Option<&str>) -> Result<O
     if okay == 0 {
         let code = unsafe { CommDlgExtendedError() };
         if code != 0 {
-            bail!("文件选择窗口失败：{code}");
+            bail!(tr!("文件选择窗口失败：{}", code));
         }
         return Ok(None);
     }
@@ -115,7 +131,7 @@ pub fn choose_named(save: bool, extension: &str, name: Option<&str>) -> Result<O
         let free = (2..1000)
             .map(|number| chosen.with_file_name(format!("{stem} ({number}).{extension}")))
             .find(|candidate| !candidate.exists())
-            .context("同名文件太多，请换一个文件名")?;
+            .context(tr!("同名文件太多，请换一个文件名"))?;
         return Ok(Some(free));
     }
     Ok(Some(chosen))
@@ -139,18 +155,18 @@ fn choose_folder() -> Result<Option<PathBuf>> {
     let _ = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) };
     let dialog: IFileOpenDialog =
         unsafe { CoCreateInstance(&FileOpenDialog, None, CLSCTX_INPROC_SERVER) }
-            .context("无法打开文件夹选择窗口")?;
+            .context(tr!("无法打开文件夹选择窗口"))?;
     unsafe {
         dialog.SetOptions(
             dialog.GetOptions()? | FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM | FOS_PATHMUSTEXIST,
         )?;
-        dialog.SetTitle(&HSTRING::from("选择数据的新位置"))?;
+        dialog.SetTitle(&HSTRING::from(tr!("选择数据的新位置")))?;
     }
     if let Err(error) = unsafe { dialog.Show(None) } {
         if error.code() == HRESULT::from_win32(ERROR_CANCELLED.0) {
             return Ok(None);
         }
-        bail!("文件夹选择窗口失败：{error}");
+        bail!(tr!("文件夹选择窗口失败：{}", error));
     }
     let name = unsafe { dialog.GetResult()?.GetDisplayName(SIGDN_FILESYSPATH)? };
     let text = unsafe { name.to_string() };
@@ -162,34 +178,34 @@ fn choose_folder() -> Result<Option<PathBuf>> {
 fn move_target(chosen: &str) -> Result<PathBuf> {
     let chosen = PathBuf::from(chosen.trim().trim_matches('"'));
     if chosen.as_os_str().is_empty() {
-        bail!("请先选择新的数据位置");
+        bail!(tr!("请先选择新的数据位置"));
     }
     if !chosen.is_dir() || fs::read_dir(&chosen)?.next().is_none() {
         return Ok(chosen);
     }
     let inner = chosen.join("Timelens");
     if inner.is_dir() && fs::read_dir(&inner)?.next().is_some() {
-        bail!(
+        bail!(tr!(
             "{} 已存在且不是空文件夹。Timelens 不会合并或覆盖已有数据，请换一个位置",
             inner.display()
-        );
+        ));
     }
     Ok(inner)
 }
 fn move_progress(step: RelocationStep, done: u64, total: u64) -> (f32, String) {
     let part = done as f32 / total.max(1) as f32;
     match step {
-        RelocationStep::Checking => (0.02, "正在检查当前数据…".to_owned()),
+        RelocationStep::Checking => (0.02, tr!("正在检查当前数据…").to_owned()),
         RelocationStep::Copying => (
             0.04 + part * 0.78,
-            format!(
+            tr!(
                 "正在复制 {} / {}",
                 crate::format_bytes(done),
                 crate::format_bytes(total)
             ),
         ),
-        RelocationStep::Verifying => (0.82 + part * 0.14, format!("正在校验快照 {done} / {total}")),
-        RelocationStep::Switching => (0.96 + part * 0.04, "正在切换到新位置…".to_owned()),
+        RelocationStep::Verifying => (0.82 + part * 0.14, tr!("正在校验快照 {} / {}", done, total)),
+        RelocationStep::Switching => (0.96 + part * 0.04, tr!("正在切换到新位置…").to_owned()),
     }
 }
 pub struct CollectorPause {
@@ -215,7 +231,7 @@ pub fn pause_collector(directory: &Path) -> Result<CollectorPause> {
         .create_new(true)
         .write(true)
         .open(&request)
-        .context("另一个数据维护操作正在进行")?;
+        .context(tr!("另一个数据维护操作正在进行"))?;
     f.write_all(b"replace-dataset")?;
     f.sync_all()?;
     let guard = CollectorPause {
@@ -227,7 +243,7 @@ pub fn pause_collector(directory: &Path) -> Result<CollectorPause> {
         let start = Instant::now();
         while !paused.exists() {
             if start.elapsed() > Duration::from_secs(10) {
-                bail!("采集器未确认暂停，未替换数据");
+                bail!(tr!("采集器未确认暂停，未替换数据"));
             }
             std::thread::sleep(Duration::from_millis(50));
         }
@@ -272,7 +288,7 @@ pub fn install(
         // Backups and restores each have their own password field.
         let password = if action == 2 {
             if g.get_password() != g.get_password_again() {
-                g.set_status("两次输入的备份密码不一致".into());
+                g.set_status(tr!("两次输入的备份密码不一致").into());
                 return;
             }
             g.get_password()
@@ -298,7 +314,7 @@ pub fn install(
                     )
                     .single()
             })
-            .map(|time| format!("Timelens 快照 {}", time.format("%Y-%m-%d %H-%M")));
+            .map(|time| tr!("Timelens 快照 {}", time.format("%Y-%m-%d %H-%M")));
         if action == 10 {
             let result: Result<()> = (|| {
                 use std::os::windows::process::CommandExt;
@@ -312,7 +328,7 @@ pub fn install(
                 Ok(())
             })();
             if let Err(e) = result {
-                g.set_status(format!("无法进入恢复：{e}").into());
+                g.set_status(tr!("无法进入恢复：{}", e).into());
             }
             return;
         }
@@ -324,7 +340,7 @@ pub fn install(
         g.set_status("".into());
         if action == 9 {
             g.set_move_progress(0.0);
-            g.set_move_step("正在准备…".into());
+            g.set_move_step(tr!("正在准备…").into());
             g.set_move_phase(1);
         }
         std::thread::spawn(move || {
@@ -357,16 +373,17 @@ pub fn install(
                                 )?;
                                 s.data_directory()
                                     .parent()
-                                    .context("数据父目录不可用")?
+                                    .context(tr!("数据父目录不可用"))?
                                     .to_path_buf()
                             };
                             // Read the backup back, as a restore would, before
                             // calling it done; a typo in the password shows now.
                             let info = Storage::prepare_restore(&path, password, &parent)
-                                .context("备份已写出，但回读校验没有通过")?
+                                .context(tr!("备份已写出，但回读校验没有通过"))?
                                 .info;
                             let bytes = fs::metadata(&path).map_or(0, |m| m.len());
-                            Ok(Update::Done(format!(
+                            Ok(Update::Done(trn!(
+                                info.files.len(),
                                 "备份已创建并通过校验 · {} 个文件 · {}，已导出到 {}",
                                 info.files.len(),
                                 crate::format_bytes(bytes),
@@ -378,48 +395,50 @@ pub fn install(
                         let parent = lock(&storage)?
                             .data_directory()
                             .parent()
-                            .context("数据父目录不可用")?
+                            .context(tr!("数据父目录不可用"))?
                             .to_path_buf();
                         let prepared = Storage::prepare_restore(&path, password, &parent)?;
                         let created = chrono::Local
                             .timestamp_millis_opt(prepared.info.created_utc_ms)
                             .single()
                             .map_or_else(
-                                || "时间未知".to_owned(),
+                                || tr!("时间未知").to_owned(),
                                 |t| t.format("%Y-%m-%d %H:%M").to_string(),
                             );
-                        let info = format!(
-                            "校验通过 · 备份创建于 {created} · {} 个文件 · {}。\n来源：{}",
+                        let info = trn!(
+                            prepared.info.files.len(),
+                            "校验通过 · 备份创建于 {} · {} 个文件 · {}。\n来源：{}",
+                            created,
                             prepared.info.files.len(),
                             if prepared.info.includes_snapshots {
-                                "包含快照"
+                                tr!("包含快照")
                             } else {
-                                "不含快照；相关槽将显示已省略"
+                                tr!("不含快照；相关槽将显示已省略")
                             },
                             path.display()
                         );
-                        *stage.lock().map_err(|_| anyhow!("恢复锁不可用"))? = Some(prepared);
+                        *stage.lock().map_err(|_| anyhow!(tr!("恢复锁不可用")))? = Some(prepared);
                         Ok(Update::Ready(info))
                     }),
                     4 => {
                         if !confirm {
-                            bail!("请确认整体替换");
+                            bail!(tr!("请确认整体替换"));
                         }
                         let prepared = stage
                             .lock()
-                            .map_err(|_| anyhow!("恢复锁不可用"))?
+                            .map_err(|_| anyhow!(tr!("恢复锁不可用")))?
                             .take()
-                            .context("请先重新校验备份")?;
+                            .context(tr!("请先重新校验备份"))?;
                         crate::snapshot::run_heavy_task(|| {
                             let directory = lock(&storage)?.control_directory().to_path_buf();
                             let _collector = pause_collector(&directory)?;
                             lock(&storage)?.replace_from_backup(prepared, true)?;
                             dataset_changed();
-                            Ok(Update::Done("数据集已恢复。".into()))
+                            Ok(Update::Done(tr!("数据集已恢复。").into()))
                         })
                     }
                     7 => {
-                        let id = slot.context("请先在快照面板选择一张可用图片")?;
+                        let id = slot.context(tr!("请先在快照面板选择一张可用图片"))?;
                         let Some(path) = choose_named(true, "webp", slot_name.as_deref())? else {
                             return Ok(Update::Canceled);
                         };
@@ -431,12 +450,12 @@ pub fn install(
                                 .open(&path)?;
                             file.write_all(&bytes)?;
                             file.sync_all()?;
-                            Ok(Update::Done(format!("快照已导出到 {}", path.display())))
+                            Ok(Update::Done(tr!("快照已导出到 {}", path.display())))
                         })
                     }
                     8 => crate::snapshot::run_heavy_task(|| {
                         lock(&storage)?.verify_integrity()?;
-                        Ok(Update::Checked(format!(
+                        Ok(Update::Checked(tr!(
                             "上次检查：{} · 通过",
                             chrono::Local::now().format("%H:%M")
                         )))
@@ -466,23 +485,26 @@ pub fn install(
                                 )?;
                                 let location = guard.data_directory().display().to_string();
                                 let suffix = if remaining == 0 {
-                                    "原位置的数据已清理，记录已恢复。".to_owned()
+                                    tr!("原位置的数据已清理，记录已恢复。").to_owned()
                                 } else {
-                                    format!(
-                                        "原位置有 {remaining} 个文件未能删除，可以稍后手动检查。"
+                                    trn!(
+                                        remaining,
+                                        "原位置有 {} 个文件未能删除，可以稍后手动检查。",
+                                        remaining
                                     )
                                 };
-                                Ok(format!("数据现在保存在：\n{location}\n{suffix}"))
+                                Ok(tr!("数据现在保存在：\n{}\n{}", location, suffix))
                             })
                         })();
                         Ok(match moved {
                             Ok(message) => Update::Moved(message),
-                            Err(error) => Update::MoveFailed(format!(
-                                "{error:#}\n原来的数据没有改动，Timelens 会继续使用原位置。"
+                            Err(error) => Update::MoveFailed(tr!(
+                                "{}\n原来的数据没有改动，Timelens 会继续使用原位置。",
+                                format!("{error:#}")
                             )),
                         })
                     }
-                    _ => bail!("未知操作"),
+                    _ => bail!(tr!("未知操作")),
                 }
             })();
             let update = result.unwrap_or_else(|e| Update::Failed(e.to_string()));
@@ -530,7 +552,7 @@ pub fn install(
                 }
                 Update::Checked(message) => {
                     g.set_integrity(message.into());
-                    g.set_status("完整性与外键检查通过".into());
+                    g.set_status(tr!("完整性与外键检查通过").into());
                 }
                 Update::Ready(info) => {
                     g.set_restore_info(info.into());
@@ -548,7 +570,7 @@ pub fn install(
                     g.set_sensitive_confirmed(false);
                 }
                 Update::Failed(message) => {
-                    g.set_status(format!("操作失败：{message}").into());
+                    g.set_status(tr!("操作失败：{}", message).into());
                     g.set_restore_ready(false);
                 }
                 Update::Canceled => {}

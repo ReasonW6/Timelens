@@ -214,7 +214,7 @@ const STEPS: &[Step] = &[
     ("14-move-progress", |w| {
         let data = w.global::<DataState>();
         data.set_move_progress(0.42);
-        data.set_move_step("正在复制 12.4 MB / 29.5 MB".into());
+        data.set_move_step(crate::i18n::tr!("正在复制 {} / {}", "12.4 MB", "29.5 MB").into());
         data.set_move_phase(1);
     }),
     ("15-move-failed", |w| {

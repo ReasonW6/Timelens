@@ -31,4 +31,4 @@ export struct DayAnchor { title: string, subtitle: string, duration: string, app
 // midnight and `span-minutes` its length, so a point on the bar reads as a time.
 // From `shift-at` (a share of the bar) on, the clock reads `shift-minutes`
 // later, as when daylight saving time starts or ends during the activity.
-export struct Participant { name: string, icon: image, tint: color, role: string, focused: string, visible: string, background: string, segments: [SegmentRow], lookup: [int], start-minute: float, span-minutes: float, shift-at: float, shift-minutes: float }
+export struct Participant { name: string, icon: image, tint: color, role: string, kind: int, focused: string, visible: string, background: string, segments: [SegmentRow], lookup: [int], start-minute: float, span-minutes: float, shift-at: float, shift-minutes: float }

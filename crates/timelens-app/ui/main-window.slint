@@ -1,4 +1,4 @@
-import { LineEdit, ListView, ScrollView, Palette } from "std-widgets.slint";
+import { ComboBox, LineEdit, ListView, ScrollView, Palette } from "std-widgets.slint";
 import { Theme, AppIcons, Action, NavItem, Label, Note, PageTitle, Eyebrow, Figure, Rule, DetailRow, ConfirmationDialog, CheckBox, Card, Badge, Dot, AppIcon, Segmented, Segment, Switch, SettingRow, SettingsHeader, SettingsGroup, SettingExpander, StatusLine } from "theme.slint";
 import { AppRow, WindowRow, SegmentRow, SnapshotRow, HistoryItem, DayAnchor, Participant, ShareSlice, StackApp } from "models.slint";
 import { HistoryRow, StickyDay, ParticipantItem, AppTimes } from "timeline.slint";
@@ -14,7 +14,7 @@ component WindowItem inherits Rectangle {
     vertical-stretch: 0;
     forward-focus: key;
     accessible-role: button;
-    accessible-label: root.item.label + "，聚焦 " + root.item.focused;
+    accessible-label: @tr("{}，聚焦 {}", root.item.label, root.item.focused);
     accessible-action-default => { root.expanded = !root.expanded; }
     border-radius: 8px;
     border-width: key.has-focus ? 2px : 0px;
@@ -68,7 +68,7 @@ component DetailPane inherits Rectangle {
             padding-left: 24px; padding-right: 12px; padding-top: 14px;
             Eyebrow { text: root.title; vertical-alignment: center; }
             Rectangle { horizontal-stretch: 1; }
-            Action { quiet: true; icon: @image-url("icons/x.svg"); accessible-label: "关闭详情"; clicked => { root.close(); } }
+            Action { quiet: true; icon: @image-url("icons/x.svg"); accessible-label: @tr("关闭详情"); clicked => { root.close(); } }
         }
         detail-scroll := ScrollView {
             horizontal-scrollbar-policy: always-off;
@@ -123,7 +123,7 @@ component SnapshotTile inherits Rectangle {
     accessible-role: button;
     accessible-checkable: root.selecting && root.item.success;
     accessible-checked: root.selecting && root.item.checked;
-    accessible-label: root.item.time + "，" + root.item.display + "，" + root.item.result;
+    accessible-label: @tr("{}，{}，{}", root.item.time, root.item.display, root.item.result);
     accessible-enabled: !Theme.modal-open;
     accessible-action-default => { if !Theme.modal-open { root.activate(false); } }
     VerticalLayout {
@@ -271,7 +271,7 @@ component PhotoViewer inherits Rectangle {
     changed active => { if root.active { keys.focus(); } }
     background: #0b0e16;
     accessible-role: groupbox;
-    accessible-label: "快照大图";
+    accessible-label: @tr("快照大图");
 
     // Clicks, drags and the wheel off the controls stay in the viewer rather
     // than reaching the page beneath it.
@@ -303,7 +303,7 @@ component PhotoViewer inherits Rectangle {
                 width: root.shown-width; height: root.shown-height;
                 source: root.source; image-fit: fill;
                 accessible-role: image;
-                accessible-label: "快照，缩放 " + Math.round(root.scale * 100) + "%";
+                accessible-label: @tr("快照，缩放 {}%", Math.round(root.scale * 100));
             }
             TouchArea {
                 mouse-cursor: root.pannable ? (self.pressed ? MouseCursor.grabbing : MouseCursor.grab) : MouseCursor.default;
@@ -330,13 +330,13 @@ component PhotoViewer inherits Rectangle {
             if root.can-previous : ViewerButton {
                 x: 16px; y: (parent.height - self.height) / 2; width: 44px; height: 44px;
                 background: #00000059;
-                icon: @image-url("icons/chevron-left.svg"); label: "上一张";
+                icon: @image-url("icons/chevron-left.svg"); label: @tr("上一张");
                 clicked => { root.step(-1); }
             }
             if root.can-next : ViewerButton {
                 x: parent.width - self.width - 16px; y: (parent.height - self.height) / 2; width: 44px; height: 44px;
                 background: #00000059;
-                icon: @image-url("icons/chevron-right.svg"); label: "下一张";
+                icon: @image-url("icons/chevron-right.svg"); label: @tr("下一张");
                 clicked => { root.step(1); }
             }
         }
@@ -347,9 +347,9 @@ component PhotoViewer inherits Rectangle {
             Text { text: root.detail; color: #ffffffd9; font-size: 13px; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; }
             Text { text: root.position; color: #ffffff8c; font-size: 12px; vertical-alignment: center; }
             Rectangle { width: 12px; }
-            VerticalLayout { alignment: center; ViewerButton { icon: @image-url("icons/download.svg"); text: "导出"; enabled: root.can-export; clicked => { root.export(); } } }
-            VerticalLayout { alignment: center; ViewerButton { icon: @image-url("icons/trash.svg"); text: "删除…"; danger: true; enabled: root.can-delete; clicked => { root.delete(); } } }
-            VerticalLayout { alignment: center; ViewerButton { icon: @image-url("icons/x.svg"); label: "关闭大图（Esc）"; clicked => { root.close(); } } }
+            VerticalLayout { alignment: center; ViewerButton { icon: @image-url("icons/download.svg"); text: @tr("导出"); enabled: root.can-export; clicked => { root.export(); } } }
+            VerticalLayout { alignment: center; ViewerButton { icon: @image-url("icons/trash.svg"); text: @tr("删除…"); danger: true; enabled: root.can-delete; clicked => { root.delete(); } } }
+            VerticalLayout { alignment: center; ViewerButton { icon: @image-url("icons/x.svg"); label: @tr("关闭大图（Esc）"); clicked => { root.close(); } } }
         }
 
         // Zoom controls, like the Photos bar beneath the image.
@@ -360,12 +360,12 @@ component PhotoViewer inherits Rectangle {
             background: #ffffff14;
             zoom-bar := HorizontalLayout {
                 padding: 4px; spacing: 2px;
-                ViewerButton { icon: @image-url("icons/zoom-out.svg"); label: "缩小（-）"; enabled: root.scale > min(root.fit, 1) * 1.001; clicked => { root.zoom-to(root.scale * 0.8, stage.width / 2, stage.height / 2); } }
+                ViewerButton { icon: @image-url("icons/zoom-out.svg"); label: @tr("缩小（-）"); enabled: root.scale > min(root.fit, 1) * 1.001; clicked => { root.zoom-to(root.scale * 0.8, stage.width / 2, stage.height / 2); } }
                 Text { width: 52px; text: Math.round(root.scale * 100) + "%"; color: #ffffffe6; font-size: 13px; horizontal-alignment: center; vertical-alignment: center; }
-                ViewerButton { icon: @image-url("icons/zoom-in.svg"); label: "放大（+）"; enabled: root.scale < 7.99; clicked => { root.zoom-to(root.scale * 1.25, stage.width / 2, stage.height / 2); } }
+                ViewerButton { icon: @image-url("icons/zoom-in.svg"); label: @tr("放大（+）"); enabled: root.scale < 7.99; clicked => { root.zoom-to(root.scale * 1.25, stage.width / 2, stage.height / 2); } }
                 Rectangle { width: 1px; background: #ffffff26; }
-                ViewerButton { icon: @image-url("icons/maximize.svg"); text: "适应窗口"; enabled: !root.fitted; clicked => { root.fit-window(); } }
-                ViewerButton { text: "1:1"; label: "实际大小（1）"; enabled: root.fitted || root.zoom != 1; clicked => { root.zoom-to(1, stage.width / 2, stage.height / 2); } }
+                ViewerButton { icon: @image-url("icons/maximize.svg"); text: @tr("适应窗口"); enabled: !root.fitted; clicked => { root.fit-window(); } }
+                ViewerButton { text: "1:1"; label: @tr("实际大小（1）"); enabled: root.fitted || root.zoom != 1; clicked => { root.zoom-to(1, stage.width / 2, stage.height / 2); } }
             }
         }
     }
@@ -402,6 +402,8 @@ component MonthGrid inherits VerticalLayout {
     in-out property <int> view-m: 1;
     callback picked(string);
     private property <[int]> month-offsets: [0, 3, 2, 5, 0, 3, 5, 1, 4, 6, 2, 4];
+    private property <[string]> month-names: [@tr("1月"), @tr("2月"), @tr("3月"), @tr("4月"), @tr("5月"), @tr("6月"),
+        @tr("7月"), @tr("8月"), @tr("9月"), @tr("10月"), @tr("11月"), @tr("12月")];
     private property <int> lead: root.first-weekday(root.view-y, root.view-m);
     private property <int> days: root.month-days(root.view-y, root.view-m);
     private property <bool> can-next-month: root.view-y * 100 + root.view-m < floor(root.today-ymd / 100);
@@ -426,13 +428,13 @@ component MonthGrid inherits VerticalLayout {
     spacing: 6px;
     HorizontalLayout {
         height: 26px;
-        Text { text: root.view-y + "年" + root.view-m + "月"; color: Theme.ink; font-size: 14px; font-weight: 600; vertical-alignment: center; }
+        Text { text: @tr("{0}年{1}", root.view-y, root.month-names[root.view-m - 1]); color: Theme.ink; font-size: 14px; font-weight: 600; vertical-alignment: center; }
         Rectangle { horizontal-stretch: 1; }
-        Action { height: 26px; quiet: true; icon: @image-url("icons/chevron-left.svg"); accessible-label: "上个月"; enabled: root.can-previous-month; clicked => { root.move-month(-1); } }
-        Action { height: 26px; quiet: true; icon: @image-url("icons/chevron-right.svg"); accessible-label: "下个月"; enabled: root.can-next-month; clicked => { root.move-month(1); } }
+        Action { height: 26px; quiet: true; icon: @image-url("icons/chevron-left.svg"); accessible-label: @tr("上个月"); enabled: root.can-previous-month; clicked => { root.move-month(-1); } }
+        Action { height: 26px; quiet: true; icon: @image-url("icons/chevron-right.svg"); accessible-label: @tr("下个月"); enabled: root.can-next-month; clicked => { root.move-month(1); } }
     }
     HorizontalLayout {
-        for name in ["一", "二", "三", "四", "五", "六", "日"] : Text { horizontal-stretch: 1; text: name; color: Theme.ink-3; font-size: 11px; horizontal-alignment: center; }
+        for name in [@tr("一"), @tr("二"), @tr("三"), @tr("四"), @tr("五"), @tr("六"), @tr("日")] : Text { horizontal-stretch: 1; text: name; color: Theme.ink-3; font-size: 11px; horizontal-alignment: center; }
     }
     calendar := Rectangle {
         height: 6 * 34px;
@@ -455,7 +457,7 @@ component MonthGrid inherits VerticalLayout {
                 border-color: day-key.has-focus ? Theme.focus : Theme.brand;
                 forward-focus: day-key;
                 accessible-role: button;
-                accessible-label: root.view-m + "月" + day-cell.date + "日";
+                accessible-label: @tr("{0}{1}日", root.month-names[root.view-m - 1], day-cell.date);
                 accessible-enabled: !day-cell.off;
                 accessible-action-default => { if !day-cell.off { day-button.pick(); } }
                 Text {
@@ -509,21 +511,21 @@ component RangePicker inherits HorizontalLayout {
         root.view-m = Math.mod(floor(ymd / 100), 100);
     }
     spacing: 4px;
-    VerticalLayout { alignment: center; Action { quiet: true; icon: @image-url("icons/chevron-left.svg"); accessible-label: "前一天"; enabled: !root.all; clicked => { root.step(-1); } } }
+    VerticalLayout { alignment: center; Action { quiet: true; icon: @image-url("icons/chevron-left.svg"); accessible-label: @tr("前一天"); enabled: !root.all; clicked => { root.step(-1); } } }
     VerticalLayout {
         alignment: center;
         trigger := Action {
             text: root.label;
             icon: @image-url("icons/calendar.svg");
-            accessible-label: "选择范围，当前 " + root.label;
+            accessible-label: @tr("选择范围，当前 {}", root.label);
             clicked => {
                 root.show-month(root.selected-ymd > 0 ? root.selected-ymd : root.today-ymd);
                 picker.show();
             }
         }
     }
-    VerticalLayout { alignment: center; Action { quiet: true; icon: @image-url("icons/chevron-right.svg"); accessible-label: "后一天"; enabled: !root.all && root.can-next; clicked => { root.step(1); } } }
-    VerticalLayout { alignment: center; Action { text: "今天"; enabled: root.all || !root.is-today; clicked => { root.today(); } } }
+    VerticalLayout { alignment: center; Action { quiet: true; icon: @image-url("icons/chevron-right.svg"); accessible-label: @tr("后一天"); enabled: !root.all && root.can-next; clicked => { root.step(1); } } }
+    VerticalLayout { alignment: center; Action { text: @tr("今天"); enabled: root.all || !root.is-today; clicked => { root.today(); } } }
 
     picker := PopupWindow {
         x: root.width - self.width;
@@ -543,13 +545,13 @@ component RangePicker inherits HorizontalLayout {
                     // Quick ranges.
                     VerticalLayout {
                         width: 156px; spacing: 2px; alignment: LayoutAlignment.start;
-                        Eyebrow { text: "快速选择"; height: 26px; vertical-alignment: center; }
+                        Eyebrow { text: @tr("快速选择"); height: 26px; vertical-alignment: center; }
                         // Choose before closing: closing tears down this conditional row first.
-                        if root.allow-all : QuickRange { text: "全部记录"; selected: root.all; clicked => { root.choose-all(); picker.close(); } }
-                        QuickRange { text: "今天"; selected: !root.all && root.is-today; clicked => { picker.close(); root.today(); } }
-                        QuickRange { text: "昨天"; clicked => { picker.close(); root.days-ago(1); } }
-                        QuickRange { text: "最近 7 天"; clicked => { picker.close(); root.horizon(168); } }
-                        QuickRange { text: "最近 30 天"; clicked => { picker.close(); root.horizon(720); } }
+                        if root.allow-all : QuickRange { text: @tr("全部记录"); selected: root.all; clicked => { root.choose-all(); picker.close(); } }
+                        QuickRange { text: @tr("今天"); selected: !root.all && root.is-today; clicked => { picker.close(); root.today(); } }
+                        QuickRange { text: @tr("昨天"); clicked => { picker.close(); root.days-ago(1); } }
+                        QuickRange { text: @tr("最近 7 天"); clicked => { picker.close(); root.horizon(168); } }
+                        QuickRange { text: @tr("最近 30 天"); clicked => { picker.close(); root.horizon(720); } }
                     }
                     Rectangle { width: 1px; background: Theme.line; }
                     MonthGrid {
@@ -565,20 +567,20 @@ component RangePicker inherits HorizontalLayout {
                 // Part of the chosen day.
                 HorizontalLayout {
                     spacing: 8px;
-                    Eyebrow { text: "当天时段"; vertical-alignment: center; }
+                    Eyebrow { text: @tr("当天时段"); vertical-alignment: center; }
                     Segmented {
-                        Segment { text: "全天"; enabled: root.day-chosen; clicked => { picker.close(); root.span("00:00", "24:00"); } }
-                        Segment { text: "上午"; enabled: root.day-chosen; clicked => { picker.close(); root.span("00:00", "12:00"); } }
-                        Segment { text: "下午"; enabled: root.day-chosen; clicked => { picker.close(); root.span("12:00", "18:00"); } }
-                        Segment { text: "晚上"; enabled: root.day-chosen; clicked => { picker.close(); root.span("18:00", "24:00"); } }
+                        Segment { text: @tr("全天"); enabled: root.day-chosen; clicked => { picker.close(); root.span("00:00", "24:00"); } }
+                        Segment { text: @tr("上午"); enabled: root.day-chosen; clicked => { picker.close(); root.span("00:00", "12:00"); } }
+                        Segment { text: @tr("下午"); enabled: root.day-chosen; clicked => { picker.close(); root.span("12:00", "18:00"); } }
+                        Segment { text: @tr("晚上"); enabled: root.day-chosen; clicked => { picker.close(); root.span("18:00", "24:00"); } }
                     }
                     Rectangle { horizontal-stretch: 1; }
                     LineEdit { width: 72px; height: 34px; text <=> root.start; placeholder-text: "HH:MM"; enabled: root.day-chosen; }
                     Text { text: "–"; color: Theme.ink-3; vertical-alignment: center; }
                     LineEdit { width: 72px; height: 34px; text <=> root.end; placeholder-text: "HH:MM"; enabled: root.day-chosen; accepted => { picker.close(); root.span(root.start, root.end); } }
-                    Action { text: "应用"; enabled: root.day-chosen; clicked => { picker.close(); root.span(root.start, root.end); } }
+                    Action { text: @tr("range" => "应用"); enabled: root.day-chosen; clicked => { picker.close(); root.span(root.start, root.end); } }
                 }
-                if !root.day-chosen : Note { text: "先在日历中选择一天，再缩小到当天的某个时段。"; font-size: 12px; }
+                if !root.day-chosen : Note { text: @tr("先在日历中选择一天，再缩小到当天的某个时段。"); font-size: 12px; }
             }
         }
     }
@@ -608,9 +610,9 @@ component JumpPicker inherits Rectangle {
     height: 34px;
     trigger := Action {
         width: parent.width;
-        text: root.compact ? "" : "跳到日期";
+        text: root.compact ? "" : @tr("跳到日期");
         icon: @image-url("icons/calendar.svg");
-        accessible-label: "跳到日期";
+        accessible-label: @tr("跳到日期");
         clicked => { root.open(); }
     }
     popup := PopupWindow {
@@ -634,7 +636,7 @@ component JumpPicker inherits Rectangle {
                     view-m <=> root.view-m;
                     picked(date) => { popup.close(); root.jump(date); }
                 }
-                Note { text: "灰色的日子早于最早的记录或晚于今天。"; font-size: 12px; }
+                Note { text: @tr("灰色的日子早于最早的记录或晚于今天。"); font-size: 12px; }
             }
         }
     }
@@ -651,12 +653,12 @@ component OriginTag inherits Rectangle {
     border-width: 1px; border-color: Theme.brand-line;
     tag := HorizontalLayout {
         padding-left: 12px; padding-right: 4px; spacing: 4px;
-        Text { text: "来自时间线：" + root.text; color: Theme.brand-ink; font-size: 12px; vertical-alignment: center; }
+        Text { text: @tr("来自时间线：{}", root.text); color: Theme.brand-ink; font-size: 12px; vertical-alignment: center; }
         Rectangle {
             width: 22px; height: 22px; y: 3px; border-radius: 11px;
             background: clear-touch.has-hover ? Theme.hover-tint : transparent;
             accessible-role: button;
-            accessible-label: "恢复原来的范围";
+            accessible-label: @tr("恢复原来的范围");
             accessible-action-default => { root.clear(); }
             Image { width: 12px; height: 12px; source: @image-url("icons/x.svg"); colorize: Theme.brand-ink; }
             clear-touch := TouchArea { mouse-cursor: pointer; clicked => { root.clear(); } }
@@ -685,7 +687,7 @@ export component AppWindow inherits Window {
     preferred-width: 1440px; preferred-height: 900px;
     min-width: 960px; min-height: 600px;
     background: Theme.canvas-brush;
-    default-font-family: "Microsoft YaHei UI";
+    default-font-family: Theme.font-ui;
     default-font-size: 14px;
     // The std widgets take the same light or dark look as Theme.
     private property <bool> dark-look: Theme.dark;
@@ -700,19 +702,19 @@ export component AppWindow inherits Window {
     // False while the window is hidden or minimized, so animations rest.
     in property <bool> window-shown: true;
     in property <string> range-label;
-    in property <string> selected-name: "选择一条活动";
+    in property <string> selected-name: @tr("选择一条活动");
     in property <image> selected-icon;
     in property <color> selected-tint: Theme.ink-3;
-    in property <string> opened-value: "0 秒";
-    in property <string> displayed-value: "0 秒";
-    in property <string> focused-value: "0 秒";
-    in property <string> background-value: "0 秒";
-    in property <string> input-value: "键盘 0 · 鼠标 0";
-    in property <string> keyboard-value: "0 次";
-    in property <string> mouse-value: "0 次";
+    in property <string> opened-value: @tr("0 秒");
+    in property <string> displayed-value: @tr("0 秒");
+    in property <string> focused-value: @tr("0 秒");
+    in property <string> background-value: @tr("0 秒");
+    in property <string> input-value: @tr("键盘 0 · 鼠标 0");
+    in property <string> keyboard-value: @tr("0 次");
+    in property <string> mouse-value: @tr("0 次");
     in property <string> range-keyboard: "0";
     in property <string> range-mouse: "0";
-    in property <string> retention-value: "30 天 · 100 MiB";
+    in property <string> retention-value: @tr("30 天 · 100 MiB");
     in property <int> retention-days: 30;
     // The space limit in MiB, how much the records use, and how far back they reach.
     in property <int> retention-mib: 100;
@@ -799,14 +801,14 @@ export component AppWindow inherits Window {
     in property <[SegmentRow]> segments;
     in property <[SnapshotRow]> snapshots;
     in property <image> snapshot-preview;
-    in property <string> snapshot-detail: "选择快照以查看详情";
-    in property <string> snapshot-policy-label: "快照已关闭";
+    in property <string> snapshot-detail: @tr("选择快照以查看详情");
+    in property <string> snapshot-policy-label: @tr("快照已关闭");
     // What the list holds, and whether it stops short of the range.
     in property <string> snapshot-summary;
     in property <bool> snapshot-truncated;
     // When the selected snapshot was taken, for the delete confirmation.
     in property <string> snapshot-selected-time;
-    in property <string> snapshot-exclusion-label: "先选择应用";
+    in property <string> snapshot-exclusion-label: @tr("先选择应用");
     in property <bool> snapshot-enabled;
     in property <int> snapshot-interval-minutes: 5;
     in property <int> snapshot-retention-days: 30;
@@ -928,6 +930,10 @@ export component AppWindow inherits Window {
     callback general-opened;
     // 0 follows the system, 1 light, 2 dark.
     callback theme-mode-selected(int);
+    // 0 follows Windows; then Simplified Chinese, Traditional Chinese, English,
+    // Japanese and Korean.
+    in-out property <int> language-choice: 0;
+    callback language-selected(int);
     callback startup-changed(bool);
     callback startup-ready;
     callback tray-events-ready;
@@ -1050,11 +1056,11 @@ export component AppWindow inherits Window {
             drop-shadow-blur: 24px; drop-shadow-offset-y: 8px; drop-shadow-color: Theme.shadow-strong;
             pause-sheet := VerticalLayout {
                 padding: 8px; spacing: 2px;
-                Text { x: 12px; height: 30px; text: "暂停记录多久？"; color: Theme.ink-3; font-size: 12px; vertical-alignment: center; }
-                QuickRange { text: "15 分钟"; clicked => { pause-menu.close(); CollectionState.pause-for(15); } }
-                QuickRange { text: "1 小时"; clicked => { pause-menu.close(); CollectionState.pause-for(60); } }
-                QuickRange { text: "直到明天"; clicked => { pause-menu.close(); CollectionState.pause-for(-2); } }
-                QuickRange { text: "直到手动继续"; clicked => { pause-menu.close(); CollectionState.pause-for(-1); } }
+                Text { x: 12px; height: 30px; text: @tr("暂停记录多久？"); color: Theme.ink-3; font-size: 12px; vertical-alignment: center; }
+                QuickRange { text: @tr("15 分钟"); clicked => { pause-menu.close(); CollectionState.pause-for(15); } }
+                QuickRange { text: @tr("1 小时"); clicked => { pause-menu.close(); CollectionState.pause-for(60); } }
+                QuickRange { text: @tr("直到明天"); clicked => { pause-menu.close(); CollectionState.pause-for(-2); } }
+                QuickRange { text: @tr("直到手动继续"); clicked => { pause-menu.close(); CollectionState.pause-for(-1); } }
             }
         }
     }
@@ -1121,13 +1127,13 @@ export component AppWindow inherits Window {
                     if !root.rail : VerticalLayout {
                         alignment: center; spacing: 1px;
                         Text { text: "Timelens"; color: Theme.ink; font-family: Theme.font-display; font-size: 17px; font-weight: 700; }
-                        Text { text: "本机时间回看"; color: Theme.ink-3; font-size: 11px; }
+                        Text { text: @tr("本机时间回看"); color: Theme.ink-3; font-size: 11px; }
                     }
                 }
                 Rectangle { height: 14px; }
-                NavItem { compact: root.rail; text: "时间线"; icon: @image-url("icons/clock.svg"); selected: root.page == 0; clicked => { root.sidebar-navigate(0); } }
-                NavItem { compact: root.rail; text: "统计"; icon: @image-url("icons/chart-bar.svg"); selected: root.page == 3; clicked => { root.sidebar-navigate(3); } }
-                snapshots-nav := NavItem { compact: root.rail; text: "快照"; icon: @image-url("icons/photo.svg"); selected: root.page == 2; clicked => { root.sidebar-navigate(2); } }
+                NavItem { compact: root.rail; text: @tr("时间线"); icon: @image-url("icons/clock.svg"); selected: root.page == 0; clicked => { root.sidebar-navigate(0); } }
+                NavItem { compact: root.rail; text: @tr("统计"); icon: @image-url("icons/chart-bar.svg"); selected: root.page == 3; clicked => { root.sidebar-navigate(3); } }
+                snapshots-nav := NavItem { compact: root.rail; text: @tr("快照"); icon: @image-url("icons/photo.svg"); selected: root.page == 2; clicked => { root.sidebar-navigate(2); } }
                 Rectangle { vertical-stretch: 1; }
                 // A narrow sidebar keeps only the state dot and the switch.
                 if root.rail : VerticalLayout {
@@ -1136,7 +1142,7 @@ export component AppWindow inherits Window {
                     Action {
                         height: 34px;
                         icon: CollectionState.paused ? @image-url("icons/player-play.svg") : @image-url("icons/player-pause.svg");
-                        accessible-label: CollectionState.paused ? "继续记录" : "暂停记录";
+                        accessible-label: CollectionState.paused ? @tr("继续记录") : @tr("暂停记录");
                         accent: CollectionState.paused;
                         enabled: !CollectionState.busy && !root.action-busy;
                         clicked => { root.toggle-recording(); }
@@ -1155,19 +1161,19 @@ export component AppWindow inherits Window {
                             VerticalLayout {
                                 spacing: 2px;
                                 Text {
-                                    text: CollectionState.paused ? "已暂停记录" : root.collector-state == 2 ? "采集器未连接" : root.collector-state == 1 ? "正在连接采集器" : "正在记录";
+                                    text: CollectionState.paused ? @tr("已暂停记录") : root.collector-state == 2 ? @tr("采集器未连接") : root.collector-state == 1 ? @tr("正在连接采集器") : @tr("正在记录");
                                     color: root.recording-unavailable ? Theme.danger : Theme.ink;
                                     font-size: 13px; font-weight: 600;
                                 }
                                 Text {
-                                    text: CollectionState.paused ? (CollectionState.resume-label != "" ? CollectionState.resume-label : "直到手动继续") : root.collector-state == 2 ? "会自动尝试重启采集器" : root.collector-state == 1 ? "等待首次上报…" : "数据只保存在这台电脑";
+                                    text: CollectionState.paused ? (CollectionState.resume-label != "" ? CollectionState.resume-label : @tr("直到手动继续")) : root.collector-state == 2 ? @tr("会自动尝试重启采集器") : root.collector-state == 1 ? @tr("等待首次上报…") : @tr("数据只保存在这台电脑");
                                     color: Theme.ink-3; font-size: 11px; wrap: word-wrap;
                                 }
                             }
                         }
                         Action {
                             height: 30px;
-                            text: CollectionState.paused ? "继续记录" : "暂停记录";
+                            text: CollectionState.paused ? @tr("继续记录") : @tr("暂停记录");
                             icon: CollectionState.paused ? @image-url("icons/player-play.svg") : @image-url("icons/player-pause.svg");
                             accent: CollectionState.paused;
                             enabled: !CollectionState.busy && !root.action-busy;
@@ -1176,7 +1182,7 @@ export component AppWindow inherits Window {
                     }
                 }
                 Rectangle { height: 8px; }
-                settings-nav := NavItem { compact: root.rail; text: "设置"; icon: @image-url("icons/settings.svg"); selected: root.settings-open; clicked => { root.open-settings(root.settings-tab); } }
+                settings-nav := NavItem { compact: root.rail; text: @tr("设置"); icon: @image-url("icons/settings.svg"); selected: root.settings-open; clicked => { root.open-settings(root.settings-tab); } }
             }
 
             // The content sheet.
@@ -1206,7 +1212,7 @@ export component AppWindow inherits Window {
                                         LineEdit {
                                             min-width: 160px; preferred-width: 300px; horizontal-stretch: 0;
                                             text <=> root.history-query;
-                                            placeholder-text: "搜索应用，例如 微信";
+                                            placeholder-text: @tr("搜索应用，例如 微信");
                                             // Searching waits for a pause in typing.
                                             edited(text) => { root.delay-search(); }
                                             accepted => { root.stop-search-delay(); root.history-search(root.history-query); }
@@ -1214,7 +1220,7 @@ export component AppWindow inherits Window {
                                         if root.history-query != "" : VerticalLayout {
                                             alignment: center;
                                             Action {
-                                                quiet: true; icon: @image-url("icons/x.svg"); accessible-label: "清除搜索";
+                                                quiet: true; icon: @image-url("icons/x.svg"); accessible-label: @tr("清除搜索");
                                                 clicked => { root.stop-search-delay(); root.history-query = ""; root.history-search(""); }
                                             }
                                         }
@@ -1297,10 +1303,10 @@ export component AppWindow inherits Window {
                                         }
                                         if root.history-search-empty : VerticalLayout {
                                             alignment: center; spacing: 12px;
-                                            Text { text: "最近 30 天没有找到“" + root.history-query + "”"; color: Theme.ink-2; font-size: 14px; horizontal-alignment: center; }
+                                            Text { text: @tr("最近 30 天没有找到“{}”", root.history-query); color: Theme.ink-2; font-size: 14px; horizontal-alignment: center; }
                                             HorizontalLayout {
                                                 alignment: center;
-                                                Action { text: "清除搜索"; clicked => { root.stop-search-delay(); root.history-query = ""; root.history-search(""); } }
+                                                Action { text: @tr("清除搜索"); clicked => { root.stop-search-delay(); root.history-query = ""; root.history-search(""); } }
                                             }
                                         }
                                         // Back to now, once the user has scrolled away from it.
@@ -1310,7 +1316,7 @@ export component AppWindow inherits Window {
                                             border-radius: 8px;
                                             drop-shadow-blur: 14px; drop-shadow-offset-y: 4px; drop-shadow-color: Theme.shadow-strong;
                                             back-now := Action {
-                                                text: root.history-has-new ? "有新活动" : "回到现在";
+                                                text: root.history-has-new ? @tr("有新活动") : @tr("回到现在");
                                                 icon: @image-url("icons/arrow-down.svg");
                                                 accent: root.history-has-new;
                                                 clicked => { root.history-follow = true; root.history-to-end += 1; }
@@ -1320,15 +1326,15 @@ export component AppWindow inherits Window {
 
                                     // ───── Snapshots ─────
                                     if root.page == 2 && root.snapshot-selecting : PageHeader {
-                                        title: "已选 " + root.snapshot-checked-count + " 张";
-                                        subtitle: "点选图片；按住 Shift 再点另一张可选中这段时间。全选只含列表中已显示的快照。";
-                                        VerticalLayout { alignment: center; Action { quiet: true; text: "全选"; clicked => { root.snapshot-check-all(true); } } }
-                                        VerticalLayout { alignment: center; Action { quiet: true; text: "全不选"; enabled: root.snapshot-checked-count > 0; clicked => { root.snapshot-check-all(false); } } }
-                                        VerticalLayout { alignment: center; Action { text: "删除…"; icon: @image-url("icons/trash.svg"); danger: true; enabled: root.snapshot-checked-count > 0 && !root.action-busy; clicked => { root.delete-checked-confirm = true; } } }
-                                        VerticalLayout { alignment: center; Action { text: "取消"; accessible-label: "取消选择（Esc）"; clicked => { root.stop-selecting(); } } }
+                                        title: @tr("已选 {} 张", root.snapshot-checked-count);
+                                        subtitle: @tr("点选图片；按住 Shift 再点另一张可选中这段时间。全选只含列表中已显示的快照。");
+                                        VerticalLayout { alignment: center; Action { quiet: true; text: @tr("全选"); clicked => { root.snapshot-check-all(true); } } }
+                                        VerticalLayout { alignment: center; Action { quiet: true; text: @tr("全不选"); enabled: root.snapshot-checked-count > 0; clicked => { root.snapshot-check-all(false); } } }
+                                        VerticalLayout { alignment: center; Action { text: @tr("删除…"); icon: @image-url("icons/trash.svg"); danger: true; enabled: root.snapshot-checked-count > 0 && !root.action-busy; clicked => { root.delete-checked-confirm = true; } } }
+                                        VerticalLayout { alignment: center; Action { text: @tr("取消"); accessible-label: @tr("取消选择（Esc）"); clicked => { root.stop-selecting(); } } }
                                     }
                                     if root.page == 2 && !root.snapshot-selecting : PageHeader {
-                                        title: "快照";
+                                        title: @tr("快照");
                                         subtitle: root.snapshot-summary;
                                         if root.range-origin != "" : VerticalLayout { alignment: center; OriginTag { text: root.range-origin; clear => { root.range-origin-restore(); } } }
                                         RangePicker {
@@ -1343,12 +1349,12 @@ export component AppWindow inherits Window {
                                             span(a, b) => { root.time-range-selected(a, b); }
                                         }
                                         Rectangle { width: 6px; }
-                                        VerticalLayout { alignment: center; Action { quiet: true; icon: @image-url("icons/settings.svg"); accessible-label: "快照设置"; clicked => { root.open-settings(1); } } }
+                                        VerticalLayout { alignment: center; Action { quiet: true; icon: @image-url("icons/settings.svg"); accessible-label: @tr("快照设置"); clicked => { root.open-settings(1); } } }
                                         if root.snapshots.length > 0 : VerticalLayout {
                                             alignment: center;
-                                            Action { text: "选择"; icon: @image-url("icons/checkbox.svg"); clicked => { root.snapshot-selecting = true; } }
+                                            Action { text: @tr("选择"); icon: @image-url("icons/checkbox.svg"); clicked => { root.snapshot-selecting = true; } }
                                         }
-                                        VerticalLayout { alignment: center; Action { text: "立即拍摄"; icon: @image-url("icons/camera.svg"); accent: true; enabled: !root.action-busy; clicked => { root.snapshot-capture-now(); } } }
+                                        VerticalLayout { alignment: center; Action { text: @tr("立即拍摄"); icon: @image-url("icons/camera.svg"); accent: true; enabled: !root.action-busy; clicked => { root.snapshot-capture-now(); } } }
                                     }
                                     if root.page == 2 && root.snapshots.length > 0 : snapshot-split := HorizontalLayout {
                                         vertical-stretch: 1;
@@ -1422,7 +1428,7 @@ export component AppWindow inherits Window {
                                                     }
                                                 }
                                             }
-                                            if root.snapshot-truncated : Note { text: "只显示最近 500 条。缩小时段可以查看更早的快照。"; font-size: 12px; }
+                                            if root.snapshot-truncated : Note { text: @tr("只显示最近 500 条。缩小时段可以查看更早的快照。"); font-size: 12px; }
                                         }
                                         // The divider: drag to resize the list, double-click for the default.
                                         Rectangle {
@@ -1461,18 +1467,18 @@ export component AppWindow inherits Window {
                                                 y: 0px; height: parent.height - 62px;
                                                 alignment: center; spacing: 10px;
                                                 HorizontalLayout { alignment: center; Image { width: 30px; height: 30px; source: @image-url("icons/photo.svg"); colorize: #ffffff66; } }
-                                                Text { text: root.snapshot-selected-index < 0 ? "从左侧选择一张快照预览" : root.snapshot-detail; color: #ffffffb3; font-size: 14px; horizontal-alignment: center; wrap: word-wrap; }
+                                                Text { text: root.snapshot-selected-index < 0 ? @tr("从左侧选择一张快照预览") : root.snapshot-detail; color: #ffffffb3; font-size: 14px; horizontal-alignment: center; wrap: word-wrap; }
                                             }
                                             Rectangle {
                                                 y: parent.height - 62px; height: 62px;
                                                 background: #0d111bcc;
                                                 HorizontalLayout {
                                                     padding-left: 18px; padding-right: 12px; spacing: 8px;
-                                                    Text { text: root.snapshot-selecting ? "已选 " + root.snapshot-checked-count + " 张，可在上方删除" : root.snapshot-detail; color: #ffffffd9; font-size: 12px; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; }
+                                                    Text { text: root.snapshot-selecting ? @tr("已选 {} 张，可在上方删除", root.snapshot-checked-count) : root.snapshot-detail; color: #ffffffd9; font-size: 12px; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; }
                                                     // Icons only while the preview is narrow, so the size still shows.
-                                                    if !root.snapshot-selecting : VerticalLayout { alignment: center; Action { text: root.snapshot-preview-narrow ? "" : "放大"; accessible-label: "放大"; icon: @image-url("icons/search.svg"); enabled: root.snapshot-preview.width > 0; clicked => { root.snapshot-viewer-open = true; } } }
-                                                    if !root.snapshot-selecting : VerticalLayout { alignment: center; Action { text: root.snapshot-preview-narrow ? "" : "导出"; accessible-label: "导出"; icon: @image-url("icons/download.svg"); enabled: root.snapshot-deletable && !DataState.busy; clicked => { DataState.action(7); } } }
-                                                    if !root.snapshot-selecting : VerticalLayout { alignment: center; Action { text: root.snapshot-preview-narrow ? "" : "删除…"; accessible-label: "删除…"; icon: @image-url("icons/trash.svg"); danger: true; enabled: root.snapshot-deletable; clicked => { root.delete-snapshot-confirm = true; } } }
+                                                    if !root.snapshot-selecting : VerticalLayout { alignment: center; Action { text: root.snapshot-preview-narrow ? "" : @tr("放大"); accessible-label: @tr("放大"); icon: @image-url("icons/search.svg"); enabled: root.snapshot-preview.width > 0; clicked => { root.snapshot-viewer-open = true; } } }
+                                                    if !root.snapshot-selecting : VerticalLayout { alignment: center; Action { text: root.snapshot-preview-narrow ? "" : @tr("导出"); accessible-label: @tr("导出"); icon: @image-url("icons/download.svg"); enabled: root.snapshot-deletable && !DataState.busy; clicked => { DataState.action(7); } } }
+                                                    if !root.snapshot-selecting : VerticalLayout { alignment: center; Action { text: root.snapshot-preview-narrow ? "" : @tr("删除…"); accessible-label: @tr("删除…"); icon: @image-url("icons/trash.svg"); danger: true; enabled: root.snapshot-deletable; clicked => { root.delete-snapshot-confirm = true; } } }
                                                 }
                                             }
                                         }
@@ -1490,27 +1496,27 @@ export component AppWindow inherits Window {
                                                     Image { width: 28px; height: 28px; source: @image-url("icons/camera.svg"); colorize: Theme.ink-3; }
                                                 }
                                             }
-                                            Text { text: "这段时间没有快照"; color: Theme.ink; font-size: 17px; font-weight: 600; horizontal-alignment: center; }
+                                            Text { text: @tr("这段时间没有快照"); color: Theme.ink; font-size: 17px; font-weight: 600; horizontal-alignment: center; }
                                             Note {
-                                                text: root.snapshot-enabled ? "定时快照已开启，新的快照会按设置的间隔出现在这里。快照只保存在本机。" : "定时快照已关闭，可以在快照设置中开启，或者现在拍一张。";
+                                                text: root.snapshot-enabled ? @tr("定时快照已开启，新的快照会按设置的间隔出现在这里。快照只保存在本机。") : @tr("定时快照已关闭，可以在快照设置中开启，或者现在拍一张。");
                                                 horizontal-alignment: center;
                                             }
                                             HorizontalLayout {
                                                 alignment: center; spacing: 8px;
-                                                Action { text: "快照设置"; clicked => { root.open-settings(1); } }
-                                                Action { text: "立即拍摄"; icon: @image-url("icons/camera.svg"); enabled: !root.action-busy; clicked => { root.snapshot-capture-now(); } }
+                                                Action { text: @tr("快照设置"); clicked => { root.open-settings(1); } }
+                                                Action { text: @tr("立即拍摄"); icon: @image-url("icons/camera.svg"); enabled: !root.action-busy; clicked => { root.snapshot-capture-now(); } }
                                             }
                                         }
                                     }
 
                                     // ───── Statistics ─────
                                     if root.page == 3 : PageHeader {
-                                        title: "统计";
-                                        subtitle: "由本机记录直接计算";
+                                        title: @tr("统计");
+                                        subtitle: @tr("由本机记录直接计算");
                                         if root.range-origin != "" && !root.stats-all : VerticalLayout { alignment: center; OriginTag { text: root.range-origin; clear => { root.range-origin-restore(); } } }
                                         // One picker for both tabs.
                                         RangePicker {
-                                            label: root.stats-all ? "全部记录" : root.range-title;
+                                            label: root.stats-all ? @tr("全部记录") : root.range-title;
                                             allow-all: true;
                                             all: root.stats-all;
                                             can-next: root.can-next-day; is-today: root.is-today;
@@ -1528,13 +1534,13 @@ export component AppWindow inherits Window {
                                     if root.page == 3 : HorizontalLayout {
                                         height: 34px; spacing: 8px;
                                         Segmented {
-                                            Segment { text: "应用"; icon: @image-url("icons/layout-grid.svg"); selected: root.stats-tab == 0; clicked => { root.stats-tab = 0; } }
-                                            Segment { text: "键位与系统"; icon: @image-url("icons/keyboard.svg"); selected: root.stats-tab == 1; clicked => { root.app-detail-open = false; root.stats-tab = 1; CollectionState.page = 1; CollectionState.action(7); } }
+                                            Segment { text: @tr("应用"); icon: @image-url("icons/layout-grid.svg"); selected: root.stats-tab == 0; clicked => { root.stats-tab = 0; } }
+                                            Segment { text: @tr("键位与系统"); icon: @image-url("icons/keyboard.svg"); selected: root.stats-tab == 1; clicked => { root.app-detail-open = false; root.stats-tab = 1; CollectionState.page = 1; CollectionState.action(7); } }
                                         }
                                         Rectangle { horizontal-stretch: 1; }
-                                        if root.stats-tab == 0 && root.apps-coverage != "" : Action { quiet: true; text: "导出 JSON"; icon: @image-url("icons/download.svg"); enabled: !root.action-busy; clicked => { root.stats-export(0); } }
-                                        if root.stats-tab == 0 && root.apps-coverage != "" : Action { quiet: true; text: "导出 CSV"; icon: @image-url("icons/download.svg"); enabled: !root.action-busy; clicked => { root.stats-export(1); } }
-                                        if root.stats-tab == 0 : Action { text: "应用规则"; icon: @image-url("icons/adjustments-horizontal.svg"); clicked => { root.open-settings(2); } }
+                                        if root.stats-tab == 0 && root.apps-coverage != "" : Action { quiet: true; text: @tr("导出 JSON"); icon: @image-url("icons/download.svg"); enabled: !root.action-busy; clicked => { root.stats-export(0); } }
+                                        if root.stats-tab == 0 && root.apps-coverage != "" : Action { quiet: true; text: @tr("导出 CSV"); icon: @image-url("icons/download.svg"); enabled: !root.action-busy; clicked => { root.stats-export(1); } }
+                                        if root.stats-tab == 0 : Action { text: @tr("应用规则"); icon: @image-url("icons/adjustments-horizontal.svg"); clicked => { root.open-settings(2); } }
                                     }
                                     // Applications: totals for all records or the chosen range.
                                     if root.page == 3 && root.stats-tab == 0 : Card {
@@ -1544,13 +1550,13 @@ export component AppWindow inherits Window {
                                             padding: 18px; spacing: 14px;
                                             HorizontalLayout {
                                                 spacing: 18px;
-                                                Metric { label: "聚焦总计"; value: root.focus-total; icon: @image-url("icons/clock.svg"); horizontal-stretch: 1; }
+                                                Metric { label: @tr("聚焦总计"); value: root.focus-total; icon: @image-url("icons/clock.svg"); horizontal-stretch: 1; }
                                                 Rectangle { width: 1px; background: Theme.line; }
-                                                Metric { label: "应用"; value: root.apps.length; icon: @image-url("icons/layout-grid.svg"); horizontal-stretch: 1; }
+                                                Metric { label: @tr("应用"); value: root.apps.length; icon: @image-url("icons/layout-grid.svg"); horizontal-stretch: 1; }
                                                 Rectangle { width: 1px; background: Theme.line; }
-                                                Metric { label: "键盘"; value: root.range-keyboard; icon: @image-url("icons/keyboard.svg"); horizontal-stretch: 1; }
+                                                Metric { label: @tr("键盘"); value: root.range-keyboard; icon: @image-url("icons/keyboard.svg"); horizontal-stretch: 1; }
                                                 Rectangle { width: 1px; background: Theme.line; }
-                                                Metric { label: "鼠标点击"; value: root.range-mouse; icon: @image-url("icons/mouse.svg"); horizontal-stretch: 1; }
+                                                Metric { label: @tr("鼠标点击"); value: root.range-mouse; icon: @image-url("icons/mouse.svg"); horizontal-stretch: 1; }
                                             }
                                             if root.apps.length > 0 : HorizontalLayout {
                                                 height: 8px; spacing: 2px;
@@ -1560,12 +1566,12 @@ export component AppWindow inherits Window {
                                             if root.apps-coverage != "" : Rectangle {
                                                 height: coverage-row.preferred-height;
                                                 accessible-role: button;
-                                                accessible-label: "数据覆盖 " + root.apps-coverage + "，" + root.apps-coverage-note + (root.apps-gaps.length == 0 ? "" : root.apps-gaps-open ? "，收起明细" : "，查看明细");
+                                                accessible-label: root.apps-gaps.length == 0 ? @tr("数据覆盖 {}，{}", root.apps-coverage, root.apps-coverage-note) : root.apps-gaps-open ? @tr("数据覆盖 {}，{}，收起明细", root.apps-coverage, root.apps-coverage-note) : @tr("数据覆盖 {}，{}，查看明细", root.apps-coverage, root.apps-coverage-note);
                                                 accessible-action-default => { root.apps-gaps-open = !root.apps-gaps-open; }
                                                 coverage-row := HorizontalLayout {
                                                     spacing: 8px;
                                                     VerticalLayout { alignment: center; Dot { tone: root.apps-gaps.length > 0 ? Theme.warn-line : Theme.ok; } }
-                                                    Text { text: "数据覆盖 " + root.apps-coverage; color: Theme.ink-2; font-size: 12px; font-weight: 600; vertical-alignment: center; }
+                                                    Text { text: @tr("数据覆盖 {}", root.apps-coverage); color: Theme.ink-2; font-size: 12px; font-weight: 600; vertical-alignment: center; }
                                                     Text { text: root.apps-coverage-note; color: gaps-touch.has-hover && root.apps-gaps.length > 0 ? Theme.brand-ink : Theme.ink-3; font-size: 12px; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; }
                                                     if root.apps-gaps.length > 0 : VerticalLayout { alignment: center; Image { width: 12px; height: 12px; source: root.apps-gaps-open ? @image-url("icons/chevron-up.svg") : @image-url("icons/chevron-down.svg"); colorize: Theme.ink-3; } }
                                                 }
@@ -1584,9 +1590,9 @@ export component AppWindow inherits Window {
                                     }
                                     if root.page == 3 && root.stats-tab == 0 : HorizontalLayout {
                                         height: 34px;
-                                        LineEdit { width: 280px; text <=> root.app-search; placeholder-text: "查找应用"; edited => { root.app-search-changed(); } }
+                                        LineEdit { width: 280px; text <=> root.app-search; placeholder-text: @tr("查找应用"); edited => { root.app-search-changed(); } }
                                         Rectangle { horizontal-stretch: 1; }
-                                        Note { text: root.apps-loading ? "正在统计…" : root.apps-range + " · 点选应用查看详情"; vertical-alignment: center; }
+                                        Note { text: root.apps-loading ? @tr("正在统计…") : @tr("{} · 点选应用查看详情", root.apps-range); vertical-alignment: center; }
                                     }
                                     if root.page == 3 && root.stats-tab == 0 && root.filtered-apps.length > 0 : ListView {
                                         vertical-stretch: 1;
@@ -1604,7 +1610,7 @@ export component AppWindow inherits Window {
                                                 drop-shadow-color: Theme.shadow-soft;
                                                 forward-focus: app-key;
                                                 accessible-role: button;
-                                                accessible-label: app.name + "，聚焦 " + app.focused;
+                                                accessible-label: @tr("{}，聚焦 {}", app.name, app.focused);
                                                 accessible-action-default => { root.app-detail-open = true; root.app-selected(app.original-index); }
                                                 HorizontalLayout {
                                                     padding-left: 14px; padding-right: 18px; spacing: 14px;
@@ -1632,8 +1638,8 @@ export component AppWindow inherits Window {
                                         vertical-stretch: 1;
                                         Note {
                                             y: 40px; horizontal-alignment: center;
-                                            text: root.apps-loading && root.apps.length == 0 ? (root.stats-all ? "正在统计全部记录…" : "正在统计这段时间…")
-                                                : root.app-search == "" ? (root.stats-all ? "还没有应用记录。" : "这段时间没有应用记录。") : "没有匹配的应用，试试其他名称。";
+                                            text: root.apps-loading && root.apps.length == 0 ? (root.stats-all ? @tr("正在统计全部记录…") : @tr("正在统计这段时间…"))
+                                                : root.app-search == "" ? (root.stats-all ? @tr("还没有应用记录。") : @tr("这段时间没有应用记录。")) : @tr("没有匹配的应用，试试其他名称。");
                                         }
                                     }
 
@@ -1658,7 +1664,7 @@ export component AppWindow inherits Window {
                             animate width { duration: 220ms; easing: ease-out; }
                             DetailPane {
                                 x: 0px; width: 380px;
-                                title: "活动详情";
+                                title: @tr("活动详情");
                                 opacity: root.detail-open ? 1 : 0;
                                 animate opacity { duration: 200ms; easing: ease-out; }
                                 close => { root.close-detail(); }
@@ -1670,27 +1676,27 @@ export component AppWindow inherits Window {
                                 // What to do with this stretch, before the details.
                                 HorizontalLayout {
                                     spacing: 6px;
-                                    Action { text: "快照"; icon: @image-url("icons/photo.svg"); accessible-label: "查看这段的快照"; clicked => { root.act-on-activity(root.history-selected, 0); } }
-                                    Action { text: "规则"; icon: @image-url("icons/adjustments-horizontal.svg"); accessible-label: "这个应用的规则"; clicked => { root.act-on-activity(root.history-selected, 2); } }
+                                    Action { text: @tr("快照"); icon: @image-url("icons/photo.svg"); accessible-label: @tr("查看这段的快照"); clicked => { root.act-on-activity(root.history-selected, 0); } }
+                                    Action { text: @tr("规则"); icon: @image-url("icons/adjustments-horizontal.svg"); accessible-label: @tr("这个应用的规则"); clicked => { root.act-on-activity(root.history-selected, 2); } }
                                     Rectangle { horizontal-stretch: 1; }
                                 }
                                 Card {
                                     height: span-card.preferred-height;
                                     span-card := VerticalLayout {
                                         padding: 16px; spacing: 6px;
-                                        Eyebrow { text: "持续"; }
+                                        Eyebrow { text: @tr("持续"); }
                                         Figure { text: root.detail-duration; }
-                                        Note { text: root.detail-loading ? "正在读取各应用的时间…" : root.detail-note; }
+                                        Note { text: root.detail-loading ? @tr("正在读取各应用的时间…") : root.detail-note; }
                                         Rectangle { height: 6px; }
                                         if !root.detail-loading : AppTimes { app: root.detail-main; }
                                     }
                                 }
-                                if root.detail-interleaved.length > 0 : SettingsHeader { text: "穿插切换（" + root.detail-interleaved.length + "）"; }
+                                if root.detail-interleaved.length > 0 : SettingsHeader { text: @tr("穿插切换（{}）", root.detail-interleaved.length); }
                                 if root.detail-interleaved.length > 0 : VerticalLayout {
                                     spacing: 4px;
                                     for app in root.detail-interleaved : ParticipantItem { app: app; }
                                 }
-                                if root.detail-same-screen.length > 0 : SettingsHeader { text: "同屏显示（" + root.detail-same-screen.length + "）"; }
+                                if root.detail-same-screen.length > 0 : SettingsHeader { text: @tr("同屏显示（{}）", root.detail-same-screen.length); }
                                 if root.detail-same-screen.length > 0 : VerticalLayout {
                                     spacing: 4px;
                                     for app in root.detail-same-screen : ParticipantItem { app: app; }
@@ -1699,9 +1705,9 @@ export component AppWindow inherits Window {
                                     height: input-card.preferred-height;
                                     input-card := HorizontalLayout {
                                         padding: 16px; spacing: 12px;
-                                        Metric { label: "键盘"; value: root.detail-keyboard; icon: @image-url("icons/keyboard.svg"); horizontal-stretch: 1; }
+                                        Metric { label: @tr("键盘"); value: root.detail-keyboard; icon: @image-url("icons/keyboard.svg"); horizontal-stretch: 1; }
                                         Rectangle { width: 1px; background: Theme.line; }
-                                        Metric { label: "鼠标点击"; value: root.detail-mouse; icon: @image-url("icons/mouse.svg"); horizontal-stretch: 1; }
+                                        Metric { label: @tr("鼠标点击"); value: root.detail-mouse; icon: @image-url("icons/mouse.svg"); horizontal-stretch: 1; }
                                     }
                                 }
                             }
@@ -1712,7 +1718,7 @@ export component AppWindow inherits Window {
                             width: 360px;
                             DetailPane {
                                 x: 0px;
-                                title: "应用详情";
+                                title: @tr("应用详情");
                                 close => { root.close-detail(); }
                                 HorizontalLayout {
                                     spacing: 12px;
@@ -1723,7 +1729,7 @@ export component AppWindow inherits Window {
                                     spacing: 6px;
                                     // The timeline's search finds this application's activities.
                                     Action {
-                                        text: "在时间线中查看"; icon: @image-url("icons/clock.svg");
+                                        text: @tr("在时间线中查看"); icon: @image-url("icons/clock.svg");
                                         clicked => {
                                             root.app-detail-open = false;
                                             root.history-query = root.selected-name;
@@ -1731,14 +1737,14 @@ export component AppWindow inherits Window {
                                             root.history-search(root.selected-name);
                                         }
                                     }
-                                    Action { text: "规则"; icon: @image-url("icons/adjustments-horizontal.svg"); accessible-label: "这个应用的规则"; clicked => { root.open-settings(2); } }
+                                    Action { text: @tr("规则"); icon: @image-url("icons/adjustments-horizontal.svg"); accessible-label: @tr("这个应用的规则"); clicked => { root.open-settings(2); } }
                                     Rectangle { horizontal-stretch: 1; }
                                 }
                                 Card {
                                     height: focus-card.preferred-height;
                                     focus-card := VerticalLayout {
                                         padding: 16px; spacing: 8px;
-                                        Eyebrow { text: root.stats-all ? "累计聚焦" : "所选范围聚焦"; }
+                                        Eyebrow { text: root.stats-all ? @tr("累计聚焦") : @tr("所选范围聚焦"); }
                                         Figure { text: root.focused-value; }
                                         // Where in the range the application was open, shown and focused.
                                         Rectangle {
@@ -1756,9 +1762,9 @@ export component AppWindow inherits Window {
                                         }
                                         HorizontalLayout {
                                             spacing: 12px;
-                                            HorizontalLayout { spacing: 5px; VerticalLayout { alignment: center; Rectangle { width: 10px; height: 10px; border-radius: 2px; background: root.selected-tint; } } Note { text: "聚焦"; font-size: 11px; } }
-                                            HorizontalLayout { spacing: 5px; VerticalLayout { alignment: center; Rectangle { width: 10px; height: 10px; border-radius: 2px; background: root.selected-tint.with-alpha(0.35); } } Note { text: "显示"; font-size: 11px; } }
-                                            HorizontalLayout { spacing: 5px; VerticalLayout { alignment: center; Rectangle { width: 10px; height: 2px; background: Theme.ink-4; } } Note { text: "后台"; font-size: 11px; } }
+                                            HorizontalLayout { spacing: 5px; VerticalLayout { alignment: center; Rectangle { width: 10px; height: 10px; border-radius: 2px; background: root.selected-tint; } } Note { text: @tr("聚焦"); font-size: 11px; } }
+                                            HorizontalLayout { spacing: 5px; VerticalLayout { alignment: center; Rectangle { width: 10px; height: 10px; border-radius: 2px; background: root.selected-tint.with-alpha(0.35); } } Note { text: @tr("显示"); font-size: 11px; } }
+                                            HorizontalLayout { spacing: 5px; VerticalLayout { alignment: center; Rectangle { width: 10px; height: 2px; background: Theme.ink-4; } } Note { text: @tr("后台"); font-size: 11px; } }
                                             Rectangle { horizontal-stretch: 1; }
                                         }
                                     }
@@ -1767,23 +1773,23 @@ export component AppWindow inherits Window {
                                     height: app-facts.preferred-height;
                                     app-facts := VerticalLayout {
                                         padding-left: 14px; padding-right: 14px; padding-top: 6px; padding-bottom: 6px;
-                                        DetailRow { label: "打开"; value: root.opened-value; }
-                                        DetailRow { label: "显示"; value: root.displayed-value; }
-                                        DetailRow { label: "后台"; value: root.background-value; }
+                                        DetailRow { label: @tr("duration" => "打开"); value: root.opened-value; }
+                                        DetailRow { label: @tr("显示"); value: root.displayed-value; }
+                                        DetailRow { label: @tr("后台"); value: root.background-value; }
                                         Rule { }
-                                        DetailRow { label: "键盘"; value: root.keyboard-value; }
-                                        DetailRow { label: "鼠标"; value: root.mouse-value; }
+                                        DetailRow { label: @tr("键盘"); value: root.keyboard-value; }
+                                        DetailRow { label: @tr("鼠标"); value: root.mouse-value; }
                                     }
                                 }
                                 // Windows by when they were open, longest focus first.
                                 if root.windows-total > 0 : VerticalLayout {
                                     spacing: 4px;
-                                    SettingsHeader { text: "窗口（" + root.windows-total + "）"; }
+                                    SettingsHeader { text: @tr("窗口（{}）", root.windows-total); }
                                     VerticalLayout { spacing: 2px; for item in root.windows : WindowItem { item: item; } }
                                     if root.windows-total > root.windows.length || root.windows-expanded : HorizontalLayout {
                                         Action {
                                             quiet: true;
-                                            text: root.windows-expanded ? "只显示聚焦最长的几个" : "显示全部 " + root.windows-total + " 个窗口";
+                                            text: root.windows-expanded ? @tr("只显示聚焦最长的几个") : @tr("显示全部 {} 个窗口", root.windows-total);
                                             clicked => { root.windows-expanded = !root.windows-expanded; root.app-selected(root.selected-index); }
                                         }
                                         Rectangle { horizontal-stretch: 1; }
@@ -1830,9 +1836,9 @@ export component AppWindow inherits Window {
                         padding-left: 24px; padding-right: 12px;
                         spacing: 10px;
                         VerticalLayout { alignment: center; Image { width: 18px; height: 18px; source: @image-url("icons/settings.svg"); colorize: Theme.ink-2; } }
-                        Text { text: "设置"; color: Theme.ink; font-size: 16px; font-weight: 600; vertical-alignment: center; }
+                        Text { text: @tr("设置"); color: Theme.ink; font-size: 16px; font-weight: 600; vertical-alignment: center; }
                         Rectangle { horizontal-stretch: 1; }
-                        VerticalLayout { alignment: center; Action { quiet: true; icon: @image-url("icons/x.svg"); accessible-label: "关闭设置"; clicked => { root.close-settings(); } } }
+                        VerticalLayout { alignment: center; Action { quiet: true; icon: @image-url("icons/x.svg"); accessible-label: @tr("关闭设置"); clicked => { root.close-settings(); } } }
                     }
                     Rule { }
                 HorizontalLayout {
@@ -1840,12 +1846,12 @@ export component AppWindow inherits Window {
                     spacing: 28px;
                     VerticalLayout {
                         width: 200px; spacing: 3px; alignment: start;
-                        NavItem { text: "常规"; icon: @image-url("icons/settings.svg"); selected: root.settings-tab == 6; clicked => { root.pick-settings(6); } }
-                        NavItem { text: "记录与隐私"; icon: @image-url("icons/shield.svg"); selected: root.settings-tab == 0; clicked => { root.pick-settings(0); } }
-                        NavItem { text: "快照"; icon: @image-url("icons/camera.svg"); selected: root.settings-tab == 1; clicked => { root.pick-settings(1); } }
-                        NavItem { text: "应用规则"; icon: @image-url("icons/ban.svg"); selected: root.settings-tab == 2; clicked => { root.pick-settings(2); } }
-                        NavItem { text: "数据与存储"; icon: @image-url("icons/database.svg"); selected: root.settings-tab == 3; clicked => { root.pick-settings(3); } }
-                        NavItem { text: "关于"; icon: @image-url("icons/info-circle.svg"); selected: root.settings-tab == 5; clicked => { root.pick-settings(5); } }
+                        NavItem { text: @tr("常规"); icon: @image-url("icons/settings.svg"); selected: root.settings-tab == 6; clicked => { root.pick-settings(6); } }
+                        NavItem { text: @tr("记录与隐私"); icon: @image-url("icons/shield.svg"); selected: root.settings-tab == 0; clicked => { root.pick-settings(0); } }
+                        NavItem { text: @tr("快照"); icon: @image-url("icons/camera.svg"); selected: root.settings-tab == 1; clicked => { root.pick-settings(1); } }
+                        NavItem { text: @tr("应用规则"); icon: @image-url("icons/ban.svg"); selected: root.settings-tab == 2; clicked => { root.pick-settings(2); } }
+                        NavItem { text: @tr("数据与存储"); icon: @image-url("icons/database.svg"); selected: root.settings-tab == 3; clicked => { root.pick-settings(3); } }
+                        NavItem { text: @tr("关于"); icon: @image-url("icons/info-circle.svg"); selected: root.settings-tab == 5; clicked => { root.pick-settings(5); } }
                     }
                     VerticalLayout {
                         horizontal-stretch: 1;
@@ -1854,16 +1860,16 @@ export component AppWindow inherits Window {
                         VerticalLayout {
                             spacing: 4px;
                             Text {
-                                text: root.settings-tab == 6 ? "常规" : root.settings-tab == 0 ? "记录与隐私" : root.settings-tab == 1 ? "快照" : root.settings-tab == 2 ? "应用规则" : root.settings-tab == 3 ? "数据与存储" : "关于";
+                                text: root.settings-tab == 6 ? @tr("常规") : root.settings-tab == 0 ? @tr("记录与隐私") : root.settings-tab == 1 ? @tr("快照") : root.settings-tab == 2 ? @tr("应用规则") : root.settings-tab == 3 ? @tr("数据与存储") : @tr("关于");
                                 color: Theme.ink; font-size: 20px; font-weight: 600;
                             }
                             Note {
-                                text: root.settings-tab == 6 ? "设置 Timelens 的外观与启动方式。"
-                                    : root.settings-tab == 0 ? "Timelens 记录什么、不记录什么。"
-                                    : root.settings-tab == 1 ? "定时拍摄屏幕快照，帮你回忆当时在做什么。"
-                                    : root.settings-tab == 2 ? "为单个应用设置排除、合并显示或删除历史。"
-                                    : root.settings-tab == 3 ? "保留时长、备份与存储位置。"
-                                    : "版本、更新与项目信息。";
+                                text: root.settings-tab == 6 ? @tr("设置 Timelens 的外观与启动方式。")
+                                    : root.settings-tab == 0 ? @tr("Timelens 记录什么、不记录什么。")
+                                    : root.settings-tab == 1 ? @tr("定时拍摄屏幕快照，帮你回忆当时在做什么。")
+                                    : root.settings-tab == 2 ? @tr("为单个应用设置排除、合并显示或删除历史。")
+                                    : root.settings-tab == 3 ? @tr("保留时长、备份与存储位置。")
+                                    : @tr("版本、更新与项目信息。");
                             }
                         }
 
@@ -1871,27 +1877,43 @@ export component AppWindow inherits Window {
                             horizontal-scrollbar-policy: always-off;
                             VerticalLayout {
                                 alignment: start; spacing: 10px; padding-right: 18px; padding-bottom: 20px;
-                                SettingsHeader { text: "外观"; }
+                                SettingsHeader { text: @tr("外观"); }
                                 SettingsGroup {
                                     SettingRow {
-                                        title: "主题";
-                                        description: Theme.mode == 0 ? "跟随 Windows 的应用模式，切换后这里随之改变。" : "固定使用所选外观，不随 Windows 改变。";
+                                        title: @tr("主题");
+                                        description: Theme.mode == 0 ? @tr("跟随 Windows 的应用模式，切换后这里随之改变。") : @tr("固定使用所选外观，不随 Windows 改变。");
                                         icon: Theme.dark ? @image-url("icons/moon.svg") : @image-url("icons/sun.svg");
                                         Segmented {
-                                            Segment { text: "跟随系统"; selected: Theme.mode == 0; clicked => { root.theme-mode-selected(0); } }
-                                            Segment { text: "浅色"; icon: @image-url("icons/sun.svg"); selected: Theme.mode == 1; clicked => { root.theme-mode-selected(1); } }
-                                            Segment { text: "深色"; icon: @image-url("icons/moon.svg"); selected: Theme.mode == 2; clicked => { root.theme-mode-selected(2); } }
+                                            Segment { text: @tr("跟随系统"); selected: Theme.mode == 0; clicked => { root.theme-mode-selected(0); } }
+                                            Segment { text: @tr("浅色"); icon: @image-url("icons/sun.svg"); selected: Theme.mode == 1; clicked => { root.theme-mode-selected(1); } }
+                                            Segment { text: @tr("深色"); icon: @image-url("icons/moon.svg"); selected: Theme.mode == 2; clicked => { root.theme-mode-selected(2); } }
+                                        }
+                                    }
+                                    Rule { }
+                                    SettingRow {
+                                        title: @tr("语言");
+                                        description: @tr("系统默认跟随 Windows 的显示语言，不支持的语言显示为英文。");
+                                        icon: @image-url("icons/language.svg");
+                                        ComboBox {
+                                            width: 160px; height: 34px;
+                                            // Languages go by their own names; only following Windows is translated.
+                                            property <string> system-label: @tr("系统默认");
+                                            model: [self.system-label, "简体中文", "繁體中文", "English", "日本語", "한국어"];
+                                            current-index <=> root.language-choice;
+                                            // The shown text keeps its words once picked, so it follows a new language.
+                                            changed system-label => { self.current-value = self.model[self.current-index]; }
+                                            selected => { root.language-selected(self.current-index); }
                                         }
                                     }
                                 }
-                                SettingsHeader { text: "启动"; }
+                                SettingsHeader { text: @tr("启动"); }
                                 SettingsGroup {
                                     SettingRow {
-                                        title: "开机自启动";
-                                        description: "登录 Windows 后在后台启动 Timelens。";
+                                        title: @tr("开机自启动");
+                                        description: @tr("登录 Windows 后在后台启动 Timelens。");
                                         icon: @image-url("icons/player-play.svg");
                                         Switch {
-                                            label: "开机自启动";
+                                            label: @tr("开机自启动");
                                             checked: root.startup-enabled;
                                             enabled: root.startup-available && !root.startup-busy;
                                             toggled(on) => { root.startup-changed(on); }
@@ -1899,7 +1921,7 @@ export component AppWindow inherits Window {
                                     }
                                 }
                                 Note { text: root.startup-status; color: Theme.ink-2; font-size: 12px; }
-                                Note { text: "更改时需要管理员确认。关闭自启动不会停止当前记录，之后仍可手动打开 Timelens。"; font-size: 12px; }
+                                Note { text: @tr("更改时需要管理员确认。关闭自启动不会停止当前记录，之后仍可手动打开 Timelens。"); font-size: 12px; }
                             }
                         }
 
@@ -1923,43 +1945,43 @@ export component AppWindow inherits Window {
                                         }
                                         VerticalLayout {
                                             spacing: 4px; horizontal-stretch: 1;
-                                            Text { text: "记录只保存在这台电脑上"; color: Theme.ink; font-size: 14px; font-weight: 600; }
-                                            Note { text: "加密存放在本机，不上传、不同步。"; color: Theme.ink-2; font-size: 12px; }
+                                            Text { text: @tr("记录只保存在这台电脑上"); color: Theme.ink; font-size: 14px; font-weight: 600; }
+                                            Note { text: @tr("加密存放在本机，不上传、不同步。"); color: Theme.ink-2; font-size: 12px; }
                                         }
                                     }
                                 }
                                 Rectangle { height: 8px; }
-                                SettingsHeader { text: "记录"; }
+                                SettingsHeader { text: @tr("记录"); }
                                 SettingsGroup {
                                     SettingRow {
-                                        title: "记录应用活动与输入";
-                                        description: "关闭后保留明确的暂停区间，重新开启后不会补录。";
+                                        title: @tr("记录应用活动与输入");
+                                        description: @tr("关闭后保留明确的暂停区间，重新开启后不会补录。");
                                         icon: @image-url("icons/activity.svg");
                                         Switch {
-                                            label: "记录应用活动与输入";
+                                            label: @tr("记录应用活动与输入");
                                             checked: !CollectionState.paused;
                                             enabled: !CollectionState.busy;
                                             toggled(on) => { CollectionState.paused = !on; CollectionState.action(0); }
                                         }
                                     }
                                     Rule { }
-                                    SettingRow { title: "采集器"; description: root.collector-status; icon: @image-url("icons/link.svg"); Dot { tone: root.recording-tone; } }
+                                    SettingRow { title: @tr("采集器"); description: root.collector-status; icon: @image-url("icons/link.svg"); Dot { tone: root.recording-tone; } }
                                     Rule { }
                                     SettingRow {
-                                        title: "应用规则";
-                                        description: "按应用排除活动、输入或快照，或合并显示同一款软件。";
+                                        title: @tr("应用规则");
+                                        description: @tr("按应用排除活动、输入或快照，或合并显示同一款软件。");
                                         icon: @image-url("icons/ban.svg");
-                                        Action { text: "管理"; clicked => { root.show-settings(2); } }
+                                        Action { text: @tr("管理"); clicked => { root.show-settings(2); } }
                                     }
                                 }
                                 Rectangle { height: 8px; }
-                                SettingsHeader { text: "从不记录"; }
+                                SettingsHeader { text: @tr("从不记录"); }
                                 SettingsGroup {
-                                    SettingRow { title: "窗口标题、网址和文档名"; description: "只记录应用本身，不记录它打开了什么。"; icon: @image-url("icons/app-window.svg"); }
+                                    SettingRow { title: @tr("窗口标题、网址和文档名"); description: @tr("只记录应用本身，不记录它打开了什么。"); icon: @image-url("icons/app-window.svg"); }
                                     Rule { }
-                                    SettingRow { title: "输入的文字"; description: "键盘只统计物理按键的位置和次数。"; icon: @image-url("icons/keyboard.svg"); }
+                                    SettingRow { title: @tr("输入的文字"); description: @tr("键盘只统计物理按键的位置和次数。"); icon: @image-url("icons/keyboard.svg"); }
                                     Rule { }
-                                    SettingRow { title: "安装与卸载程序"; description: "安装器、卸载器这类一次性程序不计入记录。"; icon: @image-url("icons/download.svg"); }
+                                    SettingRow { title: @tr("安装与卸载程序"); description: @tr("安装器、卸载器这类一次性程序不计入记录。"); icon: @image-url("icons/download.svg"); }
                                 }
                             }
                         }
@@ -1970,23 +1992,23 @@ export component AppWindow inherits Window {
                                 alignment: start; spacing: 10px; padding-right: 18px; padding-bottom: 20px;
                                 SettingsGroup {
                                     SettingRow {
-                                        title: "定时快照";
-                                        description: root.snapshot-enabled ? "每 " + (root.snapshot-interval-minutes == 60 ? "1 小时" : root.snapshot-interval-minutes + " 分钟") + "拍一张，只保存在本机。" : "已关闭，仍可在快照页手动拍一张。";
+                                        title: @tr("定时快照");
+                                        description: root.snapshot-enabled ? (root.snapshot-interval-minutes == 60 ? @tr("每 1 小时拍一张，只保存在本机。") : @tr("每 {} 分钟拍一张，只保存在本机。", root.snapshot-interval-minutes)) : @tr("已关闭，仍可在快照页手动拍一张。");
                                         icon: @image-url("icons/camera.svg");
-                                        Switch { label: "定时快照"; checked: root.snapshot-enabled; toggled(on) => { root.snapshot-toggle-enabled(); } }
+                                        Switch { label: @tr("定时快照"); checked: root.snapshot-enabled; toggled(on) => { root.snapshot-toggle-enabled(); } }
                                     }
                                 }
                                 Rectangle { height: 8px; }
-                                SettingsHeader { text: "拍摄"; }
+                                SettingsHeader { text: @tr("拍摄"); }
                                 SettingsGroup {
                                     SettingRow {
-                                        title: "拍摄间隔";
-                                        description: root.snapshot-enabled ? "每隔多久拍一张。" : "开启定时快照后生效。";
+                                        title: @tr("拍摄间隔");
+                                        description: root.snapshot-enabled ? @tr("每隔多久拍一张。") : @tr("开启定时快照后生效。");
                                         icon: @image-url("icons/clock.svg");
                                         Segmented {
                                             for minutes in [1, 3, 5, 10, 15, 30, 60] : Segment {
-                                                text: minutes == 60 ? "1 小时" : minutes + " 分";
-                                                accessible-label: minutes == 60 ? "1 小时" : minutes + " 分钟";
+                                                text: minutes == 60 ? @tr("1 小时") : @tr("{} 分", minutes);
+                                                accessible-label: minutes == 60 ? @tr("1 小时") : @tr("{} 分钟", minutes);
                                                 enabled: root.snapshot-enabled;
                                                 selected: root.snapshot-interval-minutes == minutes;
                                                 clicked => { root.snapshot-interval-selected(minutes); }
@@ -1995,39 +2017,39 @@ export component AppWindow inherits Window {
                                     }
                                     Rule { }
                                     SettingRow {
-                                        title: "拍摄的屏幕";
-                                        description: "单屏时优先拍聚焦窗口所在的显示器。";
+                                        title: @tr("拍摄的屏幕");
+                                        description: @tr("单屏时优先拍聚焦窗口所在的显示器。");
                                         icon: @image-url("icons/layout-grid.svg");
                                         Segmented {
-                                            Segment { text: "当前显示器"; selected: !root.snapshot-all-displays; clicked => { if root.snapshot-all-displays { root.snapshot-toggle-target(); } } }
-                                            Segment { text: "全部显示器"; selected: root.snapshot-all-displays; clicked => { if !root.snapshot-all-displays { root.snapshot-toggle-target(); } } }
+                                            Segment { text: @tr("当前显示器"); selected: !root.snapshot-all-displays; clicked => { if root.snapshot-all-displays { root.snapshot-toggle-target(); } } }
+                                            Segment { text: @tr("全部显示器"); selected: root.snapshot-all-displays; clicked => { if !root.snapshot-all-displays { root.snapshot-toggle-target(); } } }
                                         }
                                     }
                                     Rule { }
                                     SettingRow {
-                                        title: "不拍摄某些应用";
-                                        description: "在应用规则中为应用开启“不拍摄快照”。";
+                                        title: @tr("不拍摄某些应用");
+                                        description: @tr("在应用规则中为应用开启“不拍摄快照”。");
                                         icon: @image-url("icons/ban.svg");
-                                        Action { text: "应用规则"; clicked => { root.show-settings(2); } }
+                                        Action { text: @tr("应用规则"); clicked => { root.show-settings(2); } }
                                     }
                                 }
                                 Rectangle { height: 8px; }
-                                SettingsHeader { text: "保留"; }
+                                SettingsHeader { text: @tr("保留"); }
                                 SettingsGroup {
                                     SettingRow {
-                                        title: "图片保留时长";
-                                        description: "空间上限 " + root.snapshot-capacity + "，超出时先清理最早的图片。";
+                                        title: @tr("图片保留时长");
+                                        description: @tr("空间上限 {}，超出时先清理最早的图片。", root.snapshot-capacity);
                                         icon: @image-url("icons/history.svg");
                                         Segmented {
-                                            Segment { text: "7 天"; selected: root.snapshot-retention-days == 7; clicked => { root.choose-snapshot-retention(7); } }
-                                            Segment { text: "30 天"; selected: root.snapshot-retention-days == 30; clicked => { root.choose-snapshot-retention(30); } }
-                                            Segment { text: "90 天"; selected: root.snapshot-retention-days == 90; clicked => { root.choose-snapshot-retention(90); } }
-                                            Segment { text: "1 年"; selected: root.snapshot-retention-days == 365; clicked => { root.choose-snapshot-retention(365); } }
-                                            Segment { text: "永久"; selected: root.snapshot-retention-days == 0; clicked => { root.snapshot-retention-selected(0); } }
+                                            Segment { text: @tr("7 天"); selected: root.snapshot-retention-days == 7; clicked => { root.choose-snapshot-retention(7); } }
+                                            Segment { text: @tr("30 天"); selected: root.snapshot-retention-days == 30; clicked => { root.choose-snapshot-retention(30); } }
+                                            Segment { text: @tr("90 天"); selected: root.snapshot-retention-days == 90; clicked => { root.choose-snapshot-retention(90); } }
+                                            Segment { text: @tr("1 年"); selected: root.snapshot-retention-days == 365; clicked => { root.choose-snapshot-retention(365); } }
+                                            Segment { text: @tr("永久"); selected: root.snapshot-retention-days == 0; clicked => { root.snapshot-retention-selected(0); } }
                                         }
                                     }
                                 }
-                                Note { text: "快照只保存在本机，不会发送到任何地方。"; font-size: 12px; }
+                                Note { text: @tr("快照只保存在本机，不会发送到任何地方。"); font-size: 12px; }
                             }
                         }
 
@@ -2037,23 +2059,23 @@ export component AppWindow inherits Window {
                             horizontal-scrollbar-policy: always-off;
                             VerticalLayout {
                                 alignment: start; spacing: 10px; padding-right: 18px; padding-bottom: 20px;
-                                SettingsHeader { text: "活动数据保留"; }
+                                SettingsHeader { text: @tr("活动数据保留"); }
                                 SettingsGroup {
                                     SettingRow {
-                                        title: "保留时长";
+                                        title: @tr("保留时长");
                                         description: root.retention-value + "\n" + root.retention-usage;
                                         icon: @image-url("icons/history.svg");
                                         Segmented {
-                                            Segment { text: "7 天"; selected: root.retention-days == 7; enabled: !root.action-busy; clicked => { root.choose-retention(7); } }
-                                            Segment { text: "30 天"; selected: root.retention-days == 30; enabled: !root.action-busy; clicked => { root.choose-retention(30); } }
-                                            Segment { text: "90 天"; selected: root.retention-days == 90; enabled: !root.action-busy; clicked => { root.choose-retention(90); } }
-                                            Segment { text: "永久"; selected: root.retention-days == 0; enabled: !root.action-busy; clicked => { root.retention-selected(0); } }
+                                            Segment { text: @tr("7 天"); selected: root.retention-days == 7; enabled: !root.action-busy; clicked => { root.choose-retention(7); } }
+                                            Segment { text: @tr("30 天"); selected: root.retention-days == 30; enabled: !root.action-busy; clicked => { root.choose-retention(30); } }
+                                            Segment { text: @tr("90 天"); selected: root.retention-days == 90; enabled: !root.action-busy; clicked => { root.choose-retention(90); } }
+                                            Segment { text: @tr("永久"); selected: root.retention-days == 0; enabled: !root.action-busy; clicked => { root.retention-selected(0); } }
                                         }
                                     }
                                     Rule { }
                                     SettingRow {
-                                        title: "空间上限";
-                                        description: "无论保留多久，数据库超过上限时都会先清理最早的一天。快照图片另有上限。";
+                                        title: @tr("空间上限");
+                                        description: @tr("无论保留多久，数据库超过上限时都会先清理最早的一天。快照图片另有上限。");
                                         icon: @image-url("icons/database.svg");
                                         Segmented {
                                             Segment { text: "100 MiB"; selected: root.retention-mib == 100; enabled: !root.action-busy; clicked => { root.choose-space(100); } }
@@ -2063,26 +2085,26 @@ export component AppWindow inherits Window {
                                     }
                                     Rule { }
                                     SettingRow {
-                                        title: "按当前策略清理";
-                                        description: "不会删除你导出到其他位置的文件。";
+                                        title: @tr("按当前策略清理");
+                                        description: @tr("不会删除你导出到其他位置的文件。");
                                         icon: @image-url("icons/refresh.svg");
-                                        Action { text: "立即清理"; enabled: !root.action-busy; clicked => { root.run-cleanup(); } }
+                                        Action { text: @tr("立即清理"); enabled: !root.action-busy; clicked => { root.run-cleanup(); } }
                                     }
                                 }
                                 Rectangle { height: 10px; }
                                 DataPanel { storage-status: root.storage-status; }
                                 Rectangle { height: 10px; }
-                                SettingsHeader { text: "危险操作"; color: Theme.danger; }
+                                SettingsHeader { text: @tr("危险操作"); color: Theme.danger; }
                                 SettingsGroup {
                                     border-color: Theme.danger-line;
                                     SettingRow {
-                                        title: "清空全部本地记录";
-                                        description: "删除活动、输入和快照，并轮换数据密钥。此操作无法撤销。";
+                                        title: @tr("清空全部本地记录");
+                                        description: @tr("删除活动、输入和快照，并轮换数据密钥。此操作无法撤销。");
                                         icon: @image-url("icons/trash.svg");
-                                        Action { text: "清空…"; danger: true; enabled: !root.action-busy; clicked => { root.clear-confirm-open = true; } }
+                                        Action { text: @tr("清空…"); danger: true; enabled: !root.action-busy; clicked => { root.clear-confirm-open = true; } }
                                     }
                                 }
-                                if DataState.busy : StatusLine { busy: true; text: "正在处理，请稍候…"; }
+                                if DataState.busy : StatusLine { busy: true; text: @tr("正在处理，请稍候…"); }
                             }
                         }
 
@@ -2105,10 +2127,10 @@ export component AppWindow inherits Window {
 
     if CollectionState.confirm != 0 : ConfirmationDialog {
         z: 100;
-        title: CollectionState.confirm == 1 ? "删除「" + CollectionState.app-name + "」的全部历史？" : "合并「" + CollectionState.app-name + "」与「" + CollectionState.apps[CollectionState.merge-index] + "」？";
+        title: CollectionState.confirm == 1 ? @tr("删除「{}」的全部历史？", CollectionState.app-name) : @tr("合并「{}」与「{}」？", CollectionState.app-name, CollectionState.apps[CollectionState.merge-index]);
         explanation: CollectionState.confirm == 1 ? CollectionState.impact : CollectionState.merge-preview;
-        detail: CollectionState.confirm == 1 ? "匿名累计总数会保留，快照图片与外部文件也会保留。此操作无法撤销。" : "两者合并成一项显示，原始记录不改写，之后可以在「已有合并」里解除。";
-        accept-text: CollectionState.confirm == 1 ? "删除历史" : "合并";
+        detail: CollectionState.confirm == 1 ? @tr("匿名累计总数会保留，快照图片与外部文件也会保留。此操作无法撤销。") : @tr("两者合并成一项显示，原始记录不改写，之后可以在「已有合并」里解除。");
+        accept-text: CollectionState.confirm == 1 ? @tr("删除历史") : @tr("合并");
         dismissed => { CollectionState.confirm = 0; Theme.modal-open = false; settings-nav.focus(); }
         accepted => {
             if CollectionState.confirm == 1 {
@@ -2127,12 +2149,12 @@ export component AppWindow inherits Window {
 
     if DataState.restore-confirm != 0 : ConfirmationDialog {
         z: 100;
-        title: DataState.restore-confirm == 1 ? "用这份备份替换当前全部记录？" : "退出并打开修复工具？";
+        title: DataState.restore-confirm == 1 ? @tr("用这份备份替换当前全部记录？") : @tr("退出并打开修复工具？");
         explanation: DataState.restore-confirm == 1
-            ? "当前的活动、输入和快照会被备份里的内容整体替换，不会合并，无法撤销。"
-            : "Timelens 会退出并打开修复工具，修复完成前不会记录活动和输入。";
-        detail: DataState.restore-confirm == 1 ? "想留一份现在的数据，先取消，在上方「创建便携备份」导出一份。" : "修复工具只在你确认后才会替换数据。";
-        accept-text: DataState.restore-confirm == 1 ? "替换数据" : "退出并打开";
+            ? @tr("当前的活动、输入和快照会被备份里的内容整体替换，不会合并，无法撤销。")
+            : @tr("Timelens 会退出并打开修复工具，修复完成前不会记录活动和输入。");
+        detail: DataState.restore-confirm == 1 ? @tr("想留一份现在的数据，先取消，在上方「创建便携备份」导出一份。") : @tr("修复工具只在你确认后才会替换数据。");
+        accept-text: DataState.restore-confirm == 1 ? @tr("替换数据") : @tr("退出并打开");
         dismissed => { DataState.restore-confirm = 0; Theme.modal-open = false; settings-nav.focus(); }
         accepted => {
             if DataState.restore-confirm == 1 {
@@ -2149,18 +2171,18 @@ export component AppWindow inherits Window {
 
     if root.clear-confirm-open : ConfirmationDialog {
         z: 100;
-        title: "清空全部本地记录？";
-        explanation: "活动、输入和快照将被删除，数据密钥也会轮换。此操作无法撤销。";
-        detail: "普通设置与排除规则保留。外部备份和导出文件不会删除。";
-        accept-text: "确认清空";
+        title: @tr("清空全部本地记录？");
+        explanation: @tr("活动、输入和快照将被删除，数据密钥也会轮换。此操作无法撤销。");
+        detail: @tr("普通设置与排除规则保留。外部备份和导出文件不会删除。");
+        accept-text: @tr("确认清空");
         dismissed => { root.clear-confirm-open = false; Theme.modal-open = false; settings-nav.focus(); }
         accepted => { root.clear-confirm-open = false; Theme.modal-open = false; root.clear-all(); settings-nav.focus(); }
     }
     if root.delete-snapshot-confirm : ConfirmationDialog {
         z: 100;
-        title: root.snapshot-selected-time != "" ? "删除 " + root.snapshot-selected-time + " 的快照？" : "删除这张快照图片？";
-        explanation: "删除后图片无法恢复。";
-        accept-text: "删除图片";
+        title: root.snapshot-selected-time != "" ? @tr("删除 {} 的快照？", root.snapshot-selected-time) : @tr("删除这张快照图片？");
+        explanation: @tr("删除后图片无法恢复。");
+        accept-text: @tr("删除图片");
         // The viewer may still be open behind the dialog, so the page stays
         // disabled until it closes too.
         dismissed => { root.delete-snapshot-confirm = false; Theme.modal-open = root.any-modal-open; if !root.snapshot-viewer-open { snapshots-nav.focus(); } }
@@ -2176,9 +2198,9 @@ export component AppWindow inherits Window {
     }
     if root.delete-checked-confirm : ConfirmationDialog {
         z: 100;
-        title: "删除所选的 " + root.snapshot-checked-count + " 张快照图片？";
-        explanation: "删除后图片无法恢复，时间线中保留对应的删除记录。";
-        accept-text: "删除图片";
+        title: @tr("删除所选的 {n} 张快照图片？" | "删除所选的 {n} 张快照图片？" % root.snapshot-checked-count);
+        explanation: @tr("删除后图片无法恢复，时间线中保留对应的删除记录。");
+        accept-text: @tr("删除图片");
         dismissed => { root.delete-checked-confirm = false; Theme.modal-open = false; snapshots-nav.focus(); }
         accepted => { root.delete-checked-confirm = false; Theme.modal-open = false; root.snapshot-delete-checked(); snapshots-nav.focus(); }
     }
@@ -2199,10 +2221,10 @@ export component AppWindow inherits Window {
     }
     if root.pending-space-mib >= 0 : ConfirmationDialog {
         z: 100;
-        title: "把空间上限降到 " + (root.pending-space-mib >= 1024 ? (root.pending-space-mib / 1024) + " GiB" : root.pending-space-mib + " MiB") + "？";
-        explanation: "记录已用约 " + root.retention-used-mib + " MiB，超过新的上限。最早的活动和输入明细会按天立即删除，直到低于上限，无法恢复。";
-        detail: "永久累计的输入总数保留。快照使用自己的上限。外部备份和导出文件不会删除。";
-        accept-text: "删除并降低上限";
+        title: @tr("把空间上限降到 {}？", root.pending-space-mib >= 1024 ? (root.pending-space-mib / 1024) + " GiB" : root.pending-space-mib + " MiB");
+        explanation: @tr("记录已用约 {} MiB，超过新的上限。最早的活动和输入明细会按天立即删除，直到低于上限，无法恢复。", root.retention-used-mib);
+        detail: @tr("永久累计的输入总数保留。快照使用自己的上限。外部备份和导出文件不会删除。");
+        accept-text: @tr("删除并降低上限");
         dismissed => { root.pending-space-mib = -1; Theme.modal-open = false; settings-nav.focus(); }
         accepted => {
             root.retention-space-selected(root.pending-space-mib);
@@ -2214,14 +2236,14 @@ export component AppWindow inherits Window {
 
     if root.retention-confirm-open : ConfirmationDialog {
         z: 100;
-        title: root.pending-retention-snapshots ? "缩短快照图片保留期？" : "缩短活动数据保留期？";
+        title: root.pending-retention-snapshots ? @tr("缩短快照图片保留期？") : @tr("缩短活动数据保留期？");
         explanation: root.pending-retention-snapshots
-            ? "早于 " + root.pending-retention-days + " 天的快照图片会立即删除，无法恢复。时间线中保留对应的清理记录。"
-            : root.retention-cutoff(root.pending-retention-days) + " 之前的应用活动和输入明细会立即删除，无法恢复。";
+            ? @tr("早于 {} 天的快照图片会立即删除，无法恢复。时间线中保留对应的清理记录。", root.pending-retention-days)
+            : @tr("{} 之前的应用活动和输入明细会立即删除，无法恢复。", root.retention-cutoff(root.pending-retention-days));
         detail: root.pending-retention-snapshots
-            ? "活动记录使用自己的保留策略，不受影响。外部备份和导出文件不会删除。"
-            : "永久累计的输入总数保留。快照使用自己的保留策略。外部备份和导出文件不会删除。";
-        accept-text: "删除并缩短";
+            ? @tr("活动记录使用自己的保留策略，不受影响。外部备份和导出文件不会删除。")
+            : @tr("永久累计的输入总数保留。快照使用自己的保留策略。外部备份和导出文件不会删除。");
+        accept-text: @tr("删除并缩短");
         dismissed => {
             root.pending-retention-days = -1;
             Theme.modal-open = false;
@@ -2270,16 +2292,16 @@ export component AppWindow inherits Window {
                 width: open-label.preferred-width + 20px; height: 30px; border-radius: 8px;
                 background: open-touch.has-hover ? #ffffff2e : #ffffff1a;
                 accessible-role: button;
-                accessible-label: "打开文件夹";
+                accessible-label: @tr("打开文件夹");
                 accessible-action-default => { root.open-folder(toast-box.path); }
-                open-label := Text { text: "打开文件夹"; color: Theme.on-tooltip; font-size: 13px; vertical-alignment: center; }
+                open-label := Text { text: @tr("打开文件夹"); color: Theme.on-tooltip; font-size: 13px; vertical-alignment: center; }
                 open-touch := TouchArea { mouse-cursor: pointer; clicked => { root.open-folder(toast-box.path); } }
             }
             Rectangle {
                 width: 30px; height: 30px; border-radius: 8px;
                 background: dismiss.has-hover ? #ffffff1f : transparent;
                 accessible-role: button;
-                accessible-label: "关闭提示";
+                accessible-label: @tr("关闭提示");
                 accessible-action-default => { root.action-status = ""; }
                 Image { width: 14px; height: 14px; source: @image-url("icons/x.svg"); colorize: #ffffffb3; }
                 dismiss := TouchArea { mouse-cursor: pointer; clicked => { root.action-status = ""; } }

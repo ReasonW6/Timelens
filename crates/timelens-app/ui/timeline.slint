@@ -56,7 +56,7 @@ export component StickyDay inherits Rectangle {
     drop-shadow-offset-y: 6px;
     drop-shadow-color: Theme.shadow-soft;
     accessible-role: button;
-    accessible-label: root.title + " " + root.subtitle + "，跳到日期";
+    accessible-label: @tr("{} {}，跳到日期", root.title, root.subtitle);
     accessible-action-default => { root.clicked(); }
     DayHeader { title: root.title; subtitle: root.subtitle; duration: root.duration; apps: root.apps; shares: root.shares; }
     Rectangle { y: parent.height - 1px; height: 1px; background: Theme.line; }
@@ -128,7 +128,7 @@ component AppStack inherits Rectangle {
                 VerticalLayout {
                     alignment: center; spacing: 0px;
                     Text { text: root.name; color: Theme.ink; font-size: 12px; font-weight: 600; }
-                    Text { text: "主应用"; color: Theme.ink-3; font-size: 10px; }
+                    Text { text: @tr("主应用"); color: Theme.ink-3; font-size: 10px; }
                 }
             }
             for app in root.stack : HorizontalLayout {
@@ -160,21 +160,21 @@ component EmptyToday inherits Rectangle {
                 colorize: root.recording == 2 ? Theme.danger : root.recording == 3 ? Theme.warn : Theme.ink-3;
             }
             Text {
-                text: root.recording == 3 ? "记录已暂停" : root.recording == 2 ? "采集器未连接，正在自动重试" : root.recording == 1 ? "正在连接采集器…" : "今天还没有记录";
+                text: root.recording == 3 ? @tr("记录已暂停") : root.recording == 2 ? @tr("采集器未连接，正在自动重试") : root.recording == 1 ? @tr("正在连接采集器…") : @tr("今天还没有记录");
                 color: Theme.ink; font-size: 14px; font-weight: 600; vertical-alignment: center;
             }
         }
         Note {
             horizontal-alignment: center; font-size: 12px;
-            text: root.recording == 3 ? "暂停期间不记录活动与输入，继续后从现在开始记录。"
-                : root.recording == 2 ? "Timelens 会自动重新启动采集器；也可以在设置中查看记录状态。"
-                : root.recording == 1 ? "连接后，切换到任意窗口几秒内就会出现在这里。"
-                : "切换到任意窗口后，几秒内就会按时间出现在这里。";
+            text: root.recording == 3 ? @tr("暂停期间不记录活动与输入，继续后从现在开始记录。")
+                : root.recording == 2 ? @tr("Timelens 会自动重新启动采集器；也可以在设置中查看记录状态。")
+                : root.recording == 1 ? @tr("连接后，切换到任意窗口几秒内就会出现在这里。")
+                : @tr("切换到任意窗口后，几秒内就会按时间出现在这里。");
         }
         if root.recording == 3 || root.recording == 2 : HorizontalLayout {
             alignment: center;
-            if root.recording == 3 : Action { text: "继续记录"; icon: @image-url("icons/player-play.svg"); accent: true; clicked => { root.resume(); } }
-            if root.recording == 2 : Action { text: "查看记录设置"; clicked => { root.open-settings(); } }
+            if root.recording == 3 : Action { text: @tr("继续记录"); icon: @image-url("icons/player-play.svg"); accent: true; clicked => { root.resume(); } }
+            if root.recording == 2 : Action { text: @tr("查看记录设置"); clicked => { root.open-settings(); } }
         }
     }
 }
@@ -261,12 +261,12 @@ export component HistoryRow inherits Rectangle {
     // Right-click, or the menu key, offers what the detail pane offers.
     if root.entry : ContextMenuArea {
         Menu {
-            MenuItem { title: "查看这段的快照"; activated => { root.act(0); } }
-            MenuItem { title: "这个应用的规则"; activated => { root.act(2); } }
+            MenuItem { title: @tr("查看这段的快照"); activated => { root.act(0); } }
+            MenuItem { title: @tr("这个应用的规则"); activated => { root.act(2); } }
         }
         Rectangle {
             accessible-role: button;
-            accessible-label: item.time + " " + item.title + "，" + item.duration + (item.subtitle == "" ? "" : "，" + item.subtitle);
+            accessible-label: item.subtitle == "" ? @tr("{} {}，{}", item.time, item.title, item.duration) : @tr("{} {}，{}，{}", item.time, item.title, item.duration, item.subtitle);
             accessible-action-default => { root.select(); }
             border-radius: 12px;
             background: root.selected ? Theme.surface : touch.has-hover ? Theme.hover-tint : transparent;
@@ -360,9 +360,9 @@ export component AppTimes inherits Rectangle {
         HorizontalLayout {
             spacing: 8px;
             for metric in [
-                { label: "聚焦", value: root.app.focused, swatch: 2 },
-                { label: "前台可见", value: root.app.visible, swatch: 1 },
-                { label: "后台", value: root.app.background, swatch: 0 },
+                { label: @tr("聚焦"), value: root.app.focused, swatch: 2 },
+                { label: @tr("前台可见"), value: root.app.visible, swatch: 1 },
+                { label: @tr("后台"), value: root.app.background, swatch: 0 },
             ] : Rectangle {
                 horizontal-stretch: 1;
                 height: 54px;
@@ -406,8 +406,8 @@ export component AppTimes inherits Rectangle {
                 }
             }
             Text {
-                text: root.under < 0 ? "未打开"
-                    : (root.segment.kind == 2 ? "聚焦 " : root.segment.kind == 1 ? "前台可见 " : "后台 ")
+                text: root.under < 0 ? @tr("未打开")
+                    : (root.segment.kind == 2 ? @tr("聚焦 ") : root.segment.kind == 1 ? @tr("前台可见 ") : @tr("后台 "))
                         + root.at-ratio(root.segment.offset) + "–" + root.at-ratio(root.segment.offset + root.segment.width);
                 color: Theme.on-tooltip.with-alpha(0.82); font-size: 12px; vertical-alignment: center;
             }
@@ -421,7 +421,7 @@ export component ParticipantItem inherits Rectangle {
     in-out property <bool> expanded: false;
     // Applications on screen alongside were never focused there, so they show
     // how long they were in view instead.
-    private property <string> headline: root.app.role == "同屏" ? "同屏 " + root.app.visible : "聚焦 " + root.app.focused;
+    private property <string> headline: root.app.kind == 2 ? @tr("同屏 {}", root.app.visible) : @tr("聚焦 {}", root.app.focused);
     height: header.height + (root.expanded ? body.preferred-height : 0px);
     clip: true;
     animate height { duration: 200ms; easing: ease-out; }
@@ -431,7 +431,7 @@ export component ParticipantItem inherits Rectangle {
     border-color: Theme.line;
     animate background { duration: 140ms; }
     accessible-role: button;
-    accessible-label: root.app.name + "，" + root.app.role + "，" + root.headline;
+    accessible-label: @tr("{}，{}，{}", root.app.name, root.app.role, root.headline);
     accessible-expandable: true;
     accessible-expanded: root.expanded;
     accessible-action-default => { root.expanded = !root.expanded; }
@@ -444,7 +444,7 @@ export component ParticipantItem inherits Rectangle {
             VerticalLayout {
                 alignment: center; spacing: 1px; horizontal-stretch: 1;
                 Text { text: root.app.name; color: Theme.ink; font-size: 13px; font-weight: 500; overflow: elide; }
-                Text { text: root.app.role; color: root.app.role == "主应用" ? Theme.brand-ink : Theme.ink-3; font-size: 11px; }
+                Text { text: root.app.role; color: root.app.kind == 0 ? Theme.brand-ink : Theme.ink-3; font-size: 11px; }
             }
             Text { text: root.headline; color: Theme.ink-2; font-size: 12px; font-weight: 500; vertical-alignment: center; }
             VerticalLayout {

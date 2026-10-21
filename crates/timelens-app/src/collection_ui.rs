@@ -1,3 +1,4 @@
+use crate::i18n::{tr, trn};
 use crate::{AppWindow, ButtonHeat, CollectionState, KeyCell, SystemRow, UiState};
 use anyhow::{Context, Result, anyhow};
 use chrono::TimeZone;
@@ -14,7 +15,7 @@ struct Data {
     links: Vec<(String, String)>,
 }
 fn lock(s: &Arc<Mutex<Storage>>) -> Result<std::sync::MutexGuard<'_, Storage>> {
-    s.lock().map_err(|_| anyhow!("存储锁不可用"))
+    s.lock().map_err(|_| anyhow!(tr!("存储锁不可用")))
 }
 fn strings(values: impl IntoIterator<Item = String>) -> ModelRc<slint::SharedString> {
     Rc::new(VecModel::from(
@@ -54,7 +55,7 @@ fn refresh(w: &AppWindow, d: &mut Data, s: &Storage) -> Result<()> {
         .map(|(identity, name)| {
             let shared = apps.iter().filter(|(_, other)| other == name).count() > 1;
             let shown = if shared {
-                format!("{name}（{}）", origin(identity))
+                tr!("{}（{}）", name, origin(identity))
             } else {
                 name.clone()
             };
@@ -85,10 +86,10 @@ fn refresh(w: &AppWindow, d: &mut Data, s: &Storage) -> Result<()> {
             .filter(|(id, _)| ids.contains(id))
             .map(|(_, name)| name.clone())
             .collect::<Vec<_>>()
-            .join("、")
+            .join(tr!("、"))
     };
     g.set_rules(
-        format!(
+        tr!(
             "活动名单：{}\n输入名单：{}\n快照名单：{}",
             names(&p.activity),
             names(&p.input),
@@ -99,7 +100,7 @@ fn refresh(w: &AppWindow, d: &mut Data, s: &Storage) -> Result<()> {
     Ok(())
 }
 fn select(w: &AppWindow, d: &Data, s: &Storage, index: i32) -> Result<()> {
-    let (id, name) = d.apps.get(index as usize).context("请选择应用")?;
+    let (id, name) = d.apps.get(index as usize).context(tr!("请选择应用"))?;
     let p = s.collection_policy()?;
     let g = w.global::<CollectionState>();
     g.set_app_index(index);
@@ -108,7 +109,7 @@ fn select(w: &AppWindow, d: &Data, s: &Storage, index: i32) -> Result<()> {
     g.set_input(p.input.contains(id));
     g.set_snapshots(s.snapshot_exclusions()?.contains(id));
     let windows = s.application_deletion_impact(id)?;
-    g.set_impact(format!("将删除「{name}」的 {windows} 个窗口实例。").into());
+    g.set_impact(trn!(windows, "将删除「{}」的 {} 个窗口实例。", name, windows).into());
     g.set_delete_confirmed(false);
     g.set_merge_confirmed(false);
     g.set_merge_index(-1);
@@ -117,21 +118,26 @@ fn select(w: &AppWindow, d: &Data, s: &Storage, index: i32) -> Result<()> {
 }
 /// The rules two applications share once merged: each list takes both.
 fn merge_preview(d: &Data, s: &Storage, first: i32, second: i32) -> Result<String> {
-    let (a, a_name) = d.apps.get(first as usize).context("请选择应用")?;
-    let (b, b_name) = d.apps.get(second as usize).context("请选择另一个应用")?;
+    let (a, a_name) = d.apps.get(first as usize).context(tr!("请选择应用"))?;
+    let (b, b_name) = d
+        .apps
+        .get(second as usize)
+        .context(tr!("请选择另一个应用"))?;
     let p = s.collection_policy()?;
     let shots = s.snapshot_exclusions()?;
     let rule = |label: &str, has: &dyn Fn(&str) -> bool| match (has(a), has(b)) {
         (false, false) => format!("{label} ✗"),
         (true, true) => format!("{label} ✓"),
-        (true, false) => format!("{label} ✓（来自「{a_name}」）"),
-        (false, true) => format!("{label} ✓（来自「{b_name}」）"),
+        (true, false) => tr!("{} ✓（来自「{}」）", label, a_name),
+        (false, true) => tr!("{} ✓（来自「{}」）", label, b_name),
     };
-    Ok(format!(
+    Ok(tr!(
         "合并后共用规则：{} · {} · {}。",
-        rule("不记录活动", &|id| p.activity.contains(id)),
-        rule("不记录输入", &|id| p.input.contains(id)),
-        rule("不拍摄快照", &|id| shots.iter().any(|shot| shot == id)),
+        rule(tr!("不记录活动"), &|id| p.activity.contains(id)),
+        rule(tr!("不记录输入"), &|id| p.input.contains(id)),
+        rule(tr!("不拍摄快照"), &|id| shots
+            .iter()
+            .any(|shot| shot == id))
     ))
 }
 pub fn install(
@@ -153,11 +159,11 @@ pub fn install(
             let g = w.global::<CollectionState>();
             let first = g.get_app_index();
             let preview = if other == first {
-                "不能和自己合并，请选择另一个应用。".to_owned()
+                tr!("不能和自己合并，请选择另一个应用。").to_owned()
             } else {
                 lock(&storage)
                     .and_then(|s| merge_preview(&data.borrow(), &s, first, other))
-                    .unwrap_or_else(|e| format!("读取规则失败：{e}"))
+                    .unwrap_or_else(|e| tr!("读取规则失败：{}", e))
             };
             g.set_merge_preview(preview.into());
         });
@@ -186,7 +192,7 @@ pub fn install(
                 })();
                 if let Err(e) = result {
                     w.global::<CollectionState>()
-                        .set_status(format!("读取统计失败：{e}").into());
+                        .set_status(tr!("读取统计失败：{}", e).into());
                 }
             }
         });
@@ -200,7 +206,7 @@ pub fn install(
                 && let Err(e) = lock(&storage).and_then(|s| select(&w, &data.borrow(), &s, index))
             {
                 w.global::<CollectionState>()
-                    .set_status(format!("读取统计失败：{e}").into());
+                    .set_status(tr!("读取统计失败：{}", e).into());
             }
         });
     }
@@ -218,7 +224,7 @@ pub fn install(
         if action == 7 {
             let result = lock(&worker_storage).and_then(|s| statistics(&w, &s, &timeline.borrow()));
             if let Err(e) = result {
-                g.set_status(format!("读取统计失败：{e}").into());
+                g.set_status(tr!("读取统计失败：{}", e).into());
             }
             return;
         }
@@ -272,7 +278,7 @@ pub fn install(
                             s.set_collection_policy(p)?;
                         }
                         2 => {
-                            let id = id.context("请选择应用")?;
+                            let id = id.context(tr!("请选择应用"))?;
                             let mut p = s.collection_policy()?;
                             for member in s.merged_members(&id)? {
                                 for (list, enabled) in
@@ -290,28 +296,28 @@ pub fn install(
                         }
                         3 => {
                             if !merge_confirmed {
-                                return Err(anyhow!("请确认三份规则各自取并集"));
+                                return Err(anyhow!(tr!("请确认三份规则各自取并集")));
                             }
                             s.set_application_merge(
-                                &id.context("请选择应用")?,
-                                &other.context("请选择另一个应用")?,
+                                &id.context(tr!("请选择应用"))?,
+                                &other.context(tr!("请选择另一个应用"))?,
                                 true,
                             )?;
                             crate::history::invalidate();
                         }
                         4 => {
-                            let (a, b) = link.context("请选择合并关联")?;
+                            let (a, b) = link.context(tr!("请选择合并关联"))?;
                             s.set_application_merge(&a, &b, false)?;
                             crate::history::invalidate();
                         }
                         5 => {
                             if !confirmed {
-                                return Err(anyhow!("请确认删除影响"));
+                                return Err(anyhow!(tr!("请确认删除影响")));
                             }
-                            s.delete_application_history(&id.context("请选择应用")?)?;
+                            s.delete_application_history(&id.context(tr!("请选择应用"))?)?;
                             crate::data_ui::dataset_changed();
                         }
-                        _ => return Err(anyhow!("未知操作")),
+                        _ => return Err(anyhow!(tr!("未知操作"))),
                     }
                     Ok(None)
                 })
@@ -346,27 +352,25 @@ pub fn install(
             match result {
                 Err(e) => {
                     let what = if action == 0 {
-                        "切换记录状态失败"
+                        tr!("切换记录状态失败")
                     } else {
-                        "保存失败"
+                        tr!("保存失败")
                     };
-                    g.set_status(format!("{what}：{e}").into());
+                    g.set_status(tr!("{}：{}", what, e).into());
                 }
                 Ok(None) if action == 2 => {
-                    g.set_status(
-                        format!("已更新「{name}」的规则，立即生效，不影响已有记录").into(),
-                    );
+                    g.set_status(tr!("已更新「{}」的规则，立即生效，不影响已有记录", name).into());
                 }
                 Ok(None) if action == 3 => {
-                    g.set_status(format!("已合并「{name}」，原始记录不改写").into())
+                    g.set_status(tr!("已合并「{}」，原始记录不改写", name).into())
                 }
-                Ok(None) if action == 4 => g.set_status("已解除合并，恢复合并前的规则".into()),
-                Ok(None) if action == 5 => g.set_status(format!("已删除「{name}」的历史").into()),
+                Ok(None) if action == 4 => g.set_status(tr!("已解除合并，恢复合并前的规则").into()),
+                Ok(None) if action == 5 => g.set_status(tr!("已删除「{}」的历史", name).into()),
                 Ok(None) if action == 0 => g.set_status(
                     if g.get_paused() {
-                        "已暂停记录"
+                        tr!("已暂停记录")
                     } else {
-                        "已继续记录，从现在开始记录"
+                        tr!("已继续记录，从现在开始记录")
                     }
                     .into(),
                 ),
@@ -427,7 +431,7 @@ fn range_dates(range: Option<&UiState>) -> (String, String, bool) {
 
 fn date_label(date: &str) -> String {
     chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d")
-        .map(|d| d.format("%-m月%-d日").to_string())
+        .map(|d| d.format(tr!("%-m月%-d日")).to_string())
         .unwrap_or_else(|_| date.to_owned())
 }
 
@@ -436,11 +440,11 @@ fn statistics(w: &AppWindow, s: &Storage, range: &UiState) -> Result<()> {
     let all = w.get_stats_all();
     let (first, last, whole) = range_dates((!all).then_some(range));
     if first.is_empty() {
-        anyhow::bail!("所选时段不可用");
+        anyhow::bail!(tr!("所选时段不可用"));
     }
     g.set_scope(
         if all {
-            "全部记录".to_owned()
+            tr!("全部记录").to_owned()
         } else if first == last {
             date_label(&first)
         } else {
@@ -482,7 +486,8 @@ fn statistics(w: &AppWindow, s: &Storage, range: &UiState) -> Result<()> {
     g.set_unplaced_keys(if unplaced == 0 {
         "".into()
     } else {
-        format!(
+        trn!(
+            unplaced,
             "另有 {} 次按键不在这张键盘图上，例如 Home、Delete 等编辑键或输入法切换键。",
             crate::grouped_count(unplaced)
         )
@@ -500,7 +505,16 @@ fn statistics(w: &AppWindow, s: &Storage, range: &UiState) -> Result<()> {
     g.set_keys(Rc::new(VecModel::from(keys)).into());
     let totals = s.permanent_input_totals()?;
     let [keyboard, left, middle, right] = totals.map(crate::grouped_count);
-    g.set_totals(format!("键盘 {keyboard} · 左键 {left} · 中键 {middle} · 右键 {right}").into());
+    g.set_totals(
+        tr!(
+            "键盘 {} · 左键 {} · 中键 {} · 右键 {}",
+            keyboard,
+            left,
+            middle,
+            right
+        )
+        .into(),
+    );
     // All records start with the first one, not at the query's lower bound.
     let now = crate::unix_time_ms();
     let (start, end) = if all {
@@ -542,7 +556,12 @@ fn statistics(w: &AppWindow, s: &Storage, range: &UiState) -> Result<()> {
         s.system_marks(start, end)?
             .into_iter()
             .map(|(kind, count)| {
-                format!("{} {} 次", system_label(&kind), crate::grouped_count(count))
+                trn!(
+                    count,
+                    "{} {} 次",
+                    system_label(&kind),
+                    crate::grouped_count(count)
+                )
             })
             .collect::<Vec<_>>()
             .join(" · ")
@@ -552,15 +571,15 @@ fn statistics(w: &AppWindow, s: &Storage, range: &UiState) -> Result<()> {
 }
 fn system_label(kind: &str) -> &str {
     match kind {
-        "desktop_idle" => "桌面空闲",
-        "locked" => "锁屏",
-        "sleep" => "睡眠",
-        "global_pause" => "暂停",
-        "privacy_exclusion" => "活动排除",
-        "session_disconnected" => "会话断开",
-        "secure_desktop" => "安全桌面",
-        "clock_discontinuity" => "系统时间跳变",
-        "system_end" => "系统正常结束",
+        "desktop_idle" => tr!("桌面空闲"),
+        "locked" => tr!("锁屏"),
+        "sleep" => tr!("睡眠"),
+        "global_pause" => tr!("暂停"),
+        "privacy_exclusion" => tr!("活动排除"),
+        "session_disconnected" => tr!("会话断开"),
+        "secure_desktop" => tr!("安全桌面"),
+        "clock_discontinuity" => tr!("系统时间跳变"),
+        "system_end" => tr!("系统正常结束"),
         _ => kind,
     }
 }

@@ -1,3 +1,4 @@
+use crate::i18n::tr;
 use std::{
     ffi::c_void,
     os::windows::ffi::OsStrExt,
@@ -185,7 +186,7 @@ pub(crate) fn decode_preview_pixels(
     let rgba = image::load_from_memory(&webp)?.into_rgba8();
     drop(webp);
     if rgba.dimensions() != (width, height) {
-        bail!("解密图片尺寸与元数据不一致");
+        bail!(tr!("解密图片尺寸与元数据不一致"));
     }
     Ok(
         slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(

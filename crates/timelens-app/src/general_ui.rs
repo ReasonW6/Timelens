@@ -1,3 +1,4 @@
+use crate::i18n::tr;
 use crate::{AppWindow, startup};
 use slint::ComponentHandle;
 use std::{
@@ -35,9 +36,9 @@ fn request(
         window.set_startup_busy(true);
         window.set_startup_status(
             if enabled.is_some() {
-                "等待管理员确认…"
+                tr!("等待管理员确认…")
             } else {
-                "正在读取启动设置…"
+                tr!("正在读取启动设置…")
             }
             .into(),
         );
@@ -47,11 +48,11 @@ fn request(
     thread::spawn(move || {
         let message = enabled.map(|enabled| match startup::set(&task, enabled) {
             Ok(()) => if enabled {
-                "已开启开机自启动"
+                tr!("已开启开机自启动")
             } else {
                 // The page's note already says recording goes on; the same
                 // words as a later re-read keep the line from changing.
-                "已关闭开机自启动"
+                tr!("已关闭开机自启动")
             }
             .to_owned(),
             Err(error) => format!("{error:#}"),
@@ -66,7 +67,7 @@ pub fn install(window: &AppWindow, task: Option<String>) {
     let (sender, receiver) = mpsc::channel::<Update>();
     let busy = Arc::new(AtomicBool::new(false));
     if task.is_none() {
-        window.set_startup_status("开机自启动仅在安装版中可用".into());
+        window.set_startup_status(tr!("开机自启动仅在安装版中可用").into());
     }
     let weak = window.as_weak();
     let read_task = task.clone();
@@ -91,7 +92,7 @@ pub fn install(window: &AppWindow, task: Option<String>) {
             if change_busy.load(Ordering::Acquire) {
                 change_pending.set(Some(enabled));
                 window.set_startup_busy(true);
-                window.set_startup_status("等待管理员确认…".into());
+                window.set_startup_status(tr!("等待管理员确认…").into());
                 return;
             }
             request(
@@ -129,11 +130,11 @@ pub fn install(window: &AppWindow, task: Option<String>) {
                     window.set_startup_available(true);
                     let message = update.message.unwrap_or_else(|| {
                         if !state.consistent {
-                            "主程序与采集器的自启动状态不一致，请开启开关同步设置"
+                            tr!("主程序与采集器的自启动状态不一致，请开启开关同步设置")
                         } else if state.enabled {
-                            "已开启开机自启动"
+                            tr!("已开启开机自启动")
                         } else {
-                            "已关闭开机自启动"
+                            tr!("已关闭开机自启动")
                         }
                         .to_owned()
                     });

@@ -40,64 +40,64 @@ export component DataPanel inherits VerticalLayout {
     spacing: 10px;
     alignment: start;
 
-    SettingsHeader { text: "存储位置"; }
+    SettingsHeader { text: @tr("存储位置"); }
     SettingsGroup {
         SettingRow {
-            title: "当前数据目录";
-            description: DataState.current-directory != "" ? DataState.current-directory : "正在读取数据位置…";
+            title: @tr("当前数据目录");
+            description: DataState.current-directory != "" ? DataState.current-directory : @tr("正在读取数据位置…");
             icon: @image-url("icons/folder.svg");
         }
         Rule { }
-        SettingRow { title: "加密存储"; description: root.storage-status; icon: @image-url("icons/lock.svg"); }
+        SettingRow { title: @tr("加密存储"); description: root.storage-status; icon: @image-url("icons/lock.svg"); }
         Rule { }
         SettingExpander {
-            title: "迁移到其他位置";
-            description: "可以选择本机任意磁盘上的文件夹。迁移期间暂停记录，全部数据复制并校验通过后才会切换。";
+            title: @tr("迁移到其他位置");
+            description: @tr("可以选择本机任意磁盘上的文件夹。迁移期间暂停记录，全部数据复制并校验通过后才会切换。");
             icon: @image-url("icons/arrow-right-circle.svg");
             HorizontalLayout {
                 spacing: 8px;
-                LineEdit { height: 34px; horizontal-stretch: 1; text <=> DataState.destination; placeholder-text: "例如 D:\\TimelensData"; enabled: !DataState.busy; }
-                Action { text: "选择文件夹"; icon: @image-url("icons/folder.svg"); enabled: !DataState.busy; clicked => { DataState.action(11); } }
-                Action { text: "开始迁移"; accent: true; enabled: !DataState.busy && DataState.destination != ""; clicked => { DataState.action(9); } }
+                LineEdit { height: 34px; horizontal-stretch: 1; text <=> DataState.destination; placeholder-text: @tr("例如 D:\\TimelensData"); enabled: !DataState.busy; }
+                Action { text: @tr("选择文件夹"); icon: @image-url("icons/folder.svg"); enabled: !DataState.busy; clicked => { DataState.action(11); } }
+                Action { text: @tr("开始迁移"); accent: true; enabled: !DataState.busy && DataState.destination != ""; clicked => { DataState.action(9); } }
             }
-            Note { text: "所选文件夹里已有其他文件时，数据会放进其中新建的 Timelens 文件夹。外部备份与导出文件会留在原处。"; font-size: 12px; }
+            Note { text: @tr("所选文件夹里已有其他文件时，数据会放进其中新建的 Timelens 文件夹。外部备份与导出文件会留在原处。"); font-size: 12px; }
         }
     }
 
     Rectangle { height: 10px; }
-    SettingsHeader { text: "备份与恢复"; }
+    SettingsHeader { text: @tr("备份与恢复"); }
     SettingsGroup {
         SettingExpander {
-            title: "创建便携备份";
-            description: "ZIP 包含活动、输入、设置和排除规则；登录任务不进入备份。";
+            title: @tr("创建便携备份");
+            description: @tr("ZIP 包含活动、输入、设置和排除规则；登录任务不进入备份。");
             icon: @image-url("icons/database.svg");
             expanded <=> DataState.backup-open;
-            CheckBox { font-size: 13px; text: "包含快照图片"; checked <=> DataState.snapshots; enabled: !DataState.busy; }
+            CheckBox { font-size: 13px; text: @tr("包含快照图片"); checked <=> DataState.snapshots; enabled: !DataState.busy; }
             LineEdit {
                 height: 34px;
                 text <=> DataState.password;
                 input-type: password;
-                placeholder-text: "独立密码（留空则不加密）";
+                placeholder-text: @tr("独立密码（留空则不加密）");
                 enabled: !DataState.busy;
             }
             if DataState.password != "" : LineEdit {
                 height: 34px;
                 text <=> DataState.password-again;
                 input-type: password;
-                placeholder-text: "再次输入密码";
+                placeholder-text: @tr("再次输入密码");
                 enabled: !DataState.busy;
             }
             if DataState.password != "" && DataState.password-again != "" && DataState.password != DataState.password-again : Note {
-                text: "两次输入的密码不一致。"; color: Theme.danger; font-size: 12px;
+                text: @tr("两次输入的密码不一致。"); color: Theme.danger; font-size: 12px;
             }
             Note {
-                text: DataState.password != "" ? "独立密码无法找回，也不会保存在备份内；忘记密码后这份备份无法打开。" : "不设密码时，任何拿到 ZIP 的人都能读取其中的记录。";
+                text: DataState.password != "" ? @tr("独立密码无法找回，也不会保存在备份内；忘记密码后这份备份无法打开。") : @tr("不设密码时，任何拿到 ZIP 的人都能读取其中的记录。");
                 font-size: 12px;
             }
-            if DataState.password == "" : CheckBox { font-size: 13px; text: "我知道这份备份未加密、含敏感数据，并会妥善保管"; checked <=> DataState.sensitive-confirmed; enabled: !DataState.busy; }
+            if DataState.password == "" : CheckBox { font-size: 13px; text: @tr("我知道这份备份未加密、含敏感数据，并会妥善保管"); checked <=> DataState.sensitive-confirmed; enabled: !DataState.busy; }
             HorizontalLayout {
                 Action {
-                    text: DataState.busy ? "正在处理…" : "创建备份…";
+                    text: DataState.busy ? @tr("正在处理…") : @tr("创建备份…");
                     icon: @image-url("icons/download.svg");
                     accent: true;
                     enabled: !DataState.busy && (DataState.password != "" ? DataState.password == DataState.password-again : DataState.sensitive-confirmed);
@@ -108,54 +108,54 @@ export component DataPanel inherits VerticalLayout {
         }
         Rule { }
         SettingExpander {
-            title: "从备份恢复";
-            description: "用一份便携备份替换当前的全部记录。恢复前会先校验备份。";
+            title: @tr("从备份恢复");
+            description: @tr("用一份便携备份替换当前的全部记录。恢复前会先校验备份。");
             icon: @image-url("icons/history.svg");
             expanded: DataState.recovery-needed;
-            if DataState.recovery-needed : Note { text: "当前处于恢复模式。选择一个备份，校验通过后再替换数据集。"; color: Theme.brand-ink; }
+            if DataState.recovery-needed : Note { text: @tr("当前处于恢复模式。选择一个备份，校验通过后再替换数据集。"); color: Theme.brand-ink; }
             LineEdit {
                 height: 34px;
                 text <=> DataState.restore-password;
                 input-type: password;
-                placeholder-text: "备份密码（没有则留空）";
+                placeholder-text: @tr("备份密码（没有则留空）");
                 enabled: !DataState.busy;
                 edited => { DataState.restore-ready = false; DataState.restore-info = ""; }
             }
             HorizontalLayout {
                 spacing: 10px;
                 Action {
-                    text: DataState.archive == "" ? "选择备份…" : "换一个备份…";
+                    text: DataState.archive == "" ? @tr("选择备份…") : @tr("换一个备份…");
                     icon: @image-url("icons/folder.svg");
                     enabled: !DataState.busy;
                     clicked => { DataState.action(1); }
                 }
-                if DataState.archive != "" && !DataState.restore-ready : Action { text: "重新校验"; enabled: !DataState.busy; clicked => { DataState.action(3); } }
+                if DataState.archive != "" && !DataState.restore-ready : Action { text: @tr("重新校验"); enabled: !DataState.busy; clicked => { DataState.action(3); } }
                 Rectangle { horizontal-stretch: 1; }
             }
             if DataState.restore-info != "" : Note { text: DataState.restore-info; color: DataState.restore-ready ? Theme.ink-2 : Theme.danger; }
-            Note { text: "恢复会整体替换现有记录，不会合并。"; font-size: 12px; }
+            Note { text: @tr("恢复会整体替换现有记录，不会合并。"); font-size: 12px; }
             HorizontalLayout {
-                Action { text: "用此备份替换当前数据…"; danger: true; enabled: !DataState.busy && DataState.restore-ready; clicked => { DataState.restore-confirm = 1; } }
+                Action { text: @tr("用此备份替换当前数据…"); danger: true; enabled: !DataState.busy && DataState.restore-ready; clicked => { DataState.restore-confirm = 1; } }
                 Rectangle { horizontal-stretch: 1; }
             }
         }
     }
 
     Rectangle { height: 10px; }
-    SettingsHeader { text: "维护"; }
+    SettingsHeader { text: @tr("维护"); }
     SettingsGroup {
         SettingRow {
-            title: "完整性检查";
-            description: DataState.integrity != "" ? DataState.integrity : "检查数据库的完整性与外键。";
+            title: @tr("完整性检查");
+            description: DataState.integrity != "" ? DataState.integrity : @tr("检查数据库的完整性与外键。");
             icon: @image-url("icons/shield.svg");
-            Action { text: "运行检查"; enabled: !DataState.busy; clicked => { DataState.action(8); } }
+            Action { text: @tr("运行检查"); enabled: !DataState.busy; clicked => { DataState.action(8); } }
         }
         Rule { }
         SettingRow {
-            title: "修复工具";
-            description: "数据损坏时使用：Timelens 会退出并打开修复工具，从备份或可读取的记录重建数据。";
+            title: @tr("修复工具");
+            description: @tr("数据损坏时使用：Timelens 会退出并打开修复工具，从备份或可读取的记录重建数据。");
             icon: @image-url("icons/refresh.svg");
-            Action { text: "打开修复工具…"; enabled: !DataState.busy; clicked => { DataState.restore-confirm = 2; } }
+            Action { text: @tr("打开修复工具…"); enabled: !DataState.busy; clicked => { DataState.restore-confirm = 2; } }
         }
     }
 }
@@ -197,7 +197,7 @@ export component MoveDialog inherits Rectangle {
                         }
                     }
                     SectionTitle {
-                        text: root.moving ? "正在迁移数据" : root.failed ? "迁移失败" : "迁移完成";
+                        text: root.moving ? @tr("正在迁移数据") : root.failed ? @tr("迁移失败") : @tr("迁移完成");
                         font-size: 17px; vertical-alignment: center;
                     }
                 }
@@ -215,12 +215,12 @@ export component MoveDialog inherits Rectangle {
                             animate width { duration: 240ms; easing: ease-out; }
                         }
                     }
-                    Note { text: "迁移期间暂停记录。请不要关闭 Timelens 或拔出目标磁盘，完成后会自动恢复记录。"; font-size: 12px; }
+                    Note { text: @tr("迁移期间暂停记录。请不要关闭 Timelens 或拔出目标磁盘，完成后会自动恢复记录。"); font-size: 12px; }
                 }
                 if !root.moving : Note { text: DataState.move-message; color: Theme.ink-2; font-size: 14px; }
                 if !root.moving : HorizontalLayout {
                     Rectangle { horizontal-stretch: 1; }
-                    Action { min-width: 96px; text: root.failed ? "知道了" : "好的"; accent: true; modal-action: true; clicked => { root.closed(); } }
+                    Action { min-width: 96px; text: root.failed ? @tr("知道了") : @tr("好的"); accent: true; modal-action: true; clicked => { root.closed(); } }
                 }
             }
         }

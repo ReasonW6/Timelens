@@ -1,4 +1,5 @@
 use super::*;
+use crate::i18n::{tr, trn};
 use std::{
     collections::{BTreeSet, VecDeque},
     sync::mpsc,
@@ -303,7 +304,7 @@ fn publish(window: &AppWindow, state: &mut HistoryState) {
         .is_some_and(|offset| state.days.contains_key(&offset))
     {
         state.paging.jump = None;
-        window.set_action_status("这一天没有记录".into());
+        window.set_action_status(tr!("这一天没有记录").into());
     }
     state.paging.layout = layout;
     // Replaced only when changed, like the rows: see `same_item`.
@@ -372,8 +373,8 @@ fn describe(window: &AppWindow, state: &mut HistoryState, query: &str) {
     window.set_history_day_label(
         match offset {
             0 => String::new(),
-            1 => "昨天".to_owned(),
-            _ => date.format("%-m月%-d日").to_string(),
+            1 => tr!("昨天").to_owned(),
+            _ => date.format(tr!("%-m月%-d日")).to_string(),
         }
         .into(),
     );
@@ -404,11 +405,13 @@ fn describe(window: &AppWindow, state: &mut HistoryState, query: &str) {
     let shown = state.query.trim();
     window.set_history_search_status(
         if done {
-            format!("“{shown}” · 最近一个月 · 找到 {found} 段")
+            trn!(found, "“{}” · 最近一个月 · 找到 {} 段", shown, found)
         } else {
-            format!(
-                "正在搜索最近一个月… 已查 {searched}/{} 天，找到 {found} 段",
-                until + 1
+            tr!(
+                "正在搜索最近一个月… 已查 {}/{} 天，找到 {} 段",
+                searched,
+                until + 1,
+                found
             )
         }
         .into(),

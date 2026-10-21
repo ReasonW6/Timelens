@@ -1,0 +1,1720 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: Timelens\n"
+"Language: en\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=2; plural=(n != 1);\n"
+
+#: main-window.slint
+msgid "0 次"
+msgstr "0 presses"
+
+#: main-window.slint
+msgid "0 秒"
+msgstr "0s"
+
+#: main-window.slint
+msgid "1 小时"
+msgstr "1 hour"
+
+#: main-window.slint
+msgid "1 年"
+msgstr "1 year"
+
+#: main-window.slint
+msgid "10月"
+msgstr "Oct"
+
+#: main-window.slint
+msgid "11月"
+msgstr "Nov"
+
+#: main-window.slint
+msgid "12月"
+msgstr "Dec"
+
+#: main-window.slint
+msgid "15 分钟"
+msgstr "15 minutes"
+
+#: main-window.slint
+msgid "1月"
+msgstr "Jan"
+
+#: main-window.slint
+msgid "2月"
+msgstr "Feb"
+
+#: main-window.slint
+msgid "30 天"
+msgstr "30 days"
+
+#: main-window.slint
+msgid "30 天 · 100 MiB"
+msgstr "30 days · 100 MiB"
+
+#: main-window.slint
+msgid "3月"
+msgstr "Mar"
+
+#: main-window.slint
+msgid "4月"
+msgstr "Apr"
+
+#: main-window.slint
+msgid "5月"
+msgstr "May"
+
+#: main-window.slint
+msgid "6月"
+msgstr "Jun"
+
+#: main-window.slint
+msgid "7 天"
+msgstr "7 days"
+
+#: main-window.slint
+msgid "7月"
+msgstr "Jul"
+
+#: main-window.slint
+msgid "8月"
+msgstr "Aug"
+
+#: main-window.slint
+msgid "90 天"
+msgstr "90 days"
+
+#: main-window.slint
+msgid "9月"
+msgstr "Sep"
+
+#: about.slint
+msgid "Timelens {}，适用于 Windows 11。"
+msgstr "Timelens {} for Windows 11."
+
+#: recovery.slint
+msgid "Timelens · 数据恢复"
+msgstr "Timelens · Data recovery"
+
+#: timeline.slint
+msgid "Timelens 会自动重新启动采集器；也可以在设置中查看记录状态。"
+msgstr "Timelens restarts the collector automatically. You can also check the recording status in Settings."
+
+#: main-window.slint
+msgid "Timelens 会退出并打开修复工具，修复完成前不会记录活动和输入。"
+msgstr "Timelens will quit and open the repair tool. No activity or input is recorded until the repair finishes."
+
+#: main-window.slint
+msgid "Timelens 记录什么、不记录什么。"
+msgstr "What Timelens records, and what it doesn't."
+
+#: data-panel.slint
+msgid "ZIP 包含活动、输入、设置和排除规则；登录任务不进入备份。"
+msgstr "The ZIP holds activity, input, settings and exclusion rules. Sign-in tasks are not backed up."
+
+#: main-window.slint
+msgctxt "duration"
+msgid "打开"
+msgstr "Open"
+
+#: main-window.slint
+msgctxt "range"
+msgid "应用"
+msgstr "Apply"
+
+#: main-window.slint
+msgid "{0}{1}日"
+msgstr "{0} {1}"
+
+#: main-window.slint
+msgid "{0}年{1}"
+msgstr "{1} {0}"
+
+#: collection-panel.slint
+msgid "{n} 组合并关联"
+msgid_plural "{n} 组合并关联"
+msgstr[0] "{n} merge"
+msgstr[1] "{n} merges"
+
+#: timeline.slint
+msgid "{} {}，{}"
+msgstr "{} {}, {}"
+
+#: timeline.slint
+msgid "{} {}，{}，{}"
+msgstr "{} {}, {}, {}"
+
+#: timeline.slint
+msgid "{} {}，跳到日期"
+msgstr "{} {}, go to date"
+
+#: main-window.slint
+msgid "{} · 点选应用查看详情"
+msgstr "{} · Select an app for details"
+
+#: main-window.slint
+msgid "{} 之前的应用活动和输入明细会立即删除，无法恢复。"
+msgstr "App activity and input details before {} will be deleted now. This can't be undone."
+
+#: main-window.slint
+msgid "{} 分"
+msgstr "{} min"
+
+#: main-window.slint
+msgid "{} 分钟"
+msgstr "{} minutes"
+
+#: collection-panel.slint
+msgid "{} 次"
+msgstr "{} presses"
+
+#: main-window.slint timeline.slint
+msgid "{}，{}，{}"
+msgstr "{}, {}, {}"
+
+#: main-window.slint
+msgid "{}，聚焦 {}"
+msgstr "{}, focused {}"
+
+#: main-window.slint
+msgid "一"
+msgstr "Mo"
+
+#: main-window.slint
+msgid "三"
+msgstr "We"
+
+#: collection-panel.slint
+msgid "三份名单相互独立，切换后立即生效，不影响已有记录和图片。"
+msgstr "The three lists are independent. Changes apply at once and don't affect existing records or images."
+
+#: main-window.slint
+msgid "上一张"
+msgstr "Previous"
+
+#: main-window.slint
+msgid "上个月"
+msgstr "Previous month"
+
+#: main-window.slint
+msgid "上午"
+msgstr "Morning"
+
+#: main-window.slint
+msgid "下一张"
+msgstr "Next"
+
+#: main-window.slint
+msgid "下个月"
+msgstr "Next month"
+
+#: main-window.slint
+msgid "下午"
+msgstr "Afternoon"
+
+#: main-window.slint
+msgid "不会删除你导出到其他位置的文件。"
+msgstr "Files you exported elsewhere are not deleted."
+
+#: collection-panel.slint
+msgid "不拍摄快照"
+msgstr "No snapshots"
+
+#: main-window.slint
+msgid "不拍摄某些应用"
+msgstr "Skip some apps"
+
+#: collection-panel.slint
+msgid "不记录活动"
+msgstr "No activity"
+
+#: collection-panel.slint
+msgid "不记录输入"
+msgstr "No input"
+
+#: collection-panel.slint
+msgid "不记录这个应用的身份与使用时间。"
+msgstr "Don't record this app's identity or time of use."
+
+#: data-panel.slint
+msgid "不设密码时，任何拿到 ZIP 的人都能读取其中的记录。"
+msgstr "Without a password, anyone who gets the ZIP can read the records in it."
+
+#: collection-panel.slint
+msgid "与另一个应用合并显示"
+msgstr "Show merged with another app"
+
+#: about.slint
+msgid "专注不是从不分心，而是每次分心后都愿意回来。"
+msgstr "Focus isn't never drifting. It's coming back every time you do."
+
+#: data-panel.slint
+msgid "两次输入的密码不一致。"
+msgstr "The passwords don't match."
+
+#: main-window.slint
+msgid "两者合并成一项显示，原始记录不改写，之后可以在「已有合并」里解除。"
+msgstr "Both show as one app. Original records stay unchanged, and you can undo this under \"Merges\" later."
+
+#: collection-panel.slint
+msgid "中键（滚轮按下）"
+msgstr "Middle (wheel press)"
+
+#: main-window.slint
+msgid "为单个应用设置排除、合并显示或删除历史。"
+msgstr "Set exclusions, merged display or history deletion for a single app."
+
+#: timeline.slint
+msgid "主应用"
+msgstr "Main app"
+
+#: main-window.slint
+msgid "主题"
+msgstr "Theme"
+
+#: main-window.slint
+msgid "二"
+msgstr "Tu"
+
+#: main-window.slint
+msgid "五"
+msgstr "Fr"
+
+#: main-window.slint
+msgid "今天"
+msgstr "Today"
+
+#: about.slint
+msgid "今天不必完美，记下来就已经很好了。"
+msgstr "Today doesn't have to be perfect. Writing it down is already enough."
+
+#: timeline.slint
+msgid "今天还没有记录"
+msgstr "Nothing recorded today yet"
+
+#: main-window.slint
+msgid "从不记录"
+msgstr "Never recorded"
+
+#: data-panel.slint recovery.slint
+msgid "从备份恢复"
+msgstr "Restore from backup"
+
+#: main-window.slint
+msgid "从左侧选择一张快照预览"
+msgstr "Choose a snapshot on the left to preview"
+
+#: collection-panel.slint
+msgid "从已记录的应用中选择，或指定一个 EXE。规则只影响之后的记录。"
+msgstr "Pick a recorded app, or choose an EXE. Rules only affect what is recorded from now on."
+
+#: about.slint
+msgid "休息也是时间线的一部分，不必把它涂成灰色。"
+msgstr "Rest is part of the timeline too. No need to paint it grey."
+
+#: main-window.slint
+msgid "会自动尝试重启采集器"
+msgstr "Restarting the collector automatically"
+
+#: recovery.slint
+msgid "使用已校验的新数据集"
+msgstr "Use the verified new dataset"
+
+#: data-panel.slint
+msgid "例如 D:\\TimelensData"
+msgstr "For example D:\\TimelensData"
+
+#: recovery.slint
+msgid "便携 ZIP 备份"
+msgstr "Portable ZIP backup"
+
+#: recovery.slint
+msgid "便携 ZIP 备份路径"
+msgstr "Portable ZIP backup path"
+
+#: main-window.slint
+msgid "保留"
+msgstr "Retention"
+
+#: recovery.slint
+msgid "保留原件，恢复数据"
+msgstr "Keep the original, recover data"
+
+#: main-window.slint
+msgid "保留时长"
+msgstr "Keep for"
+
+#: main-window.slint
+msgid "保留时长、备份与存储位置。"
+msgstr "Retention, backup and storage location."
+
+#: data-panel.slint
+msgid "修复工具"
+msgstr "Repair tool"
+
+#: main-window.slint
+msgid "修复工具只在你确认后才会替换数据。"
+msgstr "The repair tool only replaces data after you confirm."
+
+#: collection-panel.slint
+msgid "先在上方选择一个应用，这里会显示受影响的窗口。"
+msgstr "Choose an app above to see the affected windows here."
+
+#: main-window.slint
+msgid "先在日历中选择一天，再缩小到当天的某个时段。"
+msgstr "Pick a day in the calendar, then narrow it to a time of day."
+
+#: recovery.slint
+msgid "先恢复并校验，再决定是否切换到新的数据集。"
+msgstr "Recover and verify first, then decide whether to switch to the new dataset."
+
+#: main-window.slint
+msgid "先选择应用"
+msgstr "Choose an app first"
+
+#: main-window.slint
+msgid "全不选"
+msgstr "Select none"
+
+#: main-window.slint
+msgid "全天"
+msgstr "All day"
+
+#: main-window.slint
+msgid "全选"
+msgstr "Select all"
+
+#: collection-panel.slint
+msgid "全部排除名单"
+msgstr "All exclusion lists"
+
+#: main-window.slint
+msgid "全部显示器"
+msgstr "All displays"
+
+#: main-window.slint
+msgid "全部记录"
+msgstr "All records"
+
+#: main-window.slint
+msgid "六"
+msgstr "Sa"
+
+#: main-window.slint
+msgid "关于"
+msgstr "About"
+
+#: main-window.slint
+msgid "关闭后保留明确的暂停区间，重新开启后不会补录。"
+msgstr "While off, an explicit pause is kept. Nothing is filled in after turning it back on."
+
+#: main-window.slint
+msgid "关闭大图（Esc）"
+msgstr "Close (Esc)"
+
+#: main-window.slint
+msgid "关闭提示"
+msgstr "Dismiss"
+
+#: recovery.slint
+msgid "关闭此窗口即可退出；原始文件仍保留在原位置。"
+msgstr "Close this window to quit. The original files stay where they are."
+
+#: main-window.slint
+msgid "关闭设置"
+msgstr "Close settings"
+
+#: main-window.slint
+msgid "关闭详情"
+msgstr "Close details"
+
+#: data-panel.slint
+msgid "再次输入密码"
+msgstr "Enter the password again"
+
+#: about.slint
+msgid "再点 {n} 下，看看时间会怎样"
+msgid_plural "再点 {n} 下，看看时间会怎样"
+msgstr[0] "{n} more tap to see what time does"
+msgstr[1] "{n} more taps to see what time does"
+
+#: about.slint
+msgid "再转下去，透镜要晕了。"
+msgstr "Any more spinning and the lens gets dizzy."
+
+#: recovery.slint
+msgid "准备升级本地数据"
+msgstr "Ready to upgrade local data"
+
+#: recovery.slint
+msgid "准备就绪。请选择上方操作。"
+msgstr "Ready. Choose an action above."
+
+#: timeline.slint
+msgid "切换到任意窗口后，几秒内就会按时间出现在这里。"
+msgstr "Switch to any window and it appears here in time order within seconds."
+
+#: data-panel.slint
+msgid "创建便携备份"
+msgstr "Create portable backup"
+
+#: data-panel.slint
+msgid "创建备份…"
+msgstr "Create backup…"
+
+#: main-window.slint
+msgid "删除 {} 的快照？"
+msgstr "Delete the snapshot from {}?"
+
+#: main-window.slint
+msgid "删除…"
+msgstr "Delete…"
+
+#: collection-panel.slint
+msgid "删除「{}」的全部历史"
+msgstr "Delete all history of \"{}\""
+
+#: main-window.slint
+msgid "删除「{}」的全部历史？"
+msgstr "Delete all history of \"{}\"?"
+
+#: collection-panel.slint
+msgid "删除「{}」的历史…"
+msgstr "Delete history of \"{}\"…"
+
+#: collection-panel.slint main-window.slint
+msgid "删除历史"
+msgstr "Delete history"
+
+#: collection-panel.slint
+msgid "删除历史…"
+msgstr "Delete history…"
+
+#: main-window.slint
+msgid "删除后图片无法恢复。"
+msgstr "Deleted images can't be recovered."
+
+#: main-window.slint
+msgid "删除后图片无法恢复，时间线中保留对应的删除记录。"
+msgstr "Deleted images can't be recovered. The timeline keeps a record of the deletion."
+
+#: main-window.slint
+msgid "删除图片"
+msgstr "Delete images"
+
+#: main-window.slint
+msgid "删除并缩短"
+msgstr "Delete and shorten"
+
+#: main-window.slint
+msgid "删除并降低上限"
+msgstr "Delete and lower limit"
+
+#: collection-panel.slint
+msgid "删除所选应用的全部历史"
+msgstr "Delete all history of the selected app"
+
+#: main-window.slint
+msgid "删除所选的 {n} 张快照图片？"
+msgid_plural "删除所选的 {n} 张快照图片？"
+msgstr[0] "Delete the selected snapshot image?"
+msgstr[1] "Delete the {n} selected snapshot images?"
+
+#: main-window.slint
+msgid "删除活动、输入和快照，并轮换数据密钥。此操作无法撤销。"
+msgstr "Deletes activity, input and snapshots, and rotates the data key. This can't be undone."
+
+#: main-window.slint
+msgid "删除这张快照图片？"
+msgstr "Delete this snapshot image?"
+
+#: main-window.slint
+msgid "前一天"
+msgstr "Previous day"
+
+#: timeline.slint
+msgid "前台可见"
+msgstr "Displayed"
+
+#: timeline.slint
+msgid "前台可见 "
+msgstr "Displayed "
+
+#: data-panel.slint
+msgid "加密存储"
+msgstr "Encrypted storage"
+
+#: main-window.slint
+msgid "加密存放在本机，不上传、不同步。"
+msgstr "Encrypted on this PC. Never uploaded or synced."
+
+#: data-panel.slint
+msgid "包含快照图片"
+msgstr "Include snapshot images"
+
+#: main-window.slint
+msgid "匿名累计总数会保留，快照图片与外部文件也会保留。此操作无法撤销。"
+msgstr "Anonymous lifetime totals are kept, and so are snapshot images and external files. This can't be undone."
+
+#: collection-panel.slint
+msgid "匿名累计总数和无法归属应用的每日键位总数会保留，快照图片与外部文件也会保留。"
+msgstr "Anonymous lifetime totals and daily key totals not tied to any app are kept, and so are snapshot images and external files."
+
+#: recovery.slint
+msgid "升级并打开"
+msgstr "Upgrade and open"
+
+#: main-window.slint
+msgid "单屏时优先拍聚焦窗口所在的显示器。"
+msgstr "With one display, the one holding the focused window is captured first."
+
+#: main-window.slint
+msgid "危险操作"
+msgstr "Danger zone"
+
+#: recovery.slint
+msgid "原数据位置"
+msgstr "Original data location"
+
+#: recovery.slint
+msgid "原数据库、密钥和快照不会被覆盖。恢复及新建都使用另一个空目录；先完成校验，再由你选择是否切换。"
+msgstr "The original database, keys and snapshots are never overwritten. Recovery and new datasets use a separate empty folder; after verification you decide whether to switch."
+
+#: main-window.slint theme.slint
+msgid "取消"
+msgstr "Cancel"
+
+#: main-window.slint
+msgid "取消选择（Esc）"
+msgstr "Cancel selection (Esc)"
+
+#: collection-panel.slint
+msgid "只保留匿名的每日总数。"
+msgstr "Only anonymous daily totals are kept."
+
+#: main-window.slint
+msgid "只显示最近 500 条。缩小时段可以查看更早的快照。"
+msgstr "Showing the latest 500. Narrow the range to see earlier snapshots."
+
+#: main-window.slint
+msgid "只显示聚焦最长的几个"
+msgstr "Show only the most focused"
+
+#: main-window.slint
+msgid "只记录应用本身，不记录它打开了什么。"
+msgstr "Only the app itself is recorded, never what it opened."
+
+#: recovery.slint
+msgid "可以尝试从可读取的记录建立新数据集。无法恢复的记录会明确标记为缺失；采集和快照保持暂停，供你先检查排除规则。"
+msgstr "You can try building a new dataset from the readable records. Records that can't be recovered are marked as missing; collection and snapshots stay paused so you can check the exclusion rules first."
+
+#: data-panel.slint
+msgid "可以选择本机任意磁盘上的文件夹。迁移期间暂停记录，全部数据复制并校验通过后才会切换。"
+msgstr "Choose a folder on any local disk. Recording pauses during the move, and switches only after all data is copied and verified."
+
+#: collection-panel.slint
+msgid "右键"
+msgstr "Right"
+
+#: main-window.slint
+msgid "合并"
+msgstr "Merge"
+
+#: collection-panel.slint
+msgid "合并…"
+msgstr "Merge…"
+
+#: main-window.slint
+msgid "合并「{}」与「{}」？"
+msgstr "Merge \"{}\" with \"{}\"?"
+
+#: collection-panel.slint
+msgid "合并显示"
+msgstr "Merged display"
+
+#: collection-panel.slint
+msgid "同一款软件的不同版本可以合并成一项显示，原始记录不改写，可随时解除。"
+msgstr "Different versions of the same software can show as one app. Original records stay unchanged, and you can undo it anytime."
+
+#: timeline.slint
+msgid "同屏 {}"
+msgstr "Alongside {}"
+
+#: main-window.slint
+msgid "同屏显示（{}）"
+msgstr "Shown alongside ({})"
+
+#: main-window.slint
+msgid "后一天"
+msgstr "Next day"
+
+#: main-window.slint timeline.slint
+msgid "后台"
+msgstr "Background"
+
+#: timeline.slint
+msgid "后台 "
+msgstr "Background "
+
+#: main-window.slint
+msgid "启动"
+msgstr "Startup"
+
+#: main-window.slint
+msgid "四"
+msgstr "Th"
+
+#: main-window.slint
+msgid "回到现在"
+msgstr "Back to now"
+
+#: main-window.slint
+msgid "固定使用所选外观，不随 Windows 改变。"
+msgstr "Always use this look, regardless of Windows."
+
+#: main-window.slint
+msgid "图片保留时长"
+msgstr "Keep images for"
+
+#: main-window.slint
+msgid "在应用规则中为应用开启“不拍摄快照”。"
+msgstr "Turn on \"No snapshots\" for an app in App rules."
+
+#: recovery.slint
+msgid "在新目录建立空数据集"
+msgstr "Create an empty dataset in a new folder"
+
+#: main-window.slint
+msgid "在时间线中查看"
+msgstr "View in timeline"
+
+#: about.slint
+msgid "在本机回看应用活动、输入统计和快照。"
+msgstr "Look back at app activity, input statistics and snapshots on this PC."
+
+#: about.slint
+msgid "在浏览器中打开发布页，查看是否有新版本。Timelens 本身不联网。"
+msgstr "Opens the releases page in your browser to check for a new version. Timelens itself never goes online."
+
+#: recovery.slint
+msgid "处理中"
+msgstr "Working"
+
+#: data-panel.slint
+msgid "备份与恢复"
+msgstr "Backup and restore"
+
+#: data-panel.slint
+msgid "备份密码（没有则留空）"
+msgstr "Backup password (leave empty if none)"
+
+#: recovery.slint
+msgid "备份独立密码"
+msgstr "Backup password"
+
+#: recovery.slint
+msgid "备份独立密码（可选）"
+msgstr "Backup password (optional)"
+
+#: main-window.slint
+msgid "外观"
+msgstr "Appearance"
+
+#: collection-panel.slint
+msgid "多"
+msgstr "More"
+
+#: data-panel.slint
+msgid "好的"
+msgstr "OK"
+
+#: data-panel.slint
+msgid "存储位置"
+msgstr "Storage location"
+
+#: main-window.slint
+msgid "安装与卸载程序"
+msgstr "Installers and uninstallers"
+
+#: main-window.slint
+msgid "安装器、卸载器这类一次性程序不计入记录。"
+msgstr "One-off programs such as installers and uninstallers are not recorded."
+
+#: data-panel.slint
+msgid "完整性检查"
+msgstr "Integrity check"
+
+#: main-window.slint
+msgid "定时快照"
+msgstr "Scheduled snapshots"
+
+#: main-window.slint
+msgid "定时快照已关闭，可以在快照设置中开启，或者现在拍一张。"
+msgstr "Scheduled snapshots are off. Turn them on in snapshot settings, or take one now."
+
+#: main-window.slint
+msgid "定时快照已开启，新的快照会按设置的间隔出现在这里。快照只保存在本机。"
+msgstr "Scheduled snapshots are on. New ones appear here at the set interval. Snapshots stay on this PC."
+
+#: main-window.slint
+msgid "定时拍摄屏幕快照，帮你回忆当时在做什么。"
+msgstr "Captures the screen on a schedule to help you remember what you were doing."
+
+#: main-window.slint
+msgid "实际大小（1）"
+msgstr "Actual size (1)"
+
+#: main-window.slint
+msgid "导出"
+msgstr "Export"
+
+#: main-window.slint
+msgid "导出 CSV"
+msgstr "Export CSV"
+
+#: main-window.slint
+msgid "导出 JSON"
+msgstr "Export JSON"
+
+#: recovery.slint
+msgid "将切换到状态区中已校验的新位置。"
+msgstr "Switches to the verified new location shown in the status area."
+
+#: collection-panel.slint
+msgid "少"
+msgstr "Less"
+
+#: collection-panel.slint
+msgid "尚无排除规则。"
+msgstr "No exclusion rules yet."
+
+#: recovery.slint
+msgid "尝试恢复可读取的记录"
+msgstr "Try to recover readable records"
+
+#: collection-panel.slint
+msgid "左键"
+msgstr "Left"
+
+#: main-window.slint
+msgid "已关闭，仍可在快照页手动拍一张。"
+msgstr "Off. You can still take one by hand on the Snapshots page."
+
+#: main-window.slint
+msgid "已暂停记录"
+msgstr "Recording paused"
+
+#: collection-panel.slint
+msgid "已有合并"
+msgstr "Merges"
+
+#: recovery.slint
+msgid "已校验"
+msgstr "Verified"
+
+#: main-window.slint
+msgid "已选 {} 张"
+msgstr "{} selected"
+
+#: main-window.slint
+msgid "已选 {} 张，可在上方删除"
+msgstr "{} selected; delete them above"
+
+#: main-window.slint
+msgid "常规"
+msgstr "General"
+
+#: collection-panel.slint main-window.slint
+msgid "应用"
+msgstr "Apps"
+
+#: main-window.slint
+msgid "应用规则"
+msgstr "App rules"
+
+#: main-window.slint
+msgid "应用详情"
+msgstr "App details"
+
+#: main-window.slint
+msgid "开启定时快照后生效。"
+msgstr "Takes effect once scheduled snapshots are on."
+
+#: data-panel.slint
+msgid "开始迁移"
+msgstr "Start move"
+
+#: main-window.slint
+msgid "开机自启动"
+msgstr "Start at sign-in"
+
+#: data-panel.slint
+msgid "当前处于恢复模式。选择一个备份，校验通过后再替换数据集。"
+msgstr "Recovery mode. Choose a backup; the dataset is replaced only after it verifies."
+
+#: data-panel.slint
+msgid "当前数据目录"
+msgstr "Current data folder"
+
+#: main-window.slint
+msgid "当前显示器"
+msgstr "Current display"
+
+#: collection-panel.slint
+msgid "当前没有合并关联。"
+msgstr "No merges."
+
+#: about.slint
+msgid "当前版本"
+msgstr "Current version"
+
+#: main-window.slint
+msgid "当前的活动、输入和快照会被备份里的内容整体替换，不会合并，无法撤销。"
+msgstr "Current activity, input and snapshots are replaced entirely by the backup, not merged. This can't be undone."
+
+#: main-window.slint
+msgid "当天时段"
+msgstr "Time of day"
+
+#: main-window.slint
+msgid "快照"
+msgstr "Snapshots"
+
+#: main-window.slint
+msgid "快照只保存在本机，不会发送到任何地方。"
+msgstr "Snapshots stay on this PC and are never sent anywhere."
+
+#: main-window.slint
+msgid "快照大图"
+msgstr "Snapshot viewer"
+
+#: main-window.slint
+msgid "快照已关闭"
+msgstr "Snapshots off"
+
+#: main-window.slint
+msgid "快照设置"
+msgstr "Snapshot settings"
+
+#: main-window.slint
+msgid "快照，缩放 {}%"
+msgstr "Snapshot, zoom {}%"
+
+#: main-window.slint
+msgid "快速选择"
+msgstr "Quick pick"
+
+#: data-panel.slint
+msgid "恢复会整体替换现有记录，不会合并。"
+msgstr "Restoring replaces all existing records; nothing is merged."
+
+#: recovery.slint
+msgid "恢复到新目录"
+msgstr "Recover to a new folder"
+
+#: main-window.slint
+msgid "恢复原来的范围"
+msgstr "Restore previous range"
+
+#: recovery.slint
+msgid "恢复并校验完成后，可在这里切换。"
+msgstr "Once recovered and verified, you can switch here."
+
+#: main-window.slint
+msgid "想留一份现在的数据，先取消，在上方「创建便携备份」导出一份。"
+msgstr "To keep a copy of the current data, cancel and use \"Create portable backup\" above first."
+
+#: data-panel.slint
+msgid "我知道这份备份未加密、含敏感数据，并会妥善保管"
+msgstr "I understand this backup is unencrypted, holds sensitive data, and I will keep it safe"
+
+#: collection-panel.slint
+msgid "所有应用的活动、输入与快照排除。"
+msgstr "Activity, input and snapshot exclusions for all apps."
+
+#: data-panel.slint
+msgid "所选文件夹里已有其他文件时，数据会放进其中新建的 Timelens 文件夹。外部备份与导出文件会留在原处。"
+msgstr "If the chosen folder already has other files, the data goes into a new Timelens folder inside it. External backups and exports stay where they are."
+
+#: main-window.slint
+msgid "所选范围聚焦"
+msgstr "Focused in range"
+
+#: about.slint
+msgid "打开"
+msgstr "Open"
+
+#: data-panel.slint
+msgid "打开修复工具…"
+msgstr "Open repair tool…"
+
+#: about.slint
+msgid "打开发布页"
+msgstr "Open releases"
+
+#: main-window.slint
+msgid "打开文件夹"
+msgstr "Open folder"
+
+#: collection-panel.slint
+msgid "把「{}」与另一个应用合并"
+msgstr "Merge \"{}\" with another app"
+
+#: main-window.slint
+msgid "把空间上限降到 {}？"
+msgstr "Lower the space limit to {}?"
+
+#: main-window.slint
+msgid "拍摄"
+msgstr "Capture"
+
+#: main-window.slint
+msgid "拍摄的屏幕"
+msgstr "Screen to capture"
+
+#: main-window.slint
+msgid "拍摄间隔"
+msgstr "Capture interval"
+
+#: main-window.slint
+msgid "持续"
+msgstr "Duration"
+
+#: main-window.slint
+msgid "按应用排除活动、输入或快照，或合并显示同一款软件。"
+msgstr "Exclude activity, input or snapshots per app, or show one program's versions as one."
+
+#: main-window.slint
+msgid "按当前策略清理"
+msgstr "Clean up now"
+
+#: collection-panel.slint
+msgid "按键抬起后再次按下计为一次。键帽标记物理位置，不代表输入内容。"
+msgstr "Each press after a release counts once. Keys mark physical positions, not what was typed."
+
+#: collection-panel.slint
+msgid "按键抬起后再次按下计为一次。键帽标记物理位置，不代表输入内容。键位与鼠标按整天保存，这里显示所选时段所在日期的全天数据。"
+msgstr "Each press after a release counts once. Keys mark physical positions, not what was typed. Keys and mouse buttons are kept per day, so this shows the whole day of the selected range."
+
+#: data-panel.slint
+msgid "换一个备份…"
+msgstr "Choose another backup…"
+
+#: collection-panel.slint
+msgid "排除规则"
+msgstr "Exclusion rules"
+
+#: main-window.slint
+msgid "搜索应用，例如 微信"
+msgstr "Search apps, e.g. Outlook"
+
+#: recovery.slint
+msgid "收起其他恢复方式"
+msgstr "Hide other recovery options"
+
+#: main-window.slint
+msgid "放大"
+msgstr "Zoom in"
+
+#: main-window.slint
+msgid "放大（+）"
+msgstr "Zoom in (+)"
+
+#: main-window.slint
+msgid "数据与存储"
+msgstr "Data & storage"
+
+#: main-window.slint
+msgid "数据只保存在这台电脑"
+msgstr "Data stays on this PC"
+
+#: data-panel.slint
+msgid "数据损坏时使用：Timelens 会退出并打开修复工具，从备份或可读取的记录重建数据。"
+msgstr "For damaged data: Timelens quits and opens the repair tool, which rebuilds data from a backup or the readable records."
+
+#: main-window.slint
+msgid "数据覆盖 {}"
+msgstr "Data coverage {}"
+
+#: main-window.slint
+msgid "数据覆盖 {}，{}"
+msgstr "Data coverage {}, {}"
+
+#: main-window.slint
+msgid "数据覆盖 {}，{}，收起明细"
+msgstr "Data coverage {}, {}, hide details"
+
+#: main-window.slint
+msgid "数据覆盖 {}，{}，查看明细"
+msgstr "Data coverage {}, {}, show details"
+
+#: recovery.slint
+msgid "新数据目录"
+msgstr "New data folder"
+
+#: recovery.slint
+msgid "无密码备份请留空"
+msgstr "Leave empty for a backup without password"
+
+#: main-window.slint
+msgid "无论保留多久，数据库超过上限时都会先清理最早的一天。快照图片另有上限。"
+msgstr "However long data is kept, the oldest day is cleaned up first once the database exceeds the limit. Snapshot images have their own limit."
+
+#: main-window.slint
+msgid "日"
+msgstr "Su"
+
+#: main-window.slint
+msgid "早于 {} 天的快照图片会立即删除，无法恢复。时间线中保留对应的清理记录。"
+msgstr "Snapshot images older than {} days will be deleted now and can't be recovered. The timeline keeps a record of the cleanup."
+
+#: main-window.slint
+msgid "时间线"
+msgstr "Timeline"
+
+#: about.slint
+msgid "时间被倒拨了三圈——可惜只在这枚图标里有效。"
+msgstr "Time just wound back three turns. Sadly, only inside this icon."
+
+#: main-window.slint
+msgid "昨天"
+msgstr "Yesterday"
+
+#: main-window.slint
+msgid "显示"
+msgstr "Displayed"
+
+#: main-window.slint
+msgid "显示全部 {} 个窗口"
+msgstr "Show all {} windows"
+
+#: main-window.slint
+msgid "晚上"
+msgstr "Evening"
+
+#: main-window.slint
+msgid "普通设置与排除规则保留。外部备份和导出文件不会删除。"
+msgstr "Ordinary settings and exclusion rules are kept. External backups and exports are not deleted."
+
+#: timeline.slint
+msgid "暂停期间不记录活动与输入，继续后从现在开始记录。"
+msgstr "Activity and input aren't recorded while paused. Recording resumes from the moment you continue."
+
+#: main-window.slint
+msgid "暂停记录"
+msgstr "Pause recording"
+
+#: main-window.slint
+msgid "暂停记录多久？"
+msgstr "Pause recording for how long?"
+
+#: main-window.slint
+msgid "更改时需要管理员确认。关闭自启动不会停止当前记录，之后仍可手动打开 Timelens。"
+msgstr "Changing this needs administrator approval. Turning it off doesn't stop current recording; you can still open Timelens by hand."
+
+#: main-window.slint
+msgid "替换数据"
+msgstr "Replace data"
+
+#: main-window.slint
+msgid "最近 30 天"
+msgstr "Last 30 days"
+
+#: main-window.slint
+msgid "最近 30 天没有找到“{}”"
+msgstr "No \"{}\" in the last 30 days"
+
+#: main-window.slint
+msgid "最近 7 天"
+msgstr "Last 7 days"
+
+#: main-window.slint
+msgid "有新活动"
+msgstr "New activity"
+
+#: timeline.slint
+msgid "未打开"
+msgstr "Not opened"
+
+#: recovery.slint
+msgid "本地固定磁盘上的空目录"
+msgstr "An empty folder on a local fixed disk"
+
+#: main-window.slint
+msgid "本机时间回看"
+msgstr "Local time review"
+
+#: main-window.slint
+msgid "来自时间线：{}"
+msgstr "From the timeline: {}"
+
+#: main-window.slint
+msgid "查找应用"
+msgstr "Find app"
+
+#: about.slint
+msgid "查看源代码、更新记录，或反馈问题。"
+msgstr "View the source code and changelog, or report a problem."
+
+#: timeline.slint
+msgid "查看记录设置"
+msgstr "Recording settings"
+
+#: main-window.slint timeline.slint
+msgid "查看这段的快照"
+msgstr "Snapshots of this activity"
+
+#: recovery.slint
+msgid "校验并恢复备份到新目录"
+msgstr "Verify and restore the backup to a new folder"
+
+#: data-panel.slint
+msgid "检查数据库的完整性与外键。"
+msgstr "Checks database integrity and foreign keys."
+
+#: about.slint
+msgid "检查更新"
+msgstr "Check for updates"
+
+#: data-panel.slint
+msgid "正在处理…"
+msgstr "Working…"
+
+#: collection-panel.slint main-window.slint recovery.slint
+msgid "正在处理，请稍候…"
+msgstr "Working, please wait…"
+
+#: main-window.slint
+msgid "正在统计…"
+msgstr "Counting…"
+
+#: main-window.slint
+msgid "正在统计全部记录…"
+msgstr "Counting all records…"
+
+#: main-window.slint
+msgid "正在统计这段时间…"
+msgstr "Counting this period…"
+
+#: main-window.slint
+msgid "正在记录"
+msgstr "Recording"
+
+#: main-window.slint
+msgid "正在读取各应用的时间…"
+msgstr "Reading each app's time…"
+
+#: data-panel.slint
+msgid "正在读取数据位置…"
+msgstr "Reading data location…"
+
+#: data-panel.slint
+msgid "正在迁移数据"
+msgstr "Moving data"
+
+#: main-window.slint
+msgid "正在连接采集器"
+msgstr "Connecting to collector"
+
+#: timeline.slint
+msgid "正在连接采集器…"
+msgstr "Connecting to collector…"
+
+#: collection-panel.slint
+msgid "此操作无法撤销。"
+msgstr "This can't be undone."
+
+#: collection-panel.slint
+msgid "此范围没有系统状态记录。"
+msgstr "No system states in this range."
+
+#: main-window.slint
+msgid "每 1 小时拍一张，只保存在本机。"
+msgstr "One every hour, kept on this PC only."
+
+#: main-window.slint
+msgid "每 {} 分钟拍一张，只保存在本机。"
+msgstr "One every {} minutes, kept on this PC only."
+
+#: main-window.slint
+msgid "每隔多久拍一张。"
+msgstr "How often to take one."
+
+#: main-window.slint
+msgid "永久"
+msgstr "Forever"
+
+#: main-window.slint
+msgid "永久累计的输入总数保留。快照使用自己的上限。外部备份和导出文件不会删除。"
+msgstr "Lifetime input totals are kept. Snapshots use their own limit. External backups and exports are not deleted."
+
+#: main-window.slint
+msgid "永久累计的输入总数保留。快照使用自己的保留策略。外部备份和导出文件不会删除。"
+msgstr "Lifetime input totals are kept. Snapshots use their own retention. External backups and exports are not deleted."
+
+#: main-window.slint
+msgid "没有匹配的应用，试试其他名称。"
+msgstr "No matching apps. Try another name."
+
+#: recovery.slint
+msgid "没有备份？查看其他方式"
+msgstr "No backup? See other options"
+
+#: main-window.slint
+msgid "活动、输入和快照将被删除，数据密钥也会轮换。此操作无法撤销。"
+msgstr "Activity, input and snapshots will be deleted and the data key rotated. This can't be undone."
+
+#: main-window.slint
+msgid "活动数据保留"
+msgstr "Keep activity data for"
+
+#: main-window.slint
+msgid "活动记录使用自己的保留策略，不受影响。外部备份和导出文件不会删除。"
+msgstr "Activity records follow their own retention and are not affected. External backups and exports are not deleted."
+
+#: main-window.slint
+msgid "活动详情"
+msgstr "Activity details"
+
+#: main-window.slint
+msgid "浅色"
+msgstr "Light"
+
+#: recovery.slint
+msgid "浏览"
+msgstr "Browse"
+
+#: main-window.slint
+msgid "深色"
+msgstr "Dark"
+
+#: main-window.slint
+msgid "清空…"
+msgstr "Clear…"
+
+#: main-window.slint
+msgid "清空全部本地记录"
+msgstr "Clear all local records"
+
+#: main-window.slint
+msgid "清空全部本地记录？"
+msgstr "Clear all local records?"
+
+#: main-window.slint
+msgid "清除搜索"
+msgstr "Clear search"
+
+#: main-window.slint
+msgid "灰色的日子早于最早的记录或晚于今天。"
+msgstr "Grey days are before the earliest record or after today."
+
+#: main-window.slint
+msgid "点选图片；按住 Shift 再点另一张可选中这段时间。全选只含列表中已显示的快照。"
+msgstr "Click images; Shift-click another to select the span between. Select all only covers snapshots shown in the list."
+
+#: main-window.slint
+msgid "版本、更新与项目信息。"
+msgstr "Version, updates and project info."
+
+#: about.slint
+msgid "版本与更新"
+msgstr "Version and updates"
+
+#: collection-panel.slint
+msgid "物理键位热度"
+msgstr "Physical key heat"
+
+#: recovery.slint
+msgid "状态"
+msgstr "Status"
+
+#: data-panel.slint
+msgid "独立密码无法找回，也不会保存在备份内；忘记密码后这份备份无法打开。"
+msgstr "The password can't be recovered and isn't stored in the backup. If you forget it, the backup can't be opened."
+
+#: data-panel.slint
+msgid "独立密码（留空则不加密）"
+msgstr "Password (leave empty for no encryption)"
+
+#: data-panel.slint
+msgid "用一份便携备份替换当前的全部记录。恢复前会先校验备份。"
+msgstr "Replace all current records with a portable backup. The backup is verified before restoring."
+
+#: recovery.slint
+msgid "用于恢复的新数据目录"
+msgstr "New data folder for recovery"
+
+#: data-panel.slint
+msgid "用此备份替换当前数据…"
+msgstr "Replace current data with this backup…"
+
+#: main-window.slint
+msgid "用这份备份替换当前全部记录？"
+msgstr "Replace all current records with this backup?"
+
+#: main-window.slint
+msgid "由本机记录直接计算"
+msgstr "Computed from local records"
+
+#: about.slint
+msgid "界面图标使用 Tabler Icons，遵循 MIT 许可。"
+msgstr "Interface icons are Tabler Icons, under the MIT license."
+
+#: main-window.slint
+msgid "登录 Windows 后在后台启动 Timelens。"
+msgstr "Start Timelens in the background after signing in to Windows."
+
+#: main-window.slint
+msgid "直到手动继续"
+msgstr "Until I resume"
+
+#: main-window.slint
+msgid "直到明天"
+msgstr "Until tomorrow"
+
+#: data-panel.slint
+msgid "知道了"
+msgstr "Got it"
+
+#: recovery.slint
+msgid "确认数据位置并阅读说明，然后继续。"
+msgstr "Check the data location and read the notes, then continue."
+
+#: main-window.slint
+msgid "确认清空"
+msgstr "Clear"
+
+#: collection-panel.slint
+msgid "空闲、锁屏、睡眠等系统状态在所选范围内的时长，按时长排列。"
+msgstr "Time spent in system states such as idle, locked and sleep within the range, longest first."
+
+#: main-window.slint
+msgid "空间上限"
+msgstr "Space limit"
+
+#: main-window.slint
+msgid "空间上限 {}，超出时先清理最早的图片。"
+msgstr "Space limit {}. The oldest images are cleaned up first when it's exceeded."
+
+#: main-window.slint
+msgid "穿插切换（{}）"
+msgstr "Switched in between ({})"
+
+#: main-window.slint
+msgid "窗口标题、网址和文档名"
+msgstr "Window titles, URLs and document names"
+
+#: main-window.slint
+msgid "窗口（{}）"
+msgstr "Windows ({})"
+
+#: main-window.slint
+msgid "立即拍摄"
+msgstr "Capture now"
+
+#: main-window.slint
+msgid "立即清理"
+msgstr "Clean up now"
+
+#: main-window.slint
+msgid "等待首次上报…"
+msgstr "Waiting for first report…"
+
+#: main-window.slint
+msgid "管理"
+msgstr "Manage"
+
+#: collection-panel.slint
+msgid "系统状态"
+msgstr "System states"
+
+#: main-window.slint
+msgid "系统默认"
+msgstr "System default"
+
+#: main-window.slint
+msgid "系统默认跟随 Windows 的显示语言，不支持的语言显示为英文。"
+msgstr "System default follows the Windows display language; unsupported languages show English."
+
+#: main-window.slint
+msgid "累计聚焦"
+msgstr "Total focused"
+
+#: main-window.slint
+msgid "统计"
+msgstr "Statistics"
+
+#: main-window.slint timeline.slint
+msgid "继续记录"
+msgstr "Resume recording"
+
+#: data-panel.slint
+msgid "维护"
+msgstr "Maintenance"
+
+#: main-window.slint
+msgid "缩小（-）"
+msgstr "Zoom out (-)"
+
+#: main-window.slint
+msgid "缩短快照图片保留期？"
+msgstr "Shorten snapshot image retention?"
+
+#: main-window.slint
+msgid "缩短活动数据保留期？"
+msgstr "Shorten activity data retention?"
+
+#: main-window.slint timeline.slint
+msgid "聚焦"
+msgstr "Focused"
+
+#: timeline.slint
+msgid "聚焦 "
+msgstr "Focused "
+
+#: timeline.slint
+msgid "聚焦 {}"
+msgstr "Focused {}"
+
+#: main-window.slint
+msgid "聚焦总计"
+msgstr "Focused total"
+
+#: collection-panel.slint
+msgid "自开始使用以来"
+msgstr "Since first use"
+
+#: collection-panel.slint
+msgid "要设置的应用"
+msgstr "App to configure"
+
+#: main-window.slint
+msgid "规则"
+msgstr "Rules"
+
+#: collection-panel.slint
+msgid "解除"
+msgstr "Undo"
+
+#: collection-panel.slint
+msgid "解除合并 {}"
+msgstr "Undo merge {}"
+
+#: collection-panel.slint
+msgid "解除后恢复合并前的规则；合并期间新增的排除默认保留给双方。"
+msgstr "Undoing restores the rules from before the merge; exclusions added while merged stay on both apps."
+
+#: main-window.slint
+msgid "记录"
+msgstr "Recording"
+
+#: main-window.slint
+msgid "记录与隐私"
+msgstr "Recording & privacy"
+
+#: main-window.slint
+msgid "记录只保存在这台电脑上"
+msgstr "Records stay on this PC"
+
+#: timeline.slint
+msgid "记录已暂停"
+msgstr "Recording paused"
+
+#: main-window.slint
+msgid "记录已用约 {} MiB，超过新的上限。最早的活动和输入明细会按天立即删除，直到低于上限，无法恢复。"
+msgstr "Records use about {} MiB, over the new limit. The oldest activity and input details will be deleted day by day right away until under the limit. This can't be undone."
+
+#: main-window.slint
+msgid "记录应用活动与输入"
+msgstr "Record app activity and input"
+
+#: main-window.slint
+msgid "设置"
+msgstr "Settings"
+
+#: main-window.slint
+msgid "设置 Timelens 的外观与启动方式。"
+msgstr "Set how Timelens looks and starts."
+
+#: main-window.slint
+msgid "语言"
+msgstr "Language"
+
+#: main-window.slint
+msgid "跟随 Windows 的应用模式，切换后这里随之改变。"
+msgstr "Follows the Windows app mode and changes along with it."
+
+#: main-window.slint
+msgid "跟随系统"
+msgstr "System"
+
+#: main-window.slint
+msgid "跳到日期"
+msgstr "Go to date"
+
+#: main-window.slint
+msgid "输入的文字"
+msgstr "Typed text"
+
+#: data-panel.slint
+msgid "迁移到其他位置"
+msgstr "Move to another location"
+
+#: data-panel.slint
+msgid "迁移失败"
+msgstr "Move failed"
+
+#: data-panel.slint
+msgid "迁移完成"
+msgstr "Move complete"
+
+#: data-panel.slint
+msgid "迁移期间暂停记录。请不要关闭 Timelens 或拔出目标磁盘，完成后会自动恢复记录。"
+msgstr "Recording is paused during the move. Don't close Timelens or unplug the target disk; recording resumes when it's done."
+
+#: data-panel.slint
+msgid "运行检查"
+msgstr "Run check"
+
+#: collection-panel.slint
+msgid "还没有已记录的应用，可以直接选择一个 EXE。"
+msgstr "No recorded apps yet. You can choose an EXE directly."
+
+#: main-window.slint
+msgid "还没有应用记录。"
+msgstr "No app records yet."
+
+#: collection-panel.slint
+msgid "这个应用显示在屏幕上时，跳过它所在的屏幕。"
+msgstr "Skip the screen this app is displayed on."
+
+#: main-window.slint timeline.slint
+msgid "这个应用的规则"
+msgstr "Rules for this app"
+
+#: main-window.slint
+msgid "这段时间没有应用记录。"
+msgstr "No app records in this period."
+
+#: main-window.slint
+msgid "这段时间没有快照"
+msgstr "No snapshots in this period"
+
+#: about.slint
+msgid "这里的每一分钟都只留在这台电脑上，只有你看得见。"
+msgstr "Every minute here stays on this PC, visible only to you."
+
+#: collection-panel.slint
+msgid "这里的累计不受保留期清理影响，也包含不记录输入的应用的匿名计数，所以可能比上方按范围统计的次数多。"
+msgstr "These totals ignore retention cleanup and include anonymous counts from apps whose input isn't recorded, so they can exceed the range counts above."
+
+#: timeline.slint
+msgid "连接后，切换到任意窗口几秒内就会出现在这里。"
+msgstr "Once connected, switch to any window and it appears here within seconds."
+
+#: main-window.slint
+msgid "退出并打开"
+msgstr "Quit and open"
+
+#: main-window.slint
+msgid "退出并打开修复工具？"
+msgstr "Quit and open the repair tool?"
+
+#: main-window.slint
+msgid "适应窗口"
+msgstr "Fit to window"
+
+#: main-window.slint
+msgid "选择"
+msgstr "Select"
+
+#: collection-panel.slint
+msgid "选择 EXE"
+msgstr "Choose EXE"
+
+#: main-window.slint
+msgid "选择一条活动"
+msgstr "Choose an activity"
+
+#: recovery.slint
+msgid "选择备份 ZIP 文件"
+msgstr "Choose a backup ZIP file"
+
+#: data-panel.slint
+msgid "选择备份…"
+msgstr "Choose backup…"
+
+#: main-window.slint
+msgid "选择快照以查看详情"
+msgstr "Choose a snapshot for details"
+
+#: data-panel.slint
+msgid "选择文件夹"
+msgstr "Choose folder"
+
+#: main-window.slint
+msgid "选择范围，当前 {}"
+msgstr "Choose range, now {}"
+
+#: collection-panel.slint
+msgid "选择要合并的另一个应用，这里会列出合并后两者共用的规则。"
+msgstr "Choose the other app to merge; the rules both will share are listed here."
+
+#: main-window.slint
+msgid "采集器"
+msgstr "Collector"
+
+#: main-window.slint
+msgid "采集器未连接"
+msgstr "Collector not connected"
+
+#: timeline.slint
+msgid "采集器未连接，正在自动重试"
+msgstr "Collector not connected, retrying"
+
+#: data-panel.slint
+msgid "重新校验"
+msgstr "Verify again"
+
+#: recovery.slint
+msgid "重新检查并打开原位置"
+msgstr "Check again and open the original"
+
+#: main-window.slint
+msgid "键位与系统"
+msgstr "Keys & system"
+
+#: main-window.slint
+msgid "键盘"
+msgstr "Keyboard"
+
+#: main-window.slint
+msgid "键盘 0 · 鼠标 0"
+msgstr "Keyboard 0 · Mouse 0"
+
+#: main-window.slint
+msgid "键盘只统计物理按键的位置和次数。"
+msgstr "For the keyboard, only physical key positions and counts are kept."
+
+#: about.slint
+msgid "项目主页"
+msgstr "Project page"
+
+#: main-window.slint
+msgid "鼠标"
+msgstr "Mouse"
+
+#: collection-panel.slint
+msgid "鼠标左键、中键和右键的按下次数，范围与颜色都与上方键位相同。"
+msgstr "Left, middle and right mouse button presses, with the same range and colours as the keys above."
+
+#: collection-panel.slint
+msgid "鼠标按键热度"
+msgstr "Mouse button heat"
+
+#: main-window.slint
+msgid "鼠标点击"
+msgstr "Mouse clicks"

@@ -1,3 +1,4 @@
+use crate::i18n::tr;
 use anyhow::{Context, Result, bail};
 use std::{
     fs,
@@ -24,17 +25,17 @@ pub fn resolve(control: &Path) -> Result<PathBuf> {
         .take(65537)
         .read_to_string(&mut text)?;
     if text.len() > 65536 {
-        bail!("数据位置设置过大");
+        bail!(tr!("数据位置设置过大"));
     }
     let target = text
         .strip_prefix("Timelens data location v1\n")
-        .context("数据位置设置格式无效")?;
+        .context(tr!("数据位置设置格式无效"))?;
     let target = timelens_storage::Storage::validate_data_destination(Path::new(target))?;
     if !target.is_dir() {
-        bail!(
+        bail!(tr!(
             "已设置的数据位置不可用：{}。请连接原磁盘或进入恢复界面。",
             target.display()
-        );
+        ));
     }
     Ok(target)
 }
@@ -73,7 +74,10 @@ pub fn adopt_initial(control: &Path, destination: &Path) -> Result<bool> {
     }
     let target = timelens_storage::Storage::validate_data_destination(destination)?;
     if !target.is_dir() || fs::read_dir(&target)?.next().is_some() {
-        bail!("安装器准备的数据目录不存在或不为空：{}", target.display());
+        bail!(tr!(
+            "安装器准备的数据目录不存在或不为空：{}",
+            target.display()
+        ));
     }
     publish(control, &target)?;
     Ok(true)

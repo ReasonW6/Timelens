@@ -1,3 +1,4 @@
+use crate::i18n::tr;
 use crate::{AppWindow, CollectionState};
 use anyhow::{Result, anyhow};
 use slint::ComponentHandle;
@@ -47,9 +48,9 @@ impl CollectionMenu {
     /// The tray tooltip and the menu's first line.
     fn status(&self) -> String {
         match (self.paused, self.resume.is_empty()) {
-            (false, _) => "正在记录".into(),
-            (true, true) => "已暂停记录".into(),
-            (true, false) => format!("已暂停记录 · {}", self.resume),
+            (false, _) => tr!("正在记录").into(),
+            (true, true) => tr!("已暂停记录").into(),
+            (true, false) => tr!("已暂停记录 · {}", self.resume),
         }
     }
 }
@@ -78,7 +79,7 @@ fn emit(event: Event) {
                 // allows this process to take foreground focus.
                 let _ = sink.window.upgrade_in_event_loop(move |w| {
                     if let Err(error) = crate::window_chrome::show_and_activate(&w) {
-                        w.set_action_status(format!("打开窗口失败：{error}").into());
+                        w.set_action_status(tr!("打开窗口失败：{}", error).into());
                     }
                 });
             }
@@ -104,22 +105,29 @@ fn collection_menu(w: &AppWindow, quitting: bool) {
         let tip_changed = menu.status() != next.status();
         *menu = next;
         if tip_changed {
-            let hwnd = WINDOW.load(std::sync::atomic::Ordering::Acquire) as HWND;
-            if !hwnd.is_null() {
-                unsafe {
-                    PostMessageW(hwnd, TIP, 0, 0);
-                }
-            }
+            relabel();
+        }
+    }
+}
+/// Rewrites the tooltip, as after the interface language changed; the menu is
+/// built afresh each time it opens.
+pub fn relabel() {
+    let hwnd = WINDOW.load(std::sync::atomic::Ordering::Acquire) as HWND;
+    if !hwnd.is_null() {
+        unsafe {
+            PostMessageW(hwnd, TIP, 0, 0);
         }
     }
 }
 /// The pause lengths the tray offers, as menu id and minutes for `pause-for`.
-const PAUSES: [(usize, i32, &str); 4] = [
-    (10, 15, "15 分钟"),
-    (11, 60, "1 小时"),
-    (12, -2, "直到明天"),
-    (13, -1, "直到手动继续"),
-];
+fn pauses() -> [(usize, i32, &'static str); 4] {
+    [
+        (10, 15, tr!("15 分钟")),
+        (11, 60, tr!("1 小时")),
+        (12, -2, tr!("直到明天")),
+        (13, -1, tr!("直到手动继续")),
+    ]
+}
 fn popup_menu(state: &CollectionMenu) -> HMENU {
     unsafe {
         let menu = CreatePopupMenu();
@@ -131,25 +139,25 @@ fn popup_menu(state: &CollectionMenu) -> HMENU {
                 wide(&state.status()).as_ptr(),
             );
             AppendMenuW(menu, MF_SEPARATOR, 0, null());
-            AppendMenuW(menu, MF_STRING, 1, wide("打开 Timelens").as_ptr());
-            AppendMenuW(menu, MF_STRING, 4, wide("立即拍摄快照").as_ptr());
+            AppendMenuW(menu, MF_STRING, 1, wide(tr!("打开 Timelens")).as_ptr());
+            AppendMenuW(menu, MF_STRING, 4, wide(tr!("立即拍摄快照")).as_ptr());
             let busy = if state.busy { MF_GRAYED } else { 0 };
             if state.paused {
-                AppendMenuW(menu, MF_STRING | busy, 2, wide("继续记录").as_ptr());
+                AppendMenuW(menu, MF_STRING | busy, 2, wide(tr!("继续记录")).as_ptr());
             } else {
                 let lengths = CreatePopupMenu();
-                for (id, _, text) in PAUSES {
+                for (id, _, text) in pauses() {
                     AppendMenuW(lengths, MF_STRING, id, wide(text).as_ptr());
                 }
                 AppendMenuW(
                     menu,
                     MF_POPUP | busy,
                     lengths as usize,
-                    wide("暂停记录").as_ptr(),
+                    wide(tr!("暂停记录")).as_ptr(),
                 );
             }
             AppendMenuW(menu, MF_SEPARATOR, 0, null());
-            AppendMenuW(menu, MF_STRING, 3, wide("退出（停止记录）…").as_ptr());
+            AppendMenuW(menu, MF_STRING, 3, wide(tr!("退出（停止记录）…")).as_ptr());
         }
         menu
     }
@@ -160,7 +168,7 @@ fn menu_event(selected: i32, state: &CollectionMenu) -> Option<Event> {
         2 if !state.busy => Some(Event::SetPaused(false)),
         3 => Some(Event::Quit),
         4 => Some(Event::Capture),
-        id if !state.busy => PAUSES
+        id if !state.busy => pauses()
             .iter()
             .find(|(menu_id, ..)| *menu_id as i32 == id)
             .map(|(_, minutes, _)| Event::PauseFor(*minutes)),
@@ -172,8 +180,8 @@ fn confirm_quit(hwnd: HWND) -> bool {
     unsafe {
         MessageBoxW(
             hwnd,
-            wide("退出后不再记录活动、输入和快照，直到下次打开 Timelens。\n\n只想暂时不记录，可以改用「暂停记录」。").as_ptr(),
-            wide("退出 Timelens？").as_ptr(),
+            wide(tr!("退出后不再记录活动、输入和快照，直到下次打开 Timelens。\n\n只想暂时不记录，可以改用「暂停记录」。")).as_ptr(),
+            wide(tr!("退出 Timelens？")).as_ptr(),
             MB_OKCANCEL | MB_ICONQUESTION | MB_DEFBUTTON2,
         ) == IDOK
     }
@@ -388,7 +396,7 @@ pub fn install(
     control: std::path::PathBuf,
 ) -> Result<()> {
     let (sender, receiver) = mpsc::channel();
-    *EVENTS.lock().map_err(|_| anyhow!("托盘锁不可用"))? = Some(EventSink {
+    *EVENTS.lock().map_err(|_| anyhow!(tr!("托盘锁不可用")))? = Some(EventSink {
         sender,
         window: w.as_weak(),
     });
@@ -435,7 +443,7 @@ pub fn install(
         .recv_timeout(std::time::Duration::from_secs(5))
         .unwrap_or(false)
     {
-        return Err(anyhow!("系统托盘初始化失败"));
+        return Err(anyhow!(tr!("系统托盘初始化失败")));
     }
     let weak = w.as_weak();
     w.window().on_close_requested(move || {
@@ -448,8 +456,8 @@ pub fn install(
         if !HIDE_EXPLAINED.swap(true, std::sync::atomic::Ordering::AcqRel) && !marker.exists() {
             let _ = std::fs::create_dir_all(&control).and_then(|()| std::fs::write(&marker, b"1"));
             show_notice(Notice {
-                title: "Timelens 仍在后台记录",
-                text: "窗口已收起到通知区域，记录照常进行。点击托盘图标可重新打开；右键可以暂停记录或退出。".into(),
+                title: tr!("Timelens 仍在后台记录"),
+                text: tr!("窗口已收起到通知区域，记录照常进行。点击托盘图标可重新打开；右键可以暂停记录或退出。").into(),
                 success: true,
             });
         }
@@ -494,7 +502,7 @@ pub fn install(
                     }
                     quitting.set(true);
                     crate::collector_task::suspend();
-                    w.set_action_status("正在保存并退出 Timelens…".into());
+                    w.set_action_status(tr!("正在保存并退出 Timelens…").into());
                     let storage = Arc::clone(&storage);
                     thread::spawn(move || {
                         let result: Result<()> = crate::snapshot::run_heavy_task(|| {
@@ -513,7 +521,7 @@ pub fn install(
                                     break;
                                 }
                                 if start.elapsed() > std::time::Duration::from_secs(15) {
-                                    return Err(anyhow!("采集器未能完成停止，请重试"));
+                                    return Err(anyhow!(tr!("采集器未能完成停止，请重试")));
                                 }
                                 thread::sleep(std::time::Duration::from_millis(50));
                             }
@@ -537,7 +545,7 @@ pub fn install(
                 Event::QuitFailed(error) => {
                     quitting.set(false);
                     crate::collector_task::resume();
-                    w.set_action_status(format!("退出未完成：{error}").into());
+                    w.set_action_status(tr!("退出未完成：{}", error).into());
                 }
                 Event::SettingChanged => crate::appearance::follow_system(&w),
             }

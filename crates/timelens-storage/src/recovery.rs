@@ -17,7 +17,9 @@ fn invalid(text: impl Into<String>) -> StorageError {
 }
 
 impl Storage {
-    pub fn migration_notice(directory: &Path) -> Result<Option<String>> {
+    /// The schema version a dataset has and the one it would be upgraded to,
+    /// when the upgrade needs the user's consent first.
+    pub fn pending_upgrade(directory: &Path) -> Result<Option<(i64, i64)>> {
         let database = directory.join(DATABASE_FILE);
         let backup = directory.join(BACKUP_FILE);
         if !database.exists() && !backup.exists() {
@@ -34,8 +36,9 @@ impl Storage {
                 supported: LATEST_SCHEMA_VERSION,
             });
         }
-        Ok((9..12).contains(&current).then(|| format!(
-            "需要将数据结构从版本 {current} 升级到 {LATEST_SCHEMA_VERSION}。这会重建快照与缺失记录的约束，保留全部记录。升级期间会锁定数据库，并建立临时加密安全副本；检查成功后删除副本，失败自动回滚。")))
+        Ok((9..12)
+            .contains(&current)
+            .then_some((current, LATEST_SCHEMA_VERSION)))
     }
 
     pub fn recover_to_new_directory(
@@ -405,7 +408,7 @@ mod tests {
     }
 
     #[test]
-    fn startup_recovers_interrupted_upgrade_before_inspecting_migration_notice() {
+    fn startup_recovers_interrupted_upgrade_before_inspecting_pending_upgrade() {
         let (source, s) = fixtures::storage();
         s.checkpoint().unwrap();
         drop(s);
@@ -413,7 +416,7 @@ mod tests {
         let backup = source.path().join(BACKUP_FILE);
         fs::copy(&db, &backup).unwrap();
         fs::write(&db, b"interrupted upgrade").unwrap();
-        assert!(Storage::migration_notice(source.path()).unwrap().is_none());
+        assert!(Storage::pending_upgrade(source.path()).unwrap().is_none());
         assert!(!backup.exists());
         Storage::open(source.path())
             .unwrap()
