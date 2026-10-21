@@ -65,15 +65,6 @@ public static class TimelensAcceptanceToken {
     [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr handle);
     [DllImport("advapi32.dll", SetLastError=true)] static extern bool OpenProcessToken(IntPtr process, uint access, out IntPtr token);
     [DllImport("advapi32.dll", SetLastError=true)] static extern bool GetTokenInformation(IntPtr token, int type, out int value, int size, out int returned);
-    [DllImport("advapi32.dll", CharSet=CharSet.Unicode, SetLastError=true)] static extern bool CredReadW(string target, int type, int flags, out IntPtr credential);
-    [DllImport("advapi32.dll")] static extern void CredFree(IntPtr credential);
-    public static bool SyntheticCredentialExists() {
-        IntPtr credential;
-        if (CredReadW("Timelens/ai/acceptance-ui-84d2c6a9", 1, 0, out credential)) { CredFree(credential); return true; }
-        int error = Marshal.GetLastWin32Error();
-        if (error != 1168) throw new Win32Exception(error);
-        return false;
-    }
     public static bool IsElevated(int id) {
         IntPtr process = OpenProcess(0x1000, false, id), token = IntPtr.Zero;
         if (process == IntPtr.Zero) throw new Win32Exception();
@@ -90,9 +81,6 @@ try {
     Assert-Check 'new-isolated-installation' (-not (Test-Path -LiteralPath $install))
     Assert-Check 'no-existing-acceptance-tasks' (@(Get-ScheduledTask -TaskPath $taskPath -ErrorAction SilentlyContinue).Count -eq 0)
     Assert-Check 'no-running-timelens' (@(Get-Process -Name Timelens, timelens-collector, Timelens.Collector -ErrorAction SilentlyContinue).Count -eq 0)
-    # A provider key as earlier versions stored it; the new core removes it on startup.
-    & cmdkey.exe /generic:Timelens/ai/acceptance-ui-84d2c6a9 /user:Timelens /pass:legacy-acceptance | Out-Null
-    Assert-Check 'legacy-ai-credential-exists-before-install' ([TimelensAcceptanceToken]::SyntheticCredentialExists())
     Invoke-Setup 'install'
     $coreTask = Get-ScheduledTask -TaskPath $taskPath -TaskName Core
     $collectorTask = Get-ScheduledTask -TaskPath $taskPath -TaskName Collector
@@ -105,7 +93,6 @@ try {
     Assert-Check 'resident-processes-running' ($core.Count -eq 1 -and $collector.Count -eq 1)
     Assert-Check 'core-process-not-elevated' (-not [TimelensAcceptanceToken]::IsElevated($core[0].Id))
     Assert-Check 'collector-process-elevated' ([TimelensAcceptanceToken]::IsElevated($collector[0].Id))
-    Assert-Check 'install-removed-legacy-ai-credential' (-not [TimelensAcceptanceToken]::SyntheticCredentialExists())
     Assert-Check 'two-payloads-present' ((Test-Path -LiteralPath $corePath) -and (Test-Path -LiteralPath $collectorPath))
     . (Join-Path $repo 'installer\path-safety.ps1')
     Assert-Check 'protected-elevated-ancestors' ((Assert-InstallDirectory $elevated -RequireProtectedAncestors) -eq $elevated)

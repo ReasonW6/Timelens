@@ -5,7 +5,6 @@ mod app_icon;
 mod appearance;
 mod collection_ui;
 mod collector_task;
-mod credentials;
 mod data_ui;
 mod general_ui;
 mod history;
@@ -118,8 +117,6 @@ fn main() -> Result<()> {
             SingleInstanceGuard::acquire_collector().context("删除数据前必须先停止采集器")?;
         let data = options.data_directory()?;
         let control = options.control_directory()?;
-        // Every AI credential is obsolete, whichever dataset it belonged to.
-        credentials::remove_ai_credentials()?;
         Storage::delete_owned_dataset(&data)?;
         if data != control {
             Storage::delete_owned_dataset(&control)?;
@@ -166,10 +163,6 @@ fn main() -> Result<()> {
         Ok(()) => {}
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
         Err(e) => return Err(e.into()),
-    }
-    // AI summaries were removed; the provider keys they used go with them.
-    if !qa_headless && let Err(error) = credentials::remove_ai_credentials() {
-        eprintln!("earlier AI credentials could not be removed: {error}");
     }
     let mut storage = recovery::open(
         options.data_directory(),

@@ -35,7 +35,7 @@ impl Storage {
             });
         }
         Ok((9..12).contains(&current).then(|| format!(
-            "需要将数据结构从版本 {current} 升级到 {LATEST_SCHEMA_VERSION}。这会重建快照与缺失记录的约束，保留活动、输入、快照与报告；旧版的 AI 总结与对话会被删除，无法恢复。升级期间会锁定数据库，并建立临时加密安全副本；检查成功后删除副本，失败自动回滚。")))
+            "需要将数据结构从版本 {current} 升级到 {LATEST_SCHEMA_VERSION}。这会重建快照与缺失记录的约束，保留全部记录。升级期间会锁定数据库，并建立临时加密安全副本；检查成功后删除副本，失败自动回滚。")))
     }
 
     pub fn recover_to_new_directory(

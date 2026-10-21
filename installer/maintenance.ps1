@@ -58,8 +58,6 @@ if ($Mode -eq 'PrepareUpgrade' -and $oldCoreTask) {
 # Earlier builds kept the collector beside the core; current ones keep it in the
 # protected elevated directory.
 $collectors = @((Join-Path $targetDir 'Timelens.Collector.exe'), (Join-Path $elevatedDir 'Timelens.Collector.exe'))
-# Earlier builds also ran an on-demand AI worker beside the core.
-$worker = Join-Path $targetDir 'Timelens.AI.exe'
 foreach ($task in $tasks) {
     $expected = if ($task.TaskName -eq 'Core') { @($core) } else { $collectors }
     if (@($task.Actions).Count -ne 1 -or @($task.Actions)[0].Execute -notin $expected) {
@@ -159,9 +157,9 @@ function Invoke-UserCore([string] $Arguments) {
     }
 }
 
-$paths = @($core, $worker) + $collectors
+$paths = @($core) + $collectors
 function Get-ProductProcesses {
-    @(Get-Process -Name 'Timelens', 'Timelens.Collector', 'Timelens.AI' -ErrorAction SilentlyContinue |
+    @(Get-Process -Name 'Timelens', 'Timelens.Collector' -ErrorAction SilentlyContinue |
         Where-Object { $_.Path -and $paths -contains $_.Path })
 }
 

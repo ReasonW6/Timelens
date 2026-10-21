@@ -50,10 +50,6 @@ Source: "path-safety.ps1"; DestDir: "{commonpf64}\{#ProductName}\internal"; Flag
 Source: "register-tasks.ps1"; DestDir: "{commonpf64}\{#ProductName}\internal"; Flags: ignoreversion
 Source: "unregister-tasks.ps1"; DestDir: "{commonpf64}\{#ProductName}\internal"; Flags: ignoreversion
 
-; Earlier versions shipped an AI worker beside the core.
-[InstallDelete]
-Type: files; Name: "{app}\Timelens.AI.exe"
-
 [Icons]
 Name: "{autoprograms}\{#ProductName}"; Filename: "{app}\Timelens.exe"
 
