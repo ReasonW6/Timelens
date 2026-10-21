@@ -4,6 +4,7 @@ import { AppRow, WindowRow, SegmentRow, SnapshotRow, ReportAppRow, HistoryItem, 
 import { HistoryRow, StickyDay, ParticipantItem, AppTimes } from "timeline.slint";
 import { DataPanel, DataState, MoveDialog } from "data-panel.slint";
 import { CollectionPanel, CollectionState, KeyCell, ButtonHeat, SystemRow } from "collection-panel.slint";
+import { AboutPage } from "about.slint";
 export { Theme, AppIcons, DataState, CollectionState, KeyCell, ButtonHeat, SystemRow, AppRow, WindowRow, SegmentRow, SnapshotRow, ReportAppRow, HistoryItem, DayAnchor, Participant, ShareSlice, StackApp }
 
 component WindowItem inherits Rectangle {
@@ -695,7 +696,6 @@ export component AppWindow inherits Window {
     in property <string> collector-status;
     // 0 delivering, 1 waiting for the first delivery after start, 2 silent.
     in property <int> collector-state: 1;
-    in property <string> data-path;
     in property <string> build-version;
     in property <string> range-label;
     in property <string> selected-name: "选择一条活动";
@@ -728,6 +728,8 @@ export component AppWindow inherits Window {
     // The file a status names, or "" when it names none.
     pure callback status-path(string) -> string;
     callback open-folder(string);
+    callback check-updates;
+    callback open-project;
     private property <bool> toast-hover;
     in property <bool> action-busy;
     in property <string> calendar-date;
@@ -1968,7 +1970,7 @@ export component AppWindow inherits Window {
                                     : root.settings-tab == 1 ? "定时拍摄屏幕快照，帮你回忆当时在做什么。"
                                     : root.settings-tab == 2 ? "为单个应用设置排除、合并显示或删除历史。"
                                     : root.settings-tab == 3 ? "保留时长、备份、导出与存储位置。"
-                                    : "版本与本机状态。";
+                                    : "版本、更新与项目信息。";
                             }
                         }
 
@@ -2015,13 +2017,16 @@ export component AppWindow inherits Window {
                                 Rectangle {
                                     height: privacy.preferred-height;
                                     border-radius: 12px;
-                                    background: Theme.privacy-brush;
+                                    background: Theme.privacy-tint;
                                     border-width: 1px; border-color: Theme.brand-line;
                                     privacy := HorizontalLayout {
                                         padding: 16px; spacing: 14px;
                                         Rectangle {
-                                            width: 36px; height: 36px; border-radius: 10px; background: Theme.brand;
-                                            Image { width: 18px; height: 18px; source: @image-url("icons/lock.svg"); colorize: #ffffff; }
+                                            width: 36px; height: 36px; y: (parent.height - self.height) / 2;
+                                            border-radius: 18px;
+                                            background: Theme.brand.with-alpha(Theme.dark ? 0.2 : 0.12);
+                                            border-width: 1px; border-color: Theme.brand-line;
+                                            Image { width: 18px; height: 18px; source: @image-url("icons/lock.svg"); colorize: Theme.brand-ink; }
                                         }
                                         VerticalLayout {
                                             spacing: 4px; horizontal-stretch: 1;
@@ -2044,6 +2049,8 @@ export component AppWindow inherits Window {
                                             toggled(on) => { CollectionState.paused = !on; CollectionState.action(0); }
                                         }
                                     }
+                                    Rule { }
+                                    SettingRow { title: "采集器"; description: root.collector-status; icon: @image-url("icons/link.svg"); Dot { tone: root.recording-tone; } }
                                     Rule { }
                                     SettingRow {
                                         title: "应用规则";
@@ -2170,7 +2177,7 @@ export component AppWindow inherits Window {
                                     }
                                 }
                                 Rectangle { height: 10px; }
-                                DataPanel { export-range: root.range-title; }
+                                DataPanel { export-range: root.range-title; storage-status: root.storage-status; }
                                 Rectangle { height: 10px; }
                                 SettingsHeader { text: "危险操作"; color: Theme.danger; }
                                 SettingsGroup {
@@ -2188,29 +2195,10 @@ export component AppWindow inherits Window {
 
                         if root.settings-tab == 5 : ScrollView {
                             horizontal-scrollbar-policy: always-off;
-                            VerticalLayout {
-                                alignment: start; spacing: 10px; padding-right: 18px;
-                                SettingsGroup {
-                                    HorizontalLayout {
-                                        padding: 18px; spacing: 16px;
-                                        Image { width: 56px; height: 56px; source: @image-url("icons/logo.svg"); }
-                                        VerticalLayout {
-                                            alignment: center; spacing: 4px;
-                                            Text { text: "Timelens"; color: Theme.ink; font-family: Theme.font-display; font-size: 20px; font-weight: 700; }
-                                            Note { text: "在本机回看应用活动、输入统计和快照。版本 " + root.build-version; }
-                                        }
-                                    }
-                                }
-                                Rectangle { height: 8px; }
-                                SettingsHeader { text: "本机状态"; }
-                                SettingsGroup {
-                                    SettingRow { title: "加密存储"; description: root.storage-status; icon: @image-url("icons/database.svg"); }
-                                    Rule { }
-                                    SettingRow { title: "采集器"; description: root.collector-status; icon: @image-url("icons/activity.svg"); Dot { tone: root.recording-tone; } }
-                                    Rule { }
-                                    SettingRow { title: "数据位置"; description: root.data-path; icon: @image-url("icons/folder.svg"); }
-                                }
-                                Note { text: "界面图标使用 Tabler Icons，遵循 MIT 许可。"; color: Theme.ink-4; font-size: 12px; }
+                            AboutPage {
+                                version: root.build-version;
+                                check-updates => { root.check-updates(); }
+                                open-project => { root.open-project(); }
                             }
                         }
                     }

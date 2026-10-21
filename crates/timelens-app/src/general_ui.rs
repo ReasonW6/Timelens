@@ -28,22 +28,28 @@ fn request(
     if busy.swap(true, Ordering::AcqRel) {
         return;
     }
-    window.set_startup_busy(true);
-    window.set_startup_status(
-        if enabled.is_some() {
-            "等待管理员确认…"
-        } else {
-            "正在读取启动设置…"
-        }
-        .into(),
-    );
+    // Opening the page re-reads the setting each time. Once a state is shown it
+    // stays put meanwhile, so the switch and its status line do not flicker.
+    if enabled.is_some() || window.get_startup_status().is_empty() {
+        window.set_startup_busy(true);
+        window.set_startup_status(
+            if enabled.is_some() {
+                "等待管理员确认…"
+            } else {
+                "正在读取启动设置…"
+            }
+            .into(),
+        );
+    }
     let sender = sender.clone();
     thread::spawn(move || {
         let message = enabled.map(|enabled| match startup::set(&task, enabled) {
             Ok(()) => if enabled {
                 "已开启开机自启动"
             } else {
-                "已关闭开机自启动，当前记录继续运行"
+                // The page's note already says recording goes on; the same
+                // words as a later re-read keep the line from changing.
+                "已关闭开机自启动"
             }
             .to_owned(),
             Err(error) => format!("{error:#}"),

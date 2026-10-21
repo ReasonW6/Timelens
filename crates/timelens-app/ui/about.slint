@@ -1,0 +1,159 @@
+// The About page: the Timelens mark, the version and where updates come from.
+import { Theme, Action, Badge, Note, Rule, SettingRow, SettingsHeader, SettingsGroup } from "theme.slint";
+
+// The Timelens mark with its sweep drawn live, so the sweep can turn around the
+// lens. The tile, ring and centre come from icons/logo-tile.svg: the software
+// renderer fills a gradient past rounded corners. Geometry follows logo.svg in
+// its 64-unit frame: a ring of radius 17 and a 120° sweep that starts at the top.
+component LensMark inherits Rectangle {
+    in property <length> size: 96px;
+    // Where the sweep starts, clockwise from the top.
+    in property <angle> turn: 0deg;
+    in property <bool> warm: false;
+    private property <length> unit: root.size / 64;
+    private property <angle> end: root.turn + 120deg;
+    width: root.size; height: root.size;
+    // Only casts the glow; the tile covers it.
+    Rectangle {
+        x: 4 * root.unit; y: 4 * root.unit;
+        width: 56 * root.unit; height: self.width;
+        border-radius: 14 * root.unit;
+        background: root.warm ? #c2468e : #3b41b5;
+        drop-shadow-blur: 18 * root.unit;
+        drop-shadow-offset-y: 6 * root.unit;
+        drop-shadow-color: root.warm ? #c2468e66 : #3b41b566;
+    }
+    Image {
+        width: root.size; height: root.size;
+        source: root.warm ? @image-url("icons/logo-tile-warm.svg") : @image-url("icons/logo-tile.svg");
+    }
+    Path {
+        width: root.size; height: root.size;
+        viewbox-width: 64; viewbox-height: 64;
+        stroke: root.warm ? #ffe2a8 : #ffb36b;
+        stroke-width: 6 * root.unit;
+        stroke-line-cap: round;
+        MoveTo { x: 32 + 17 * sin(root.turn); y: 32 - 17 * cos(root.turn); }
+        ArcTo { x: 32 + 17 * sin(root.end); y: 32 - 17 * cos(root.end); radius-x: 17; radius-y: 17; sweep: true; }
+    }
+}
+
+export component AboutPage inherits VerticalLayout {
+    in property <string> version;
+    callback check-updates;
+    callback open-project;
+
+    // Clicks on the mark; the seventh turns time back.
+    private property <int> taps: 0;
+    // When the last tap and the rewind began, on the animation clock.
+    private property <duration> tap-at: -1s;
+    private property <duration> rewind-at: -1s;
+    private property <duration> now: animation-tick();
+    // One slow turn every eight seconds, as a clock's hand would.
+    private property <angle> drift: Math.mod(root.now / 1ms, 8000) / 8000 * 360deg;
+    // Each tap adds a quick turn, and the rewind runs three turns backwards.
+    private property <angle> spin: 0deg;
+    animate spin { duration: 900ms; easing: ease-out; }
+    private property <float> pop: clamp((root.now - root.tap-at) / 260ms, 0, 1);
+    private property <float> burst: clamp((root.now - root.rewind-at) / 1100ms, 0, 1);
+    private property <bool> rewound: root.taps >= 7;
+    private property <[string]> lines: [
+        "时间被倒拨了三圈——可惜只在这枚图标里有效。",
+        "专注不是从不分心，而是每次分心后都愿意回来。",
+        "休息也是时间线的一部分，不必把它涂成灰色。",
+        "今天不必完美，记下来就已经很好了。",
+        "这里的每一分钟都只留在这台电脑上，只有你看得见。",
+        "再转下去，透镜要晕了。",
+    ];
+    private property <string> line: root.taps < 3 ? ""
+        : root.taps < 7 ? "再点 " + (7 - root.taps) + " 下，看看时间会怎样"
+        : root.lines[Math.mod(root.taps - 7, root.lines.length)];
+
+    alignment: start;
+    spacing: 10px;
+    padding-right: 18px;
+    padding-bottom: 20px;
+
+    VerticalLayout {
+        padding-top: 4px; padding-bottom: 12px;
+        spacing: 6px;
+        HorizontalLayout {
+            alignment: center;
+            stage := Rectangle {
+                width: 240px; height: 132px;
+                // Sparks fly out from the lens when time turns back.
+                for i in 14 : Rectangle {
+                    private property <angle> heading: i * 360deg / 14 + 8deg;
+                    private property <length> reach: 46px + root.burst * (Math.mod(i, 2) == 0 ? 70px : 52px);
+                    width: Math.mod(i, 3) == 0 ? 8px : 6px; height: self.width;
+                    border-radius: self.width / 2;
+                    x: stage.width / 2 + self.reach * sin(self.heading) - self.width / 2;
+                    y: stage.height / 2 - self.reach * cos(self.heading) * 0.62 - self.height / 2;
+                    background: Math.mod(i, 3) == 0 ? #ff9a6b : Math.mod(i, 3) == 1 ? Theme.brand : #ffd37c;
+                    opacity: root.burst > 0 && root.burst < 1 ? 1 - root.burst : 0;
+                }
+                mark := LensMark {
+                    size: 104px * (1 + 0.08 * sin(root.pop * 180deg));
+                    x: (stage.width - self.width) / 2;
+                    y: (stage.height - self.height) / 2;
+                    turn: root.drift + root.spin;
+                    warm: root.rewound;
+                }
+                TouchArea {
+                    x: mark.x; y: mark.y; width: mark.width; height: mark.height;
+                    mouse-cursor: pointer;
+                    clicked => {
+                        root.taps += 1;
+                        root.tap-at = animation-tick();
+                        if root.taps == 7 {
+                            root.rewind-at = animation-tick();
+                            root.spin -= 1080deg;
+                        } else {
+                            root.spin += 360deg;
+                        }
+                    }
+                }
+            }
+        }
+        Text {
+            text: "Timelens";
+            horizontal-alignment: center;
+            color: Theme.ink; font-family: Theme.font-display; font-size: 26px; font-weight: 700;
+        }
+        Note { text: "在本机回看应用活动、输入统计和快照。"; horizontal-alignment: center; }
+        // Room for the hint is kept, so the page below does not jump.
+        Text {
+            min-height: 20px;
+            text: root.line;
+            horizontal-alignment: center;
+            color: root.rewound ? Theme.brand-ink : Theme.ink-3;
+            font-size: 12px;
+            wrap: word-wrap;
+        }
+    }
+
+    SettingsHeader { text: "版本与更新"; }
+    SettingsGroup {
+        SettingRow {
+            title: "当前版本";
+            description: "Timelens " + root.version + "，适用于 Windows 11。";
+            icon: @image-url("icons/info-circle.svg");
+            Badge { text: "v" + root.version; tone: Theme.brand-ink; fill: Theme.brand-soft; }
+        }
+        Rule { }
+        SettingRow {
+            title: "检查更新";
+            description: "在浏览器中打开发布页，查看是否有新版本。Timelens 本身不联网。";
+            icon: @image-url("icons/refresh.svg");
+            Action { text: "打开发布页"; icon: @image-url("icons/arrow-right-circle.svg"); clicked => { root.check-updates(); } }
+        }
+        Rule { }
+        SettingRow {
+            title: "项目主页";
+            description: "查看源代码、更新记录，或反馈问题。";
+            icon: @image-url("icons/link.svg");
+            Action { text: "打开"; clicked => { root.open-project(); } }
+        }
+    }
+    Note { text: "界面图标使用 Tabler Icons，遵循 MIT 许可。"; color: Theme.ink-4; font-size: 12px; }
+}

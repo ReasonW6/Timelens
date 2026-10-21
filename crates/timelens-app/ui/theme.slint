@@ -81,9 +81,8 @@ export global Theme {
 
     // Behind screenshots, which are mostly dark themselves.
     out property <color> photo-bg: dark ? #101217 : #141925;
-    out property <brush> privacy-brush: dark
-        ? @linear-gradient(120deg, #262842 0%, #2a2638 100%)
-        : @linear-gradient(120deg, #eef0fd 0%, #f5f0fb 100%);
+    // A flat tint: the software renderer fills a gradient past rounded corners.
+    out property <color> privacy-tint: dark ? #282840 : #f1f0fc;
 
     out property <color> scrim: dark ? #05060a8c : #161b2647;
     out property <color> shadow: dark ? #0000004d : #161c2d1c;

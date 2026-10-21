@@ -434,7 +434,6 @@ fn run_window(
     let _pause_timer = pause::install(&window, control_directory.clone());
     window.set_storage_status(storage_status.into());
     window.set_collector_status("等待受信采集器事件…".into());
-    window.set_data_path(data_directory.display().to_string().into());
     window.set_build_version(env!("CARGO_PKG_VERSION").into());
 
     let (status_sender, status_receiver) = mpsc::channel();
@@ -503,6 +502,9 @@ fn run_window(
             .arg(format!("/select,{path}"))
             .spawn();
     });
+    // Timelens itself makes no network requests; the browser looks for updates.
+    window.on_check_updates(|| open_in_browser(RELEASES_URL));
+    window.on_open_project(|| open_in_browser(PROJECT_URL));
 
     {
         let weak = window.as_weak();
@@ -1877,6 +1879,14 @@ fn status_path(message: &str) -> Option<PathBuf> {
         .or_else(|| message.split_once("个文件到 "))?;
     let path = PathBuf::from(path.trim());
     path.exists().then_some(path)
+}
+
+const PROJECT_URL: &str = "https://github.com/ReasonW6/Timelens";
+const RELEASES_URL: &str = "https://github.com/ReasonW6/Timelens/releases";
+
+/// Opens a page in the default browser; the app itself stays offline.
+fn open_in_browser(url: &str) {
+    let _ = std::process::Command::new("explorer.exe").arg(url).spawn();
 }
 
 fn capture_message(summary: &snapshot::CaptureSummary) -> String {

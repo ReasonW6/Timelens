@@ -538,9 +538,7 @@ pub fn install(
                     g.set_move_phase(2);
                     g.set_destination("".into());
                     if let Ok(s) = lock(&ui_storage) {
-                        let path = s.data_directory().display().to_string();
-                        g.set_current_directory(path.clone().into());
-                        w.set_data_path(path.into());
+                        g.set_current_directory(s.data_directory().display().to_string().into());
                     }
                 }
                 Update::MoveFailed(message) => {
@@ -569,9 +567,7 @@ pub fn install(
                 Update::Done(message) => {
                     g.set_status(message.into());
                     if let Ok(s) = lock(&ui_storage) {
-                        let path = s.data_directory().display().to_string();
-                        g.set_current_directory(path.clone().into());
-                        w.set_data_path(path.into());
+                        g.set_current_directory(s.data_directory().display().to_string().into());
                     }
                     g.set_restore_ready(false);
                     g.set_password("".into());

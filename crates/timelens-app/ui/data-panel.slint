@@ -36,6 +36,8 @@ export global DataState {
 export component DataPanel inherits VerticalLayout {
     // The timeline's range in words, which exports cover.
     in property <string> export-range;
+    // The cipher and schema in use, in words.
+    in property <string> storage-status;
     spacing: 10px;
     alignment: start;
 
@@ -46,6 +48,8 @@ export component DataPanel inherits VerticalLayout {
             description: DataState.current-directory != "" ? DataState.current-directory : "正在读取数据位置…";
             icon: @image-url("icons/folder.svg");
         }
+        Rule { }
+        SettingRow { title: "加密存储"; description: root.storage-status; icon: @image-url("icons/lock.svg"); }
         Rule { }
         SettingExpander {
             title: "迁移到其他位置";
