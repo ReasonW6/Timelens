@@ -140,7 +140,7 @@ flowchart LR
 目前还没有发布安装包，需要[从源码构建](#从源码构建)。安装过程是这样的：
 
 1. 运行 `Timelens-<版本>-x64-setup.exe`，确认一次 UAC。安装器会注册两个登录任务：主程序以普通权限运行，采集器以最高权限运行。
-2. 首次安装时选择数据位置，默认跟随安装目录，放在其中的 `TimelensData` 文件夹；也可以选 `%LOCALAPPDATA%\Timelens`，或本地固定磁盘上任意一个空文件夹。安装器默认会添加桌面快捷方式，可以取消勾选。
+2. 在欢迎页点「立即安装」，会按默认设置直接安装：程序装到 `C:\Program Files\Timelens`，数据放在 `%LOCALAPPDATA%\Timelens`，并添加桌面快捷方式，具体位置显示在欢迎页底部。想换位置就点「自定义安装位置」：可以另选安装目录；数据可以跟随安装目录，放在其中的 `TimelensData` 文件夹，也可以选 `%LOCALAPPDATA%\Timelens`，或本地固定磁盘上任意一个空文件夹；桌面快捷方式也可以取消勾选。
 3. 安装完成后，Timelens 会常驻在托盘里。在「设置 › 常规」里可以开关开机自启、切换界面语言。
 4. 升级时直接运行新的安装包，数据位置和自启动设置都会保留。想把已有数据搬进安装目录，可以在「设置 › 数据」里迁移到安装目录下的 `TimelensData`（升级时已准备好这个空文件夹）。
 5. 卸载可以用安装目录里的「卸载 Timelens」快捷方式或系统的「已安装的应用」。卸载时可以选择保留或删除本地数据，你导出的文件不会被删除。
@@ -174,6 +174,7 @@ cargo build --release -p timelens-app -p timelens-collector
 - 生成合成数据：`cargo run -p timelens-storage --example design_fixture -- <空目录>`。
 - 无头截图：在调试构建里设置 `TIMELENS_QA_CAPTURE=<截图目录>` 和 `TIMELENS_QA_HEADLESS=1`，程序会在内存里依次渲染主要页面并保存截图，不弹窗口，也不影响已安装的 Timelens。本页的配图就是这样生成的。
 - 安装器回归：`Invoke-Pester -Script .\installer\tests\startup.Tests.ps1`（Pester 3.4.0）。
+- 安装器的镜头动画帧、背景和按钮图由 `python installer\art\render_installer_art.py` 生成（需要 Pillow），改了帧数要同步 `installer\wizard-style.iss` 里的常量。
 - `coordinated_clear_removes_offline_collector_artifacts` 需要拿到采集器的单实例锁，已安装的采集器在运行时这项测试会失败。
 
 </details>
@@ -187,7 +188,7 @@ cargo build --release -p timelens-app -p timelens-collector
 | [`crates/timelens-observer`](crates/timelens-observer) | 不读窗口标题的窗口分类、应用身份解析、虚拟桌面查询和输入计数 |
 | [`crates/timelens-ipc`](crates/timelens-ipc) | 版本化、限长的 Protobuf 协议和命名管道双向认证 |
 | [`crates/timelens-storage`](crates/timelens-storage) | DPAPI + SQLCipher + WAL、可恢复的迁移、加密快照、便携备份、损坏恢复 |
-| [`installer`](installer) | Inno Setup 7 脚本、登录任务注册与维护脚本 |
+| [`installer`](installer) | Inno Setup 7 脚本与深色安装向导、登录任务注册与维护脚本 |
 
 ## 文档
 

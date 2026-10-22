@@ -24,7 +24,13 @@ OutputDir=..\dist
 OutputBaseFilename=Timelens-{#AppVersion}-x64-setup
 Compression=lzma2/ultra64
 SolidCompression=yes
-WizardStyle=modern
+WizardStyle=modern dark includetitlebar hidebevels
+WizardBackColor=#0e1015
+WizardBackImageFile=art\backdrop-100.png,art\backdrop-200.png
+WizardImageFile=
+WizardSmallImageFile=
+DisableWelcomePage=no
+DisableReadyPage=yes
 PrivilegesRequired=admin
 SetupArchitecture=x64
 ArchitecturesAllowed=x64compatible
@@ -42,7 +48,14 @@ CloseApplications=yes
 RestartApplications=no
 SetupLogging=yes
 
+[Languages]
+; The wizard's own buttons and titles in the same language as its pages.
+Name: "chinesesimplified"; MessagesFile: "compiler:Languages\ChineseSimplified.isl"
+
 [Files]
+; Wizard artwork, extracted to {tmp} only; listed first so solid compression need
+; not unpack the programs to reach it.
+Source: "art\*.png"; Excludes: "backdrop-*.png"; Flags: dontcopy noencryption
 Source: "..\target\release\timelens.exe"; DestDir: "{app}"; DestName: "Timelens.exe"; Flags: ignoreversion
 Source: "..\target\release\timelens-collector.exe"; DestDir: "{commonpf64}\{#ProductName}"; DestName: "Timelens.Collector.exe"; Flags: ignoreversion
 Source: "maintenance.ps1"; DestDir: "{commonpf64}\{#ProductName}\internal"; Flags: ignoreversion
@@ -223,14 +236,19 @@ begin
 end;
 #endif
 
+#include "wizard-style.iss"
+
 function NextButtonClick(CurPageID: Integer): Boolean;
-#if DataDirectory == ""
 var
+  QuickPath: Boolean;
+#if DataDirectory == ""
   Problem: string;
 #endif
 begin
   Result := True;
-  if (CurPageID = wpSelectDir) and not IsFixedLocalPath(WizardDirValue) then
+  // The welcome page's quick path skips the pages below, so it checks for them.
+  QuickPath := (CurPageID = wpWelcome) and QuickInstall;
+  if ((CurPageID = wpSelectDir) or QuickPath) and not IsFixedLocalPath(WizardDirValue) then
   begin
     MsgBox(
       'Timelens 必须安装到本地固定磁盘。网络盘、可移动盘和 UNC 路径不受支持。',
@@ -240,7 +258,8 @@ begin
     Result := False;
   end;
 #if DataDirectory == ""
-  if (CurPageID = DataDirPage.ID) or ((CurPageID = DataModePage.ID) and UseInstallDataDirectory) then
+  if (CurPageID = DataDirPage.ID) or ((CurPageID = DataModePage.ID) and UseInstallDataDirectory) or
+    (QuickPath and (UseInstallDataDirectory or UseCustomDataDirectory)) then
   begin
     Problem := DataDirectoryProblem;
     if Problem <> '' then
