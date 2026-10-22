@@ -46,8 +46,8 @@ use chrono::TimeZone;
 use slint::{Image, Model, ModelRc, SharedString, Timer, TimerMode, VecModel};
 use timelens_ipc::{
     BatchRejection, COLLECTOR_RESET_PAUSED_FILE, COLLECTOR_RESET_REQUEST_FILE, PROTOCOL_VERSION,
-    SingleInstanceGuard, current_pipe_name, run_server_collector_message, run_server_probe,
-    trust_peer_directory,
+    SingleInstanceGuard, current_pipe_name, diagnostics, run_server_collector_message,
+    run_server_probe, trust_peer_directory,
 };
 use timelens_storage::{
     CoverageGap, ExportFormat, RetentionPolicy, SnapshotDisplay, SnapshotMissingReason,
@@ -89,6 +89,10 @@ fn require_ordinary_privilege() -> Result<()> {
 }
 
 fn main() -> Result<()> {
+    run().inspect_err(|error| diagnostics::record(&format!("exited with an error: {error:#}")))
+}
+
+fn run() -> Result<()> {
     let options = Options::parse(env::args_os().skip(1))?;
     if let Ok(control) = options.control_directory() {
         i18n::init(&control);
@@ -117,6 +121,15 @@ fn main() -> Result<()> {
             SingleInstanceGuard::acquire_collector().context(tr!("删除数据前必须先停止采集器"))?;
         let data = options.data_directory()?;
         let control = options.control_directory()?;
+        // The diagnostic logs live only in the control directory; a moved dataset
+        // may hold unrelated files of the same names.
+        for name in [diagnostics::CORE_LOG_FILE, diagnostics::COLLECTOR_LOG_FILE] {
+            match std::fs::remove_file(control.join(name)) {
+                Ok(()) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => return Err(e.into()),
+            }
+        }
         Storage::delete_owned_dataset(&data)?;
         if data != control {
             Storage::delete_owned_dataset(&control)?;
@@ -158,6 +171,14 @@ fn main() -> Result<()> {
         }
     };
     let control_directory = options.control_directory()?;
+    // Beside the collector's log: the control directory stays put when the
+    // dataset moves.
+    if !qa_headless {
+        diagnostics::install(
+            control_directory.join(diagnostics::CORE_LOG_FILE),
+            "Timelens",
+        );
+    }
     // The singleton proves no previous core maintenance operation remains alive.
     match std::fs::remove_file(control_directory.join(COLLECTOR_RESET_REQUEST_FILE)) {
         Ok(()) => {}

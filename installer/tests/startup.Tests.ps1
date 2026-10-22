@@ -146,6 +146,17 @@ Describe 'Installation directory contents' {
         }
         Assert-InstallDirectory $dir | Should Be $dir
     }
+    It 'accepts the uninstall shortcut in every Setup language' {
+        $dir = New-InstallFolder
+        $names = @(
+            'Uninstall Timelens.lnk',
+            ([string][char]0x89e3 + [char]0x9664 + [char]0x5b89 + [char]0x88dd + ' Timelens.lnk'),
+            ('Timelens ' + (-join ([char[]] @(0x3092, 0x30a2, 0x30f3, 0x30a4, 0x30f3, 0x30b9, 0x30c8, 0x30fc, 0x30eb, 0x3059, 0x308b))) + '.lnk'),
+            ('Timelens ' + [char]0xc81c + [char]0xac70 + '.lnk')
+        )
+        foreach ($name in $names) { Set-Content -LiteralPath (Join-Path $dir $name) '' }
+        Assert-InstallDirectory $dir | Should Be $dir
+    }
     It 'rejects unrelated files' {
         $dir = New-InstallFolder
         Set-Content -LiteralPath (Join-Path $dir 'notes.lnk') ''

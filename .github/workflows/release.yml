@@ -1,0 +1,77 @@
+name: Release
+
+# Push a tag such as v0.1.1 after bumping the version in Cargo.toml. The workflow
+# builds the installer and leaves a draft release to review and publish by hand.
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+  # SQLCipher's vendored OpenSSL needs a native Perl; Git for Windows' Perl is not enough.
+  OPENSSL_SRC_PERL: C:\Strawberry\perl\bin\perl.exe
+  INNO_SETUP_VERSION: 7.0.2
+  # The file-hash in innosetup-7.0.2-x64.exe.issig, published beside the installer.
+  INNO_SETUP_SHA256: 5ad54ca3def786f8f4212552e54cc6d8d61329e2d24a1cfee0571d42c2684ff1
+
+jobs:
+  installer:
+    name: Build installer
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check the tag matches Cargo.toml
+        shell: pwsh
+        run: |
+          $version = (Select-String -Path Cargo.toml -Pattern '^version = "(.+)"$').Matches[0].Groups[1].Value
+          if ("v$version" -ne $env:GITHUB_REF_NAME) {
+            throw "Tag $env:GITHUB_REF_NAME does not match version $version in Cargo.toml"
+          }
+          "VERSION=$version" >> $env:GITHUB_ENV
+
+      - name: Install toolchain from rust-toolchain.toml
+        run: rustup show
+
+      - name: Build
+        run: cargo build --release --locked -p timelens-app -p timelens-collector
+
+      - name: Install Inno Setup
+        shell: pwsh
+        run: |
+          $tag = 'is-' + ($env:INNO_SETUP_VERSION -replace '\.', '_')
+          $installer = Join-Path $env:RUNNER_TEMP 'innosetup.exe'
+          Invoke-WebRequest "https://github.com/jrsoftware/issrc/releases/download/$tag/innosetup-$env:INNO_SETUP_VERSION-x64.exe" -OutFile $installer
+          if ((Get-FileHash $installer -Algorithm SHA256).Hash -ne $env:INNO_SETUP_SHA256) {
+            throw 'The Inno Setup installer does not match its published hash'
+          }
+          $dir = Join-Path $env:RUNNER_TEMP 'innosetup'
+          Start-Process $installer -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', "/DIR=$dir" -Wait
+          if (-not (Test-Path "$dir\ISCC.exe")) { throw 'Inno Setup did not install' }
+          "ISCC=$dir\ISCC.exe" >> $env:GITHUB_ENV
+
+      - name: Build installer
+        shell: pwsh
+        run: |
+          & $env:ISCC installer\Timelens.iss
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $setup = "dist\Timelens-$env:VERSION-x64-setup.exe"
+          $hash = (Get-FileHash $setup -Algorithm SHA256).Hash.ToLowerInvariant()
+          "SETUP=$setup" >> $env:GITHUB_ENV
+          "SETUP_SHA256=$hash" >> $env:GITHUB_ENV
+
+      - name: Create draft release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $name = Split-Path $env:SETUP -Leaf
+          $notes = "``$name`` SHA-256: ``$env:SETUP_SHA256``"
+          # 0.x versions and versions with a suffix are previews.
+          $flags = @('--draft', '--verify-tag')
+          if ($env:VERSION -match '^0\.|-') { $flags += '--prerelease' }
+          gh release create $env:GITHUB_REF_NAME $env:SETUP --title "Timelens $env:VERSION" --notes $notes @flags
