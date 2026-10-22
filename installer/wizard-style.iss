@@ -7,18 +7,20 @@ type
   TPngFrames = array of TPngImage;
 
 const
-  IntroFrameCount = 41;
-  ProgressStepCount = 25;
-  BeatFrameCount = 8;
-  FrameMs = 50;
-  OrbitSlots = 48;
-  OrbitPeriodMs = 2400;
+  // Frames are picked by elapsed time, so a late tick skips frames instead of
+  // slowing the animation down.
+  FrameRate = 30;
+  IntroFrameCount = 37;
+  BeatFrameCount = 12;
+  ProgressStepCount = 50;
+  // The sweep catches up with the real progress one 2 % step at a time, filling
+  // the whole ring in at most 1.5 seconds.
+  ProgressStepMs = 30;
+  TickMs = 15;
   // The backdrop's glow centre, as a fraction of the wizard's client height.
   GlowCenter = 0.36;
   // Logical sizes at 100 % scaling; ScaleX/ScaleY adapt them to the DPI.
   LensSize = 120;
-  OrbitRadius = 62;
-  OrbitDotSize = 8;
   PillWidth = 168;
   PillHeight = 40;
   InkColor = $ECE6E4;
@@ -32,11 +34,11 @@ const
 var
   QuickInstall: Boolean;
   IntroFrames, ProgressFrames, BeatFrames: TPngFrames;
-  OrbitX, OrbitY: array of Integer;
   AnimTimer: UINT_PTR;
+  IntroStart, BeatStart, LastStepTime: DWORD;
   IntroFrame, BeatFrame, ShownStep, TargetStep: Integer;
   NextButtonLeft: Integer;
-  WelcomeLens, InstallLens, FinishLens, OrbitDot: TBitmapImage;
+  WelcomeLens, InstallLens, FinishLens: TBitmapImage;
   InstallPill, FinishPill: TBitmapButton;
   WelcomeNote, PercentText, InstallStatus: TNewStaticText;
   LaunchCheck: TNewCheckBox;
@@ -45,8 +47,14 @@ function SetTimer(hWnd: HWND; nIDEvent: UINT_PTR; uElapse: UINT; lpTimerFunc: Na
   external 'SetTimer@user32.dll stdcall';
 function KillTimer(hWnd: HWND; uIDEvent: UINT_PTR): BOOL;
   external 'KillTimer@user32.dll stdcall';
-function GetTickCount: DWORD;
-  external 'GetTickCount@kernel32.dll stdcall';
+// The default 15.6 ms timer granularity turns a short timer into 63 ms ticks;
+// Setup asks for 1 ms while it runs and gives it back when it exits.
+function timeBeginPeriod(uPeriod: UINT): UINT;
+  external 'timeBeginPeriod@winmm.dll stdcall';
+function timeEndPeriod(uPeriod: UINT): UINT;
+  external 'timeEndPeriod@winmm.dll stdcall';
+function timeGetTime: DWORD;
+  external 'timeGetTime@winmm.dll stdcall';
 function DwmSetWindowAttribute(hwnd: HWND; dwAttribute: DWORD; var pvAttribute: DWORD; cbAttribute: DWORD): Integer;
   external 'DwmSetWindowAttribute@dwmapi.dll stdcall';
 
@@ -76,27 +84,6 @@ begin
   SetArrayLength(Result, Count);
   for Index := 0 to Count - 1 do
     Result[Index] := LoadPng(Prefix + Format('%.2d', [Index]) + '.png');
-end;
-
-// The orbit, as offsets from the lens centre, without trigonometry: rotate a
-// point by 7.5 degrees at a time.
-procedure BuildOrbit;
-var
-  Index: Integer;
-  X, Y, NextX: Extended;
-begin
-  SetArrayLength(OrbitX, OrbitSlots);
-  SetArrayLength(OrbitY, OrbitSlots);
-  X := 0;
-  Y := -ScaleY(OrbitRadius);
-  for Index := 0 to OrbitSlots - 1 do
-  begin
-    OrbitX[Index] := Round(X);
-    OrbitY[Index] := Round(Y);
-    NextX := X * 0.9914448613738104 - Y * 0.1305261922200516;
-    Y := X * 0.1305261922200516 + Y * 0.9914448613738104;
-    X := NextX;
-  end;
 end;
 
 // Where a control sits inside the wizard's client area, so every page can centre
@@ -242,12 +229,6 @@ var
 begin
   Page := WizardForm.InstallingPage;
   InstallLens := NewLens(Page, ProgressFrames[0]);
-  OrbitDot := TBitmapImage.Create(WizardForm);
-  OrbitDot.Parent := Page;
-  OrbitDot.BackColor := clNone;
-  OrbitDot.Stretch := True;
-  OrbitDot.SetBounds(0, 0, ScaleX(OrbitDotSize), ScaleY(OrbitDotSize));
-  OrbitDot.PngImage := LoadPng('orbit-dot.png');
   PercentText := NewText(Page, '0%', 'Segoe UI Semibold', 22, InkColor, False, BelowLens + ScaleY(12));
   InstallStatus := NewText(Page, '', 'Microsoft YaHei UI', 10, Ink2Color, False, BelowLens + ScaleY(58));
 end;
@@ -320,34 +301,64 @@ begin
   PercentText.Caption := IntToStr(Step * 100 div ProgressStepCount) + '%';
 end;
 
+// The frame a one-shot animation should show now, starting its clock on first use.
+function FrameAt(var Start: DWORD; Now: DWORD; Count: Integer): Integer;
+begin
+  if Start = 0 then
+    Start := Now;
+  Result := Integer(Now - Start) * FrameRate div 1000;
+  if Result > Count - 1 then
+    Result := Count - 1;
+end;
+
+// Moves the sweep toward the real progress at a steady pace, however irregular
+// the ticks are while Setup copies files or waits for PowerShell.
+procedure AdvanceProgress(Now: DWORD);
+var
+  Steps: Integer;
+begin
+  if ShownStep >= TargetStep then
+  begin
+    LastStepTime := Now;
+    Exit;
+  end;
+  Steps := Integer(Now - LastStepTime) div ProgressStepMs;
+  if Steps = 0 then
+    Exit;
+  LastStepTime := LastStepTime + DWORD(Steps * ProgressStepMs);
+  ShownStep := ShownStep + Steps;
+  if ShownStep > TargetStep then
+    ShownStep := TargetStep;
+  InstallLens.PngImage := ProgressFrames[ShownStep];
+  UpdatePercent(ShownStep);
+end;
+
 procedure AnimTick(Wnd: HWND; Msg: UINT; IdEvent: UINT_PTR; Time: DWORD);
 var
-  Slot: Integer;
+  Now: DWORD;
+  Frame: Integer;
 begin
+  Now := timeGetTime;
   case WizardForm.CurPageID of
     wpWelcome:
-      if IntroFrame < IntroFrameCount - 1 then
       begin
-        IntroFrame := IntroFrame + 1;
-        WelcomeLens.PngImage := IntroFrames[IntroFrame];
+        Frame := FrameAt(IntroStart, Now, IntroFrameCount);
+        if Frame <> IntroFrame then
+        begin
+          IntroFrame := Frame;
+          WelcomeLens.PngImage := IntroFrames[Frame];
+        end;
       end;
     wpInstalling:
-      begin
-        if ShownStep < TargetStep then
-        begin
-          ShownStep := ShownStep + 1;
-          InstallLens.PngImage := ProgressFrames[ShownStep];
-          UpdatePercent(ShownStep);
-        end;
-        Slot := (GetTickCount mod OrbitPeriodMs) * OrbitSlots div OrbitPeriodMs;
-        OrbitDot.Left := InstallLens.Left + InstallLens.Width div 2 + OrbitX[Slot] - OrbitDot.Width div 2;
-        OrbitDot.Top := InstallLens.Top + InstallLens.Height div 2 + OrbitY[Slot] - OrbitDot.Height div 2;
-      end;
+      AdvanceProgress(Now);
     wpFinished:
-      if BeatFrame < BeatFrameCount then
       begin
-        FinishLens.PngImage := BeatFrames[BeatFrame];
-        BeatFrame := BeatFrame + 1;
+        Frame := FrameAt(BeatStart, Now, BeatFrameCount);
+        if Frame <> BeatFrame then
+        begin
+          BeatFrame := Frame;
+          FinishLens.PngImage := BeatFrames[Frame];
+        end;
       end;
   end;
 end;
@@ -365,14 +376,12 @@ begin
   QuickInstall := True;
   TintTitleBar;
   ExtractTemporaryFiles('{tmp}\lens-*.png');
-  ExtractTemporaryFile('orbit-dot.png');
   ExtractTemporaryFile('button-install.png');
   ExtractTemporaryFile('button-finish.png');
   ExtractTemporaryFile('link-customize.png');
   IntroFrames := LoadFrames('lens-intro-', IntroFrameCount);
   ProgressFrames := LoadFrames('lens-progress-', ProgressStepCount + 1);
   BeatFrames := LoadFrames('lens-done-', BeatFrameCount);
-  BuildOrbit;
   NextButtonLeft := WizardForm.NextButton.Left;
   BuildWelcomePage;
   BuildInstallingPage;
@@ -380,14 +389,18 @@ begin
   Log(Format('Dark wizard: client %dx%d, welcome page %dx%d at %d', [WizardForm.ClientWidth,
     WizardForm.ClientHeight, WizardForm.WelcomePage.ClientWidth, WizardForm.WelcomePage.ClientHeight,
     FormTop(WizardForm.WelcomePage)]));
-  AnimTimer := SetTimer(0, 0, FrameMs, CreateCallback(@AnimTick));
+  timeBeginPeriod(1);
+  AnimTimer := SetTimer(0, 0, TickMs, CreateCallback(@AnimTick));
 end;
 
 <event('DeinitializeSetup')>
 procedure DeinitializeDarkWizard;
 begin
   if AnimTimer <> 0 then
+  begin
     KillTimer(0, AnimTimer);
+    timeEndPeriod(1);
+  end;
   AnimTimer := 0;
 end;
 
@@ -439,10 +452,12 @@ begin
         WizardForm.FilenameLabel.Visible := False;
         WizardForm.ProgressGauge.Visible := False;
         InstallStatus.Caption := '正在复制程序文件…';
+        LastStepTime := timeGetTime;
       end;
     wpFinished:
       begin
-        BeatFrame := 0;
+        BeatFrame := -1;
+        BeatStart := 0;
         PlaceLaunchCheck;
         WizardForm.ActiveControl := FinishPill;
       end;

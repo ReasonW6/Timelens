@@ -1,5 +1,5 @@
 """Render the dark installer's artwork: the glowing backdrop, lens animation frames,
-the orbiting dot and the two amber buttons.
+the two amber buttons and the customize link.
 
 Usage: python render_installer_art.py
 Writes PNG files next to this script; Timelens.iss packs them with `dontcopy`.
@@ -14,13 +14,14 @@ from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont
 
 HERE = Path(__file__).resolve().parent
-FPS = 20
 LENS_PX = 240  # 2x of the 120 px lens; the installer scales it down at 100 % DPI.
 SUPER = 4  # Draw at 4x and downsample for clean anti-aliasing.
 UNIT = LENS_PX * SUPER / 100
-# Timelens.iss hard-codes these frame counts; keep them in step.
-PROGRESS_STEPS = 25
-BEAT_FRAMES = 8
+# wizard-style.iss hard-codes these frame counts and rates; keep them in step.
+FPS = 30
+INTRO_MS = 1200
+PROGRESS_STEPS = 50
+BEAT_MS = 400
 
 BACK = (0x0E, 0x10, 0x15)
 GLOW = (0x51, 0x57, 0xD6)
@@ -120,42 +121,28 @@ def render_lens_frames(gradient):
     # Opening: the rim draws in, the sweep spins once into place, the pupil pops.
     rim_ease = bezier(0.6, 0.1, 0.3, 1)
     sweep_ease = bezier(0.3, 0.6, 0.2, 1)
-    total_ms = 2000
-    count = total_ms * FPS // 1000
-    for i in range(count + 1):
+    for i in range(INTRO_MS * FPS // 1000 + 1):
         ms = i * 1000 / FPS
-        s = phase(ms, 350, 1600, sweep_ease)
+        s = phase(ms, 150, 1000, sweep_ease)
         frame = lens(
             gradient,
-            rim_deg=360 * phase(ms, 0, 1100, rim_ease),
+            rim_deg=360 * phase(ms, 0, 700, rim_ease),
             sweep_deg=120 * s,
             rotation=-360 * (1 - s),
-            pupil_scale=pop(min(1.0, max(0.0, (ms - 1500) / 500))),
+            pupil_scale=pop(min(1.0, max(0.0, (ms - 850) / 350))),
         )
         frame.save(HERE / f"lens-intro-{i:02d}.png", optimize=True)
 
-    # Installing: the sweep grows from nothing to a full ring in 4 % steps.
+    # Installing: the sweep grows from nothing to a full ring in 2 % steps.
     for i in range(PROGRESS_STEPS + 1):
         lens(gradient, 360, 360 * i / PROGRESS_STEPS, 0, 1).save(HERE / f"lens-progress-{i:02d}.png", optimize=True)
 
     # Finished: the full ring holds while the pupil beats once.
-    for i in range(BEAT_FRAMES):
-        t = (i + 1) / BEAT_FRAMES
+    beat_frames = BEAT_MS * FPS // 1000
+    for i in range(beat_frames):
+        t = (i + 1) / beat_frames
         scale = 1 + 0.35 * math.sin(math.pi * t)
         lens(gradient, 360, 360, 0, scale).save(HERE / f"lens-done-{i:02d}.png", optimize=True)
-
-
-def render_orbit_dot():
-    size = 16 * SUPER
-    image = Image.new("RGBA", (size, size), SWEEP_A + (0,))
-    draw = ImageDraw.Draw(image)
-    c = size / 2
-    for r, alpha in ((8 * SUPER, 40), (5.5 * SUPER, 90), (3.2 * SUPER, 255)):
-        layer = Image.new("RGBA", (size, size), SWEEP_A + (0,))
-        ImageDraw.Draw(layer).ellipse((c - r, c - r, c + r, c + r), fill=SWEEP_A + (alpha,))
-        image.alpha_composite(layer)
-    del draw
-    image.resize((16, 16), Image.LANCZOS).save(HERE / "orbit-dot.png", optimize=True)
 
 
 def render_pill(name, text):
@@ -218,7 +205,6 @@ def main():
     for stale in HERE.glob("*.png"):
         stale.unlink()
     render_lens_frames(sweep_gradient())
-    render_orbit_dot()
     render_pill("button-install", "立即安装")
     render_pill("button-finish", "完成")
     render_link("link-customize", "自定义安装位置")
