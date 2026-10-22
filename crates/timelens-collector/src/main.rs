@@ -27,7 +27,8 @@ use timelens_ipc::{
     TrayTransition as ProtocolTrayTransition, TrayTransitionKind as ProtocolTrayTransitionKind,
     WindowObservation as ProtocolWindowObservation, WindowTransition as ProtocolWindowTransition,
     WindowTransitionKind as ProtocolWindowTransitionKind, collector_event, current_pipe_name,
-    new_collector_run_id, run_client_event_batch, run_client_probe, trust_peer_directory,
+    diagnostics, new_collector_run_id, run_client_event_batch, run_client_probe,
+    trust_peer_directory,
 };
 use timelens_observer::{
     IdentitySource as ObserverIdentitySource, InputDrain, InputMonitor, InputSampleKind,
@@ -54,6 +55,10 @@ const MAX_INPUT_BUCKETS_PER_MINUTE: usize = 4096;
 const CLOCK_ROLLBACK_TOLERANCE_MS: i64 = 2_000;
 
 fn main() -> Result<()> {
+    run().inspect_err(|error| diagnostics::record(&format!("exited with an error: {error:#}")))
+}
+
+fn run() -> Result<()> {
     let options = Options::parse(env::args_os().skip(1))?;
     if options.observe_windows_once {
         return observe_windows_once();
@@ -86,6 +91,10 @@ fn main() -> Result<()> {
     let _instance = SingleInstanceGuard::acquire_collector()
         .context("Timelens collector is already running")?;
     let data_directory = data_directory::resolve(options.data_directory.clone())?;
+    diagnostics::install(
+        data_directory.path().join(diagnostics::COLLECTOR_LOG_FILE),
+        "Timelens collector",
+    );
     collect_window_events(&pipe_name, data_directory.path().to_path_buf())
 }
 

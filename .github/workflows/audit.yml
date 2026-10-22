@@ -1,0 +1,30 @@
+name: Audit
+
+# Checks Cargo.lock against the RustSec advisory database: when dependencies
+# change, and weekly for advisories published since.
+on:
+  push:
+    branches: [main]
+    paths: [Cargo.lock, .github/workflows/audit.yml]
+  pull_request:
+    paths: [Cargo.lock, .github/workflows/audit.yml]
+  schedule:
+    - cron: '0 3 * * 1'
+  workflow_dispatch:
+
+jobs:
+  cargo-audit:
+    name: cargo audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit
+
+      # Run the binary directly: it only reads Cargo.lock, so the pinned
+      # toolchain is not needed here.
+      - name: cargo audit
+        run: cargo-audit audit

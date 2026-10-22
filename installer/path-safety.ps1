@@ -50,8 +50,10 @@ function Assert-InstallDirectory([string] $Path, [switch] $RequireProtectedAnces
         foreach ($item in $children + $nested) {
             if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Installation files cannot be links.' }
             $relative = $item.FullName.Substring($full.Length + 1)
-            # The .lnk is the localized uninstall shortcut to the uninstaller under Program Files.
-            if ($relative -notmatch '^(Timelens(?:\.Collector|\.AI)?\.exe|\u5378\u8f7d Timelens\.lnk|unins\d+\.(exe|dat|msg)|internal(?:\\(register-tasks|unregister-tasks|maintenance|path-safety)\.ps1)?)$') {
+            # The .lnk is the uninstall shortcut to the uninstaller under Program Files,
+            # named in Setup's language: Simplified Chinese, English, Traditional
+            # Chinese, Japanese or Korean.
+            if ($relative -notmatch '^(Timelens(?:\.Collector|\.AI)?\.exe|(?:\u5378\u8f7d Timelens|Uninstall Timelens|\u89e3\u9664\u5b89\u88dd Timelens|Timelens \u3092\u30a2\u30f3\u30a4\u30f3\u30b9\u30c8\u30fc\u30eb\u3059\u308b|Timelens \uc81c\uac70)\.lnk|unins\d+\.(exe|dat|msg)|internal(?:\\(register-tasks|unregister-tasks|maintenance|path-safety)\.ps1)?)$') {
                 throw "The selected directory contains unrelated files. Select a dedicated Timelens folder: $relative"
             }
         }

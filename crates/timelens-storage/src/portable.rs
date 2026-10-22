@@ -270,7 +270,7 @@ impl Storage {
         let mut total = 0_u64;
         for index in 0..archive.len() {
             let entry = archive.by_index_raw(index)?;
-            let name = entry.name();
+            let name = entry.name()?;
             let allowed = name == "manifest.json"
                 || name == "database.sqlite3"
                 || name

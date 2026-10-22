@@ -7,7 +7,8 @@ const LANGUAGES: [&str; 4] = ["zh-TW", "en", "ja", "ko"];
 fn main() {
     println!("cargo:rerun-if-changed=app.manifest");
     println!("cargo:rerun-if-changed=assets/brand/timelens.ico");
-    embed_resource::compile("app.rc", embed_resource::NONE)
+    println!("cargo:rerun-if-changed=app.rc");
+    embed_resource::compile("app.rc", version_macros())
         .manifest_required()
         .expect("failed to embed the Timelens application manifest");
 
@@ -24,6 +25,17 @@ fn main() {
     write_catalog("messages", &Path::new(&out).join("messages.rs"));
     // Only the tests read this one: Slint bundles its own copy of these strings.
     write_catalog("timelens-app", &Path::new(&out).join("interface.rs"));
+}
+
+/// The package version for the VERSIONINFO resource in `app.rc`.
+fn version_macros() -> [String; 4] {
+    let part = |name: &str| std::env::var(name).expect("cargo sets the package version");
+    [
+        format!("TIMELENS_VERSION_MAJOR={}", part("CARGO_PKG_VERSION_MAJOR")),
+        format!("TIMELENS_VERSION_MINOR={}", part("CARGO_PKG_VERSION_MINOR")),
+        format!("TIMELENS_VERSION_PATCH={}", part("CARGO_PKG_VERSION_PATCH")),
+        format!("TIMELENS_VERSION=\"{}\"", part("CARGO_PKG_VERSION")),
+    ]
 }
 
 /// Writes one `.po` domain of every language as a table sorted by source text:
