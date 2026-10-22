@@ -66,18 +66,8 @@ fn run() -> Result<()> {
     if let Some(duration) = options.observe_window_events {
         return observe_window_events(duration);
     }
-    let pipe_name = options.pipe_name.clone().unwrap_or(current_pipe_name()?);
-    if let Some(core_directory) = &options.core_directory {
-        trust_peer_directory(core_directory).with_context(|| {
-            format!(
-                "Timelens core directory is unavailable: {}",
-                core_directory.display()
-            )
-        })?;
-    }
-
     if options.handshake_once {
-        let report = probe(&pipe_name)?;
+        let report = probe(&core_pipe_name(&options)?)?;
         println!(
             "core handshake ok: pid={} session={} path={} verification={:?}",
             report.peer_process_id,
@@ -91,11 +81,27 @@ fn run() -> Result<()> {
     let _instance = SingleInstanceGuard::acquire_collector()
         .context("Timelens collector is already running")?;
     let data_directory = data_directory::resolve(options.data_directory.clone())?;
+    // Before the remaining startup checks, so that their failures are recorded.
     diagnostics::install(
         data_directory.path().join(diagnostics::COLLECTOR_LOG_FILE),
         "Timelens collector",
     );
+    let pipe_name = core_pipe_name(&options)?;
     collect_window_events(&pipe_name, data_directory.path().to_path_buf())
+}
+
+/// The core's pipe, once the core directory the task names is trusted.
+fn core_pipe_name(options: &Options) -> Result<String> {
+    let pipe_name = options.pipe_name.clone().unwrap_or(current_pipe_name()?);
+    if let Some(core_directory) = &options.core_directory {
+        trust_peer_directory(core_directory).with_context(|| {
+            format!(
+                "Timelens core directory is unavailable: {}",
+                core_directory.display()
+            )
+        })?;
+    }
+    Ok(pipe_name)
 }
 
 fn collect_window_events(pipe_name: &str, data_directory: PathBuf) -> Result<()> {

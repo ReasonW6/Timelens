@@ -337,8 +337,6 @@ impl Storage {
             COLLECTOR_RESET_REQUEST_FILE,
             COLLECTOR_RESET_PAUSED_FILE,
             "collector-stop.request",
-            timelens_ipc::diagnostics::CORE_LOG_FILE,
-            timelens_ipc::diagnostics::COLLECTOR_LOG_FILE,
         ] {
             remove_file_if_present(&directory.join(name))?;
         }

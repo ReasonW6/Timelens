@@ -121,6 +121,15 @@ fn run() -> Result<()> {
             SingleInstanceGuard::acquire_collector().context(tr!("删除数据前必须先停止采集器"))?;
         let data = options.data_directory()?;
         let control = options.control_directory()?;
+        // The diagnostic logs live only in the control directory; a moved dataset
+        // may hold unrelated files of the same names.
+        for name in [diagnostics::CORE_LOG_FILE, diagnostics::COLLECTOR_LOG_FILE] {
+            match std::fs::remove_file(control.join(name)) {
+                Ok(()) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => return Err(e.into()),
+            }
+        }
         Storage::delete_owned_dataset(&data)?;
         if data != control {
             Storage::delete_owned_dataset(&control)?;
