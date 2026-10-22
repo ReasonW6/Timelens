@@ -1715,3 +1715,11 @@ msgstr "マウス ボタンのヒートマップ"
 #: main-window.slint
 msgid "鼠标点击"
 msgstr "マウスのクリック"
+
+#: main-window.slint
+msgid "界面缩放"
+msgstr "表示倍率"
+
+#: main-window.slint
+msgid "在 Windows 显示缩放的基础上放大或缩小界面；屏幕放不下时自动减小放大比例。"
+msgstr "Windows の表示スケールに加えて画面を拡大・縮小します。画面に収まらないときは拡大率を自動で下げます。"

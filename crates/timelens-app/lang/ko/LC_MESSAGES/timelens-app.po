@@ -1715,3 +1715,11 @@ msgstr "마우스 버튼 히트맵"
 #: main-window.slint
 msgid "鼠标点击"
 msgstr "마우스 클릭"
+
+#: main-window.slint
+msgid "界面缩放"
+msgstr "인터페이스 배율"
+
+#: main-window.slint
+msgid "在 Windows 显示缩放的基础上放大或缩小界面；屏幕放不下时自动减小放大比例。"
+msgstr "Windows 디스플레이 배율에 더해 화면을 확대하거나 축소합니다. 화면에 다 들어가지 않으면 확대 비율을 자동으로 낮춥니다."

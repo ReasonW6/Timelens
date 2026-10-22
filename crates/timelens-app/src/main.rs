@@ -23,6 +23,7 @@ mod timeline_view;
 mod tray;
 mod ui_model;
 mod ui_refresh;
+mod ui_scale;
 mod window_chrome;
 mod window_placement;
 
@@ -445,6 +446,7 @@ fn run_window(
     };
     // Before the first frame, so the window opens in the chosen look.
     appearance::install(&window, control_directory.clone());
+    ui_scale::install(&window, control_directory.clone());
     // What Rust wrote is rewritten on the next tick, with the state it needs.
     let relabel_pending = Rc::new(Cell::new(false));
     let relabel = Rc::clone(&relabel_pending);

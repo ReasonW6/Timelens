@@ -207,6 +207,7 @@ The documents below are written in Simplified Chinese.
 
 ## Changelog
 
+- **2026-10-22 · Interface scale**: Settings › General has a new Interface scale option (80%–150%) that enlarges or shrinks the interface on top of the Windows display scale. It takes effect at once and is kept when moving between monitors; enlarging eases off when the screen cannot fit the window at its minimum size.
 - **2026-10-22 · 0.1.1**: Setup is available in the same five languages as the app; the program files carry version information; errors and crashes are written to local diagnostic logs; installers are built by a Release workflow, and dependencies are checked against the RustSec advisory database.
 - **2026-10-21 · Interface languages**: Settings › General has a new Language option with System default, Simplified Chinese, Traditional Chinese, English, Japanese and Korean. System default follows the Windows display language and falls back to English for other languages; the switch takes effect at once, including the tray menu.
 - **2026-10-21 · Local reports removed**: local reports duplicated the live statistics under Statistics › Apps, so reports are no longer stored. Data coverage and JSON / CSV export moved to the Apps tab and are computed live for the selected range; saved reports are deleted on upgrade. See [ticket 19](docs/wayfinder/timelens-v1/issues/19-remove-stored-usage-reports.md).
