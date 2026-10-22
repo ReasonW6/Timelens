@@ -1,2 +1,31 @@
 1 ICON "assets/brand/timelens.ico"
 1 24 "app.manifest"
+
+// build.rs defines the TIMELENS_VERSION* macros from the workspace version.
+1 VERSIONINFO
+FILEVERSION TIMELENS_VERSION_MAJOR, TIMELENS_VERSION_MINOR, TIMELENS_VERSION_PATCH, 0
+PRODUCTVERSION TIMELENS_VERSION_MAJOR, TIMELENS_VERSION_MINOR, TIMELENS_VERSION_PATCH, 0
+FILEFLAGSMASK 0x3fL
+FILEFLAGS 0x0L
+FILEOS 0x40004L
+FILETYPE 0x1L
+FILESUBTYPE 0x0L
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904b0"
+        BEGIN
+            VALUE "CompanyName", "ReasonW6"
+            VALUE "FileDescription", "Timelens"
+            VALUE "FileVersion", TIMELENS_VERSION
+            VALUE "InternalName", "Timelens"
+            VALUE "OriginalFilename", "Timelens.exe"
+            VALUE "ProductName", "Timelens"
+            VALUE "ProductVersion", TIMELENS_VERSION
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x409, 1200
+    END
+END

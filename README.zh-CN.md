@@ -19,7 +19,7 @@
   <img src="https://img.shields.io/badge/Rust-1.94-CE422B?logo=rust&logoColor=white" alt="Rust 1.94">
   <img src="https://img.shields.io/badge/UI-Slint-2379F4" alt="Slint">
   <img src="https://img.shields.io/badge/%E5%AD%98%E5%82%A8-SQLCipher-3B7A57" alt="SQLCipher">
-  <img src="https://img.shields.io/badge/%E7%8A%B6%E6%80%81-%E5%BC%80%E5%8F%91%E4%B8%AD-F2A93B" alt="开发中">
+  <a href="https://github.com/ReasonW6/Timelens/releases"><img src="https://img.shields.io/github/v/release/ReasonW6/Timelens?include_prereleases&label=%E9%A2%84%E8%A7%88%E7%89%88&color=F2A93B" alt="预览版"></a>
 </p>
 
 <p align="center">
@@ -27,7 +27,7 @@
 </p>
 
 > [!NOTE]
-> Timelens 仍在开发中，还没有正式发布。安装包没有代码签名，Windows SmartScreen 可能会拦截；锁屏、睡眠、多屏、远程桌面等真机场景的[发布矩阵](docs/wayfinder/timelens-v1/performance-validation/milestone-5-physical-matrix.md)也还没跑完。
+> Timelens 目前是预览版：预发行安装包在 [Releases 页面](https://github.com/ReasonW6/Timelens/releases)，稳定的 1.0 还没有发布。安装包没有代码签名，Windows SmartScreen 可能会拦截；锁屏、睡眠、多屏、远程桌面等真机场景的[发布矩阵](docs/wayfinder/timelens-v1/performance-validation/milestone-5-physical-matrix.md)也还没跑完。
 
 ## 目录
 
@@ -97,6 +97,7 @@ Timelens 默认每 5 分钟截取一次当前活动的显示器，压缩成 WebP
 - **全在本机**：数据库用 SQLCipher 加密，密钥由 Windows DPAPI 绑定到当前用户。Timelens 不发起任何网络请求。
 - **缺什么就说缺什么**：没观察到、被清理、被暂停或被排除的时间都会明确标出，不推测，也不补齐。
 - **数据可以带走**：便携 ZIP 备份可以设置密码。卸载时你可以选择保留或删除数据。
+- **诊断日志也留在本机**：错误和崩溃信息写在 `%LOCALAPPDATA%\Timelens` 下的 `timelens.log` 和 `collector.log`，每个不超过 1 MiB。里面只有错误信息，没有窗口标题、输入内容或快照画面，也不会发送到任何地方；反馈问题时可以附上它们。
 
 ## 工作原理
 
@@ -133,17 +134,17 @@ flowchart LR
 | 安装包 | ≤ 20 MiB | 9.665 MiB |
 | 30 天非截图数据 | ≤ 100 MiB | 78.17 MiB |
 
-> 上表实测在移除 AI 之前完成，30 天数据量里还包含 90 份 AI 总结。移除 AI 和本地报告之后还没有重新测量，详细方法和完整数据见[里程碑 4、5 报告](docs/wayfinder/timelens-v1/performance-validation/milestone-4-5-report.md)。
+> 上表实测在移除 AI 之前完成，30 天数据量里还包含 90 份 AI 总结。0.1.1（2026-10-22）的安装包为 10.89 MiB；用小型合成数据测量，核心单进程在窗口首次显示前占用私有内存 5.9 MiB，显示后为 16.9 MiB；其他几项在移除 AI 和本地报告之后还没有重新测量，详细方法和完整数据见[里程碑 4、5 报告](docs/wayfinder/timelens-v1/performance-validation/milestone-4-5-report.md)。
 
 ## 安装与使用
 
-目前还没有发布安装包，需要[从源码构建](#从源码构建)。安装过程是这样的：
+从 [Releases 页面](https://github.com/ReasonW6/Timelens/releases)下载 `Timelens-<版本>-x64-setup.exe`，或者[从源码构建](#从源码构建)。安装过程是这样的：
 
-1. 运行 `Timelens-<版本>-x64-setup.exe`，确认一次 UAC。安装器会注册两个登录任务：主程序以普通权限运行，采集器以最高权限运行。
+1. 运行 `Timelens-<版本>-x64-setup.exe`，确认一次 UAC。安装器跟随 Windows 的显示语言（简体中文、繁体中文、英文、日文或韩文，其他语言显示英文）。安装器会注册两个登录任务：主程序以普通权限运行，采集器以最高权限运行。
 2. 首次安装时选择数据位置，默认跟随安装目录，放在其中的 `TimelensData` 文件夹；也可以选 `%LOCALAPPDATA%\Timelens`，或本地固定磁盘上任意一个空文件夹。安装器默认会添加桌面快捷方式，可以取消勾选。
 3. 安装完成后，Timelens 会常驻在托盘里。在「设置 › 常规」里可以开关开机自启、切换界面语言。
 4. 升级时直接运行新的安装包，数据位置和自启动设置都会保留。想把已有数据搬进安装目录，可以在「设置 › 数据」里迁移到安装目录下的 `TimelensData`（升级时已准备好这个空文件夹）。
-5. 卸载可以用安装目录里的「卸载 Timelens」快捷方式或系统的「已安装的应用」。卸载时可以选择保留或删除本地数据，你导出的文件不会被删除。
+5. 卸载可以用安装目录里的「卸载 Timelens」快捷方式（名称随安装器语言变化）或系统的「已安装的应用」。卸载时可以选择保留或删除本地数据，你导出的文件不会被删除。
 
 ## 从源码构建
 
@@ -162,6 +163,7 @@ cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test --workspace --release -- --test-threads=2
 
 # 构建并打安装包，产物在 dist\
+# 安装包的版本号取自 release 构建，release 构建又取自 Cargo.toml
 cargo build --release -p timelens-app -p timelens-collector
 & 'C:\path\to\ISCC.exe' 'installer\Timelens.iss'
 ```
@@ -174,6 +176,7 @@ cargo build --release -p timelens-app -p timelens-collector
 - 生成合成数据：`cargo run -p timelens-storage --example design_fixture -- <空目录>`。
 - 无头截图：在调试构建里设置 `TIMELENS_QA_CAPTURE=<截图目录>` 和 `TIMELENS_QA_HEADLESS=1`，程序会在内存里依次渲染主要页面并保存截图，不弹窗口，也不影响已安装的 Timelens。本页的配图就是这样生成的。
 - 安装器回归：`Invoke-Pester -Script .\installer\tests\startup.Tests.ps1`（Pester 3.4.0）。
+- 发布：先改 `Cargo.toml` 里的 `version`，再推送 `v<版本>` 标签（例如 `v0.1.1`）。Release workflow 会核对标签与版本一致、构建安装包，并创建附带 SHA-256 的 GitHub 草稿发布；说明文字改好后手动发布。
 - `coordinated_clear_removes_offline_collector_artifacts` 需要拿到采集器的单实例锁，已安装的采集器在运行时这项测试会失败。
 
 </details>
@@ -201,6 +204,7 @@ cargo build --release -p timelens-app -p timelens-collector
 ## 更新记录
 
 - **2026-10-22 · 界面缩放**：「设置 › 常规」新增「界面缩放」选项（80%–150%），在 Windows 显示缩放的基础上放大或缩小界面。切换后立即生效，在显示器之间移动时保持；屏幕放不下最小尺寸的窗口时，会自动减小放大比例。
+- **2026-10-22 · 0.1.1**：安装器支持和应用相同的五种语言；程序文件带上版本信息；错误和崩溃写入本机诊断日志；安装包改由 Release workflow 构建，依赖会对照 RustSec 安全公告库检查。
 - **2026-10-21 · 界面多语言**：「设置 › 常规」新增「语言」选项，可选系统默认、简体中文、繁体中文、English、日本語、한국어。系统默认跟随 Windows 的显示语言，其他语言显示为英文；切换后立即生效，托盘菜单也一并更新。
 - **2026-10-21 · 移除本地报告**：本地报告和「统计 › 应用」的实时统计重复，所以不再保存报告。数据覆盖和 JSON / CSV 导出移到「应用」标签，按所选范围实时计算；升级时会删除已经保存的报告。见[票据 19](docs/wayfinder/timelens-v1/issues/19-remove-stored-usage-reports.md)。
 - **2026-10-21 · 移除 AI 总结**：AI 只能看到和统计页相同的聚合数字，所以 AI worker、提供商凭据和 AI 设置一并移除，Timelens 从此不再联网；升级时会删除已有的 AI 总结和对话。见[票据 18](docs/wayfinder/timelens-v1/issues/18-remove-ai-summaries.md)。

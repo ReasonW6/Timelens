@@ -19,7 +19,7 @@
   <img src="https://img.shields.io/badge/Rust-1.94-CE422B?logo=rust&logoColor=white" alt="Rust 1.94">
   <img src="https://img.shields.io/badge/UI-Slint-2379F4" alt="Slint">
   <img src="https://img.shields.io/badge/storage-SQLCipher-3B7A57" alt="SQLCipher">
-  <img src="https://img.shields.io/badge/status-in%20development-F2A93B" alt="In development">
+  <a href="https://github.com/ReasonW6/Timelens/releases"><img src="https://img.shields.io/github/v/release/ReasonW6/Timelens?include_prereleases&label=preview&color=F2A93B" alt="Preview release"></a>
 </p>
 
 <p align="center">
@@ -27,7 +27,7 @@
 </p>
 
 > [!NOTE]
-> Timelens is still in development and has not been released. The installer is not code-signed, so Windows SmartScreen may block it, and the [release matrix](docs/wayfinder/timelens-v1/performance-validation/milestone-5-physical-matrix.md) for real-hardware scenarios such as lock screen, sleep, multiple monitors and Remote Desktop is not finished yet.
+> Timelens is in preview: pre-release installers are on the [Releases page](https://github.com/ReasonW6/Timelens/releases), and a stable 1.0 has not been released yet. The installer is not code-signed, so Windows SmartScreen may block it, and the [release matrix](docs/wayfinder/timelens-v1/performance-validation/milestone-5-physical-matrix.md) for real-hardware scenarios such as lock screen, sleep, multiple monitors and Remote Desktop is not finished yet.
 >
 > The interface is available in Simplified Chinese, Traditional Chinese, English, Japanese and Korean, and follows the Windows display language by default. Most project documentation is in Simplified Chinese.
 
@@ -99,6 +99,7 @@ By default Timelens captures the active display every 5 minutes, compresses it t
 - **Everything stays local**: the database is encrypted with SQLCipher, and its key is bound to the current Windows user via DPAPI. Timelens makes no network requests at all.
 - **Missing means missing**: time that was not observed, purged, paused or excluded is always marked as such — never guessed or filled in.
 - **Your data is portable**: portable ZIP backups can be password-protected. When uninstalling you can choose to keep or delete your data.
+- **Diagnostic logs stay local too**: errors and crashes are written to `timelens.log` and `collector.log` in `%LOCALAPPDATA%\Timelens`, each kept under 1 MiB. They hold error messages only, never window titles, typed text or snapshot images, and nothing is sent anywhere; attach them to a bug report if you like.
 
 ## How it works
 
@@ -135,17 +136,17 @@ For the full reasoning, see the [architecture decision records](docs/adr) and th
 | Installer size | ≤ 20 MiB | 9.665 MiB |
 | 30 days of non-snapshot data | ≤ 100 MiB | 78.17 MiB |
 
-> These measurements were taken before AI was removed, and the 30-day dataset still included 90 AI summaries. They have not been re-measured since AI and local reports were removed. See the [Milestone 4 & 5 report](docs/wayfinder/timelens-v1/performance-validation/milestone-4-5-report.md) for methodology and full data.
+> These measurements were taken before AI was removed, and the 30-day dataset still included 90 AI summaries. For 0.1.1 (2026-10-22) the installer is 10.89 MiB, and on a small synthetic dataset the core alone uses 5.9 MiB of private memory before its window is first shown and 16.9 MiB after; the other rows have not been re-measured since AI and local reports were removed. See the [Milestone 4 & 5 report](docs/wayfinder/timelens-v1/performance-validation/milestone-4-5-report.md) for methodology and full data.
 
 ## Installation and usage
 
-There is no released installer yet, so you need to [build from source](#building-from-source). Installation works like this:
+Download `Timelens-<version>-x64-setup.exe` from the [Releases page](https://github.com/ReasonW6/Timelens/releases), or [build it from source](#building-from-source). Installation works like this:
 
-1. Run `Timelens-<version>-x64-setup.exe` and confirm the UAC prompt once. The installer registers two logon tasks: the main app runs with standard privileges and the collector runs with highest privileges.
+1. Run `Timelens-<version>-x64-setup.exe` and confirm the UAC prompt once. Setup follows the Windows display language (Simplified Chinese, Traditional Chinese, English, Japanese or Korean, otherwise English). The installer registers two logon tasks: the main app runs with standard privileges and the collector runs with highest privileges.
 2. On first install, choose where to store data. By default it follows the install directory, in a `TimelensData` folder inside it; you can also choose `%LOCALAPPDATA%\Timelens` or any empty folder on a local fixed disk. A desktop shortcut is added by default and can be unchecked.
 3. After installation Timelens stays in the system tray. Start at sign-in and the interface language can be changed under Settings › General.
 4. To upgrade, just run the new installer; the data location and startup setting are preserved. To move existing data into the install directory, use Settings › Data & storage to relocate it to `TimelensData` under the install directory (an empty folder is prepared during upgrade).
-5. Uninstall via the "Uninstall Timelens" shortcut in the install directory or from Windows "Installed apps". You can choose to keep or delete local data; files you exported are never deleted.
+5. Uninstall via the "Uninstall Timelens" shortcut in the install directory (named in Setup's language) or from Windows "Installed apps". You can choose to keep or delete local data; files you exported are never deleted.
 
 ## Building from source
 
@@ -164,6 +165,7 @@ cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test --workspace --release -- --test-threads=2
 
 # Build and package the installer; output goes to dist\
+# Setup takes its version from the release build, which takes it from Cargo.toml
 cargo build --release -p timelens-app -p timelens-collector
 & 'C:\path\to\ISCC.exe' 'installer\Timelens.iss'
 ```
@@ -176,6 +178,7 @@ cargo build --release -p timelens-app -p timelens-collector
 - Generate synthetic data: `cargo run -p timelens-storage --example design_fixture -- <empty dir>`.
 - Headless screenshots: in a debug build, set `TIMELENS_QA_CAPTURE=<screenshot dir>` and `TIMELENS_QA_HEADLESS=1`. The app renders the main pages in memory one after another and saves screenshots, without opening a window or interfering with an installed Timelens. The images in this README were produced this way.
 - Installer regression tests: `Invoke-Pester -Script .\installer\tests\startup.Tests.ps1` (Pester 3.4.0).
+- Releasing: bump `version` in `Cargo.toml`, then push a `v<version>` tag (for example `v0.1.1`). The Release workflow checks that the tag matches, builds the installer and creates a draft GitHub release with its SHA-256; edit the notes and publish it by hand.
 - `coordinated_clear_removes_offline_collector_artifacts` needs the collector's single-instance lock, so it fails while an installed collector is running.
 
 </details>
@@ -205,6 +208,7 @@ The documents below are written in Simplified Chinese.
 ## Changelog
 
 - **2026-10-22 · Interface scale**: Settings › General has a new Interface scale option (80%–150%) that enlarges or shrinks the interface on top of the Windows display scale. It takes effect at once and is kept when moving between monitors; enlarging eases off when the screen cannot fit the window at its minimum size.
+- **2026-10-22 · 0.1.1**: Setup is available in the same five languages as the app; the program files carry version information; errors and crashes are written to local diagnostic logs; installers are built by a Release workflow, and dependencies are checked against the RustSec advisory database.
 - **2026-10-21 · Interface languages**: Settings › General has a new Language option with System default, Simplified Chinese, Traditional Chinese, English, Japanese and Korean. System default follows the Windows display language and falls back to English for other languages; the switch takes effect at once, including the tray menu.
 - **2026-10-21 · Local reports removed**: local reports duplicated the live statistics under Statistics › Apps, so reports are no longer stored. Data coverage and JSON / CSV export moved to the Apps tab and are computed live for the selected range; saved reports are deleted on upgrade. See [ticket 19](docs/wayfinder/timelens-v1/issues/19-remove-stored-usage-reports.md).
 - **2026-10-21 · AI summaries removed**: AI could only see the same aggregate numbers as the statistics page, so the AI worker, provider credentials and AI settings were removed together, and Timelens no longer goes online; existing AI summaries and conversations are deleted on upgrade. See [ticket 18](docs/wayfinder/timelens-v1/issues/18-remove-ai-summaries.md).

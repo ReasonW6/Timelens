@@ -1,5 +1,6 @@
 #![cfg(windows)]
 
+pub mod diagnostics;
 pub mod privacy;
 mod protocol;
 mod windows;
