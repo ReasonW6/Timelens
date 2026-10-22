@@ -23,7 +23,7 @@ use windows::Win32::{
         Shell::{DefSubclassProc, SetWindowSubclass},
         WindowsAndMessaging::{
             IsIconic, IsWindowVisible, SW_RESTORE, SW_SHOW, SetForegroundWindow, ShowWindow,
-            WM_DPICHANGED, WM_SHOWWINDOW, WM_SIZE,
+            WM_GETMINMAXINFO, WM_SHOWWINDOW, WM_SIZE,
         },
     },
 };
@@ -144,11 +144,12 @@ unsafe extern "system" fn subclass(
         // Look once the message is done and the window has its new state.
         let _ = slint::invoke_from_event_loop(seen_changed);
     }
-    if message == WM_DPICHANGED {
-        // Slint takes up the new display scale alone, without the user's.
-        let _ = slint::invoke_from_event_loop(crate::ui_scale::refresh);
+    crate::ui_scale::observe(hwnd, message, w);
+    let result = unsafe { DefSubclassProc(hwnd, message, w, l) };
+    if message == WM_GETMINMAXINFO {
+        crate::ui_scale::limit(hwnd, l);
     }
-    unsafe { DefSubclassProc(hwnd, message, w, l) }
+    result
 }
 
 fn seen_changed() {
