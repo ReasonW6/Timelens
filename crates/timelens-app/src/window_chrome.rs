@@ -23,7 +23,7 @@ use windows::Win32::{
         Shell::{DefSubclassProc, SetWindowSubclass},
         WindowsAndMessaging::{
             IsIconic, IsWindowVisible, SW_RESTORE, SW_SHOW, SetForegroundWindow, ShowWindow,
-            WM_SHOWWINDOW, WM_SIZE,
+            WM_DPICHANGED, WM_SHOWWINDOW, WM_SIZE,
         },
     },
 };
@@ -48,7 +48,7 @@ pub fn apply(window: &slint::Window, dark: bool) -> bool {
     true
 }
 
-fn native_handle(window: &slint::Window) -> Option<HWND> {
+pub(crate) fn native_handle(window: &slint::Window) -> Option<HWND> {
     let window_handle = window.window_handle();
     let handle = window_handle.window_handle().ok()?;
     let RawWindowHandle::Win32(handle) = handle.as_raw() else {
@@ -112,6 +112,16 @@ pub fn watch(window: &AppWindow, changed: impl Fn(bool) + 'static) {
 /// Listens to the native main window, which exists only once it is shown.
 pub fn hook(window: &AppWindow) {
     let Some(hwnd) = native_handle(window.window()) else {
+        // A show before the event loop runs gets its native window only once
+        // the loop starts; look once more when the placement does.
+        let weak = window.as_weak();
+        Timer::single_shot(Duration::from_millis(50), move || {
+            if let Some(window) = weak.upgrade()
+                && native_handle(window.window()).is_some()
+            {
+                hook(&window);
+            }
+        });
         return;
     };
     if !HOOKED.swap(true, Ordering::AcqRel) {
@@ -119,6 +129,7 @@ pub fn hook(window: &AppWindow) {
     }
     // The show that created the native window came before the hook.
     seen_changed();
+    crate::ui_scale::apply(window);
 }
 
 unsafe extern "system" fn subclass(
@@ -132,6 +143,10 @@ unsafe extern "system" fn subclass(
     if message == WM_SHOWWINDOW || message == WM_SIZE {
         // Look once the message is done and the window has its new state.
         let _ = slint::invoke_from_event_loop(seen_changed);
+    }
+    if message == WM_DPICHANGED {
+        // Slint takes up the new display scale alone, without the user's.
+        let _ = slint::invoke_from_event_loop(crate::ui_scale::refresh);
     }
     unsafe { DefSubclassProc(hwnd, message, w, l) }
 }

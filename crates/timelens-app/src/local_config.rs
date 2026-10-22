@@ -87,6 +87,7 @@ pub fn delete_pointer(control: &Path) -> Result<()> {
         LOCATION,
         "data-location.next",
         crate::appearance::FILE,
+        crate::ui_scale::FILE,
         crate::pause::FILE,
         crate::tray::EXPLAINED_FILE,
     ] {

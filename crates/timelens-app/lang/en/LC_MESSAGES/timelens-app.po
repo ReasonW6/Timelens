@@ -1718,3 +1718,11 @@ msgstr "Mouse button heat"
 #: main-window.slint
 msgid "鼠标点击"
 msgstr "Mouse clicks"
+
+#: main-window.slint
+msgid "界面缩放"
+msgstr "Interface scale"
+
+#: main-window.slint
+msgid "在 Windows 显示缩放的基础上放大或缩小界面；屏幕放不下时自动减小放大比例。"
+msgstr "Enlarges or shrinks the interface on top of the Windows display scale; enlarging eases off when the screen cannot fit it."

@@ -200,6 +200,7 @@ cargo build --release -p timelens-app -p timelens-collector
 
 ## 更新记录
 
+- **2026-10-22 · 界面缩放**：「设置 › 常规」新增「界面缩放」选项（80%–150%），在 Windows 显示缩放的基础上放大或缩小界面。切换后立即生效，在显示器之间移动时保持；屏幕放不下最小尺寸的窗口时，会自动减小放大比例。
 - **2026-10-21 · 界面多语言**：「设置 › 常规」新增「语言」选项，可选系统默认、简体中文、繁体中文、English、日本語、한국어。系统默认跟随 Windows 的显示语言，其他语言显示为英文；切换后立即生效，托盘菜单也一并更新。
 - **2026-10-21 · 移除本地报告**：本地报告和「统计 › 应用」的实时统计重复，所以不再保存报告。数据覆盖和 JSON / CSV 导出移到「应用」标签，按所选范围实时计算；升级时会删除已经保存的报告。见[票据 19](docs/wayfinder/timelens-v1/issues/19-remove-stored-usage-reports.md)。
 - **2026-10-21 · 移除 AI 总结**：AI 只能看到和统计页相同的聚合数字，所以 AI worker、提供商凭据和 AI 设置一并移除，Timelens 从此不再联网；升级时会删除已有的 AI 总结和对话。见[票据 18](docs/wayfinder/timelens-v1/issues/18-remove-ai-summaries.md)。

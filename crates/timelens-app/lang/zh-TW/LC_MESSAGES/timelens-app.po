@@ -1715,3 +1715,11 @@ msgstr "滑鼠按鍵熱度"
 #: main-window.slint
 msgid "鼠标点击"
 msgstr "滑鼠點擊"
+
+#: main-window.slint
+msgid "界面缩放"
+msgstr "介面縮放"
+
+#: main-window.slint
+msgid "在 Windows 显示缩放的基础上放大或缩小界面；屏幕放不下时自动减小放大比例。"
+msgstr "在 Windows 顯示縮放的基礎上放大或縮小介面；螢幕放不下時自動減小放大比例。"

@@ -1672,3 +1672,7 @@ msgstr ", {} of it without focus"
 #: main.rs
 msgid "；旧加密数据稍后清理：{}"
 msgstr "; old encrypted data is cleaned up later: {}"
+
+#: ui_scale.rs
+msgid "界面缩放设置未能保存：{}"
+msgstr "Could not save the interface scale: {}"
