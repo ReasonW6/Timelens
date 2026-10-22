@@ -24,6 +24,10 @@ const
   InkColor = $ECE6E4;
   Ink2Color = $BBAEA9;
   Ink3Color = $8B7C76;
+  // WizardBackColor (#0e1015) as a COLORREF, and the DWM attributes that take it.
+  TitleBarColor = $15100E;
+  DwmCaptionColor = 35;
+  DwmTextColor = 36;
 
 var
   QuickInstall: Boolean;
@@ -43,6 +47,21 @@ function KillTimer(hWnd: HWND; uIDEvent: UINT_PTR): BOOL;
   external 'KillTimer@user32.dll stdcall';
 function GetTickCount: DWORD;
   external 'GetTickCount@kernel32.dll stdcall';
+function DwmSetWindowAttribute(hwnd: HWND; dwAttribute: DWORD; var pvAttribute: DWORD; cbAttribute: DWORD): Integer;
+  external 'DwmSetWindowAttribute@dwmapi.dll stdcall';
+
+// Paint the native Windows 11 title bar in the backdrop's color with dimmed text,
+// so the window reads as one dark surface while Windows still handles dragging,
+// snapping and accessibility.
+procedure TintTitleBar;
+var
+  Color: DWORD;
+begin
+  Color := TitleBarColor;
+  DwmSetWindowAttribute(WizardForm.Handle, DwmCaptionColor, Color, 4);
+  Color := Ink3Color;
+  DwmSetWindowAttribute(WizardForm.Handle, DwmTextColor, Color, 4);
+end;
 
 function LoadPng(const Name: string): TPngImage;
 begin
@@ -174,7 +193,7 @@ begin
   ClickNext;
 end;
 
-procedure CustomizeClick(Sender: TObject; const Link: string; LinkType: TSysLinkType);
+procedure CustomizeClick(Sender: TObject);
 begin
   QuickInstall := False;
   ClickNext;
@@ -188,7 +207,7 @@ end;
 procedure BuildWelcomePage;
 var
   Page: TWinControl;
-  Link: TNewLinkLabel;
+  Link: TBitmapButton;
 begin
   Page := WizardForm.WelcomePage;
   WizardForm.WelcomeLabel1.Visible := False;
@@ -198,13 +217,19 @@ begin
   NewText(Page, 'Timelens', 'Segoe UI Semibold', 24, InkColor, False, BelowLens + ScaleY(8));
   NewText(Page, '看清每一天的时间去了哪里', 'Microsoft YaHei UI', 10, Ink2Color, False, BelowLens + ScaleY(52));
   InstallPill := NewPill(Page, 'button-install.png', '立即安装', BelowLens + ScaleY(86), @InstallPillClick);
-  Link := TNewLinkLabel.Create(WizardForm);
+  // A system link would be blue whatever its font says; this one is an image of
+  // muted underlined text, focusable and named like any button.
+  Link := TBitmapButton.Create(WizardForm);
   Link.Parent := Page;
-  Link.Font.Name := 'Microsoft YaHei UI';
-  Link.Caption := '<a id="customize">自定义安装位置</a>';
-  Link.OnLinkClick := @CustomizeClick;
+  Link.Stretch := True;
+  Link.Cursor := crHand;
+  Link.Caption := '自定义安装位置';
+  Link.PngImage := LoadPng('link-customize.png');
+  Link.Width := ScaleX(Link.PngImage.Width div 2) + 4;
+  Link.Height := ScaleY(Link.PngImage.Height div 2) + 4;
   Link.Left := LensCenterX - FormLeft(Page) - Link.Width div 2;
-  Link.Top := BelowLens + ScaleY(136) - FormTop(Page);
+  Link.Top := BelowLens + ScaleY(134) - FormTop(Page);
+  Link.OnClick := @CustomizeClick;
   // Where the quick path installs, in the button row the welcome page leaves empty.
   WelcomeNote := NewText(WizardForm, '', 'Microsoft YaHei UI', 8, Ink3Color, False,
     WizardForm.CancelButton.Top - ScaleY(4));
@@ -338,10 +363,12 @@ end;
 procedure InitializeDarkWizard;
 begin
   QuickInstall := True;
+  TintTitleBar;
   ExtractTemporaryFiles('{tmp}\lens-*.png');
   ExtractTemporaryFile('orbit-dot.png');
   ExtractTemporaryFile('button-install.png');
   ExtractTemporaryFile('button-finish.png');
+  ExtractTemporaryFile('link-customize.png');
   IntroFrames := LoadFrames('lens-intro-', IntroFrameCount);
   ProgressFrames := LoadFrames('lens-progress-', ProgressStepCount + 1);
   BeatFrames := LoadFrames('lens-done-', BeatFrameCount);
@@ -387,7 +414,7 @@ begin
   WizardForm.NextButton.TabStop := not OnOwnPage;
   WizardForm.NextButton.Visible := CurPageID <> wpInstalling;
   WizardForm.BackButton.Visible := not OnOwnPage and (CurPageID <> wpInstalling);
-  WizardForm.CancelButton.Visible := not OnOwnPage;
+  WizardForm.CancelButton.Visible := not OnOwnPage and (CurPageID <> wpInstalling);
   WelcomeNote.Visible := CurPageID = wpWelcome;
   case CurPageID of
     wpWelcome:

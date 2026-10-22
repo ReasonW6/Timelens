@@ -27,7 +27,9 @@ GLOW = (0x51, 0x57, 0xD6)
 SWEEP_A = (0xFF, 0xD3, 0x7C)
 SWEEP_B = (0xFF, 0x78, 0x59)
 PILL_INK = (0x2A, 0x16, 0x08)
+LINK = (0xA9, 0xAE, 0xBB)
 FONT_BOLD = "C:/Windows/Fonts/msyhbd.ttc"
+FONT_REGULAR = "C:/Windows/Fonts/msyh.ttc"
 
 
 def lerp(a, b, t):
@@ -176,6 +178,24 @@ def render_pill(name, text):
     pill.resize((w // SUPER, h // SUPER), Image.LANCZOS).save(HERE / f"{name}.png", optimize=True)
 
 
+def render_link(name, text):
+    """Muted underlined text at 2x for a link-style button, transparent around it."""
+    font = ImageFont.truetype(FONT_REGULAR, 12 * 2 * SUPER)
+    box = ImageDraw.Draw(Image.new("L", (1, 1))).textbbox((0, 0), text, font=font)
+    pad = 2 * SUPER
+    w = box[2] - box[0] + 2 * pad
+    h = box[3] - box[1] + 2 * pad + 4 * SUPER
+    # Round up to whole 2x pixels so the installer can halve the size exactly.
+    w += -w % (2 * SUPER)
+    h += -h % (2 * SUPER)
+    image = Image.new("RGBA", (w, h), LINK + (0,))
+    draw = ImageDraw.Draw(image)
+    draw.text((pad - box[0], pad - box[1]), text, font=font, fill=LINK + (255,))
+    underline = h - pad - 2 * SUPER
+    draw.rectangle((pad, underline, w - pad, underline + SUPER), fill=LINK + (140,))
+    image.resize((w // SUPER, h // SUPER), Image.LANCZOS).save(HERE / f"{name}.png", optimize=True)
+
+
 def render_backdrop(width, height, name):
     """The page backdrop: an indigo glow centred above the middle, where the lens sits."""
     rng = random.Random(7)
@@ -186,7 +206,8 @@ def render_backdrop(width, height, name):
     for y in range(height):
         for x in range(width):
             d = math.hypot((x - cx) / rx, (y - cy) / ry)
-            t = max(0.0, 1 - d / 0.7) ** 1.6 * 0.2
+            # Linear to transparent at 70 %, like the CSS radial-gradient it mirrors.
+            t = max(0.0, 1 - d / 0.7) * 0.2
             # A little noise keeps the dark gradient from banding.
             t = min(1.0, max(0.0, t + (rng.random() - 0.5) / 255))
             pixels[x, y] = lerp(BACK, GLOW, t)
@@ -200,6 +221,7 @@ def main():
     render_orbit_dot()
     render_pill("button-install", "立即安装")
     render_pill("button-finish", "完成")
+    render_link("link-customize", "自定义安装位置")
     render_backdrop(596, 432, "backdrop-100")
     render_backdrop(1192, 864, "backdrop-200")
 
