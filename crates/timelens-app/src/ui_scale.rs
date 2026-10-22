@@ -21,7 +21,8 @@ use windows::Win32::{
         },
         WindowsAndMessaging::{
             GWL_EXSTYLE, GWL_STYLE, GetWindowLongW, MINMAXINFO, SPI_SETWORKAREA, WINDOW_EX_STYLE,
-            WINDOW_STYLE, WM_DPICHANGED, WM_IME_NOTIFY, WM_SETTINGCHANGE, WM_WINDOWPOSCHANGED,
+            WINDOW_STYLE, WM_DISPLAYCHANGE, WM_DPICHANGED, WM_IME_NOTIFY, WM_SETTINGCHANGE,
+            WM_WINDOWPOSCHANGED,
         },
     },
 };
@@ -147,6 +148,9 @@ pub fn observe(hwnd: HWND, message: u32, w: WPARAM) {
             // Slint takes up the new display scale alone, without the user's.
             let _ = slint::invoke_from_event_loop(refresh);
         }
+        WM_DISPLAYCHANGE => {
+            let _ = slint::invoke_from_event_loop(refresh);
+        }
         WM_SETTINGCHANGE if w.0 == SPI_SETWORKAREA.0 as usize => {
             let _ = slint::invoke_from_event_loop(refresh);
         }
@@ -160,14 +164,15 @@ pub fn observe(hwnd: HWND, message: u32, w: WPARAM) {
             if (w.0 as u32 == IMN_SETCOMPOSITIONWINDOW || w.0 as u32 == IMN_SETCANDIDATEPOS)
                 && !CORRECTING.get() =>
         {
-            correct_ime(hwnd);
+            correct_ime(hwnd, w.0 as u32 == IMN_SETCANDIDATEPOS);
         }
         _ => {}
     }
 }
 
-/// Winit placed the IME windows by Windows' display scale alone.
-fn correct_ime(hwnd: HWND) {
+/// Winit placed the IME windows by Windows' display scale alone. Each form
+/// notifies once when set, so only the one that notified is corrected.
+fn correct_ime(hwnd: HWND, candidate_set: bool) {
     let (system, scale) = APPLIED.get();
     let ratio = scale / system;
     if (ratio - 1.0).abs() < 0.001 {
@@ -185,14 +190,14 @@ fn correct_ime(hwnd: HWND) {
         let context = ImmGetContext(hwnd);
         if !context.is_invalid() {
             let mut composition = COMPOSITIONFORM::default();
-            if ImmGetCompositionWindow(context, &mut composition).as_bool() {
+            if !candidate_set && ImmGetCompositionWindow(context, &mut composition).as_bool() {
                 composition.ptCurrentPos.x = point(composition.ptCurrentPos.x);
                 composition.ptCurrentPos.y = point(composition.ptCurrentPos.y);
                 composition.rcArea = rect(composition.rcArea);
                 let _ = ImmSetCompositionWindow(context, &composition);
             }
             let mut candidate = CANDIDATEFORM::default();
-            if ImmGetCandidateWindow(context, 0, &mut candidate).as_bool() {
+            if candidate_set && ImmGetCandidateWindow(context, 0, &mut candidate).as_bool() {
                 candidate.ptCurrentPos.x = point(candidate.ptCurrentPos.x);
                 candidate.ptCurrentPos.y = point(candidate.ptCurrentPos.y);
                 candidate.rcArea = rect(candidate.rcArea);
