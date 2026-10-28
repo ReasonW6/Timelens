@@ -7,17 +7,17 @@ mod windows;
 
 pub use protocol::{
     Ack, ClientHello, CollectorEvent, Envelope, EventBatch, HandshakeComplete, Heartbeat,
-    IdentitySource, InputMinute, MonitoringGap, MonitoringGapReason, PhysicalKeyCount, ServerHello,
-    SystemInterval, TrayTransition, TrayTransitionKind, WindowObservation, WindowTransition,
-    WindowTransitionKind, collector_event, envelope,
+    IdentitySource, InputMinute, LiveInput, MonitoringGap, MonitoringGapReason, PhysicalKeyCount,
+    ServerHello, SystemInterval, TrayTransition, TrayTransitionKind, WindowObservation,
+    WindowTransition, WindowTransitionKind, collector_event, envelope,
 };
 pub use windows::{
     BatchRejection, HandshakeReport, PeerVerification, SingleInstanceGuard, current_pipe_name,
-    new_collector_run_id, run_client_event_batch, run_client_probe, run_server_collector_message,
-    run_server_probe, trust_peer_directory,
+    new_collector_run_id, run_client_event_batch, run_client_live_input, run_client_probe,
+    run_server_collector_message, run_server_probe, trust_peer_directory,
 };
 
-pub const PROTOCOL_VERSION: u32 = 4;
+pub const PROTOCOL_VERSION: u32 = 5;
 pub const MAX_FRAME_BYTES: usize = 64 * 1024;
 pub const MAX_BATCH_EVENTS: usize = 512;
 pub const MAX_EXECUTABLE_PATH_BYTES: usize = 1024;

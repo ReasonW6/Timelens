@@ -46,7 +46,7 @@ use windows_sys::Win32::{
 
 use crate::{
     Ack, COLLECTOR_RUN_ID_BYTES, ClientHello, Envelope, EventBatch, HandshakeComplete, Heartbeat,
-    IpcError, MAX_FRAME_BYTES, NONCE_BYTES, Result, ServerHello, envelope, protocol,
+    IpcError, LiveInput, MAX_FRAME_BYTES, NONCE_BYTES, Result, ServerHello, envelope, protocol,
 };
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
@@ -140,7 +140,7 @@ fn instance_mutex_name(component: &str) -> Result<Vec<u16>> {
 pub fn current_pipe_name() -> Result<String> {
     let sid = current_user_sid()?;
     let session = current_session_id()?;
-    Ok(format!(r"\\.\pipe\Timelens.{sid}.{session}.collector.v4"))
+    Ok(format!(r"\\.\pipe\Timelens.{sid}.{session}.collector.v5"))
 }
 
 pub fn run_server_probe(pipe_name: &str, expected_peer_names: &[&str]) -> Result<HandshakeReport> {
@@ -211,13 +211,17 @@ impl BatchRejection {
     }
 }
 
-pub fn run_server_collector_message<F>(
+/// Serves one collector message: a heartbeat, an event batch for `persist`, or
+/// a live input preview for `show`, which answers whether it wants more.
+pub fn run_server_collector_message<F, L>(
     pipe_name: &str,
     expected_peer_names: &[&str],
     persist: F,
+    show: L,
 ) -> Result<HandshakeReport>
 where
     F: FnOnce(&EventBatch) -> std::result::Result<(), BatchRejection>,
+    L: FnOnce(&LiveInput) -> bool,
 {
     let (mut pipe, report) = accept_authenticated_server(pipe_name, expected_peer_names)?;
     let message = protocol::read_frame(&mut pipe)?;
@@ -234,9 +238,21 @@ where
             return Ok(report);
         }
         Some(envelope::Body::EventBatch(batch)) => batch,
+        Some(envelope::Body::LiveInput(input)) => {
+            protocol::write_frame(
+                &mut pipe,
+                &Envelope::new(envelope::Body::Ack(Ack {
+                    through_sequence: 0,
+                    accepted: show(&input),
+                    permanent: false,
+                })),
+            )?;
+            return Ok(report);
+        }
         _ => {
             return Err(IpcError::InvalidMessage(
-                "the first post-handshake message must be Heartbeat or EventBatch".to_owned(),
+                "the first post-handshake message must be Heartbeat, EventBatch or LiveInput"
+                    .to_owned(),
             ));
         }
     };
@@ -297,6 +313,29 @@ pub fn run_client_event_batch(
         )),
         _ => Err(IpcError::InvalidMessage(
             "server did not acknowledge the event batch sequence".to_owned(),
+        )),
+    }
+}
+
+/// Sends a live input preview; true when the core wants more of them.
+pub fn run_client_live_input(
+    pipe_name: &str,
+    expected_peer_names: &[&str],
+    input: &LiveInput,
+) -> Result<bool> {
+    let (mut pipe, _) = connect_authenticated_client(pipe_name, expected_peer_names)?;
+    protocol::write_frame(
+        &mut pipe,
+        &Envelope::new(envelope::Body::LiveInput(input.clone())),
+    )?;
+    match protocol::read_frame(&mut pipe)?.body {
+        Some(envelope::Body::Ack(Ack {
+            through_sequence: 0,
+            accepted,
+            ..
+        })) => Ok(accepted),
+        _ => Err(IpcError::InvalidMessage(
+            "server did not acknowledge the live input".to_owned(),
         )),
     }
 }
@@ -840,10 +879,42 @@ mod tests {
                 |_| -> std::result::Result<(), BatchRejection> {
                     panic!("a heartbeat must not invoke event persistence")
                 },
+                |_| panic!("a heartbeat must not show live input"),
             )
         });
 
         run_client_probe(&pipe_name, &[current_name.as_str()]).unwrap();
+        server.join().unwrap().unwrap();
+    }
+
+    #[test]
+    fn live_input_is_shown_and_answered_without_persistence() {
+        let current_name = current_executable_name();
+        let pipe_name = test_pipe_name();
+        let server_pipe = pipe_name.clone();
+        let server_name = current_name.clone();
+        let server = thread::spawn(move || {
+            run_server_collector_message(
+                &server_pipe,
+                &[server_name.as_str()],
+                |_| panic!("live input must not be persisted"),
+                |input| input.keyboard_count == 2,
+            )
+        });
+        let input = LiveInput {
+            minute_started_at_utc_ms: 1_700_000_040_000,
+            local_date: "2023-11-15".into(),
+            keyboard_count: 2,
+            left_click_count: 1,
+            key_counts: vec![crate::PhysicalKeyCount {
+                scan_code: 0x1e,
+                keyboard_layout: 0,
+                count: 2,
+            }],
+            ..Default::default()
+        };
+
+        assert!(run_client_live_input(&pipe_name, &[current_name.as_str()], &input).unwrap());
         server.join().unwrap().unwrap();
     }
 
@@ -854,10 +925,15 @@ mod tests {
         let server_pipe = pipe_name.clone();
         let server_name = current_name.clone();
         let server = thread::spawn(move || {
-            run_server_collector_message(&server_pipe, &[server_name.as_str()], |batch| {
-                assert_eq!(batch.first_sequence, 1);
-                Ok(())
-            })
+            run_server_collector_message(
+                &server_pipe,
+                &[server_name.as_str()],
+                |batch| {
+                    assert_eq!(batch.first_sequence, 1);
+                    Ok(())
+                },
+                |_| false,
+            )
         });
 
         let client =
@@ -875,9 +951,12 @@ mod tests {
         let server_pipe = pipe_name.clone();
         let server_name = current_name.clone();
         let server = thread::spawn(move || {
-            run_server_collector_message(&server_pipe, &[server_name.as_str()], |_| {
-                Err(BatchRejection::transient("storage unavailable"))
-            })
+            run_server_collector_message(
+                &server_pipe,
+                &[server_name.as_str()],
+                |_| Err(BatchRejection::transient("storage unavailable")),
+                |_| false,
+            )
         });
 
         let client_error =
@@ -897,9 +976,12 @@ mod tests {
         let server_pipe = pipe_name.clone();
         let server_name = current_name.clone();
         let server = thread::spawn(move || {
-            run_server_collector_message(&server_pipe, &[server_name.as_str()], |_| {
-                Err(BatchRejection::permanent("sequence is not contiguous"))
-            })
+            run_server_collector_message(
+                &server_pipe,
+                &[server_name.as_str()],
+                |_| Err(BatchRejection::permanent("sequence is not contiguous")),
+                |_| false,
+            )
         });
 
         let client_error =

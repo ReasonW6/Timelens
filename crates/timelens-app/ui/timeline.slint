@@ -73,6 +73,8 @@ component AppStack inherits Rectangle {
     in property <int> more;
     out property <bool> expanded: hover.has-hover && root.stack.length > 0;
     callback clicked;
+    // The right button went down here, at this position.
+    callback menu(Point);
     // Widens with the opened stack: pointer input stays within this bounds,
     // so moving along the stack keeps it open.
     width: root.expanded ? max(44px, fan.preferred-width - 4px) : 44px;
@@ -139,7 +141,13 @@ component AppStack inherits Rectangle {
             if root.more > 0 : Text { text: "+" + root.more; color: Theme.ink-3; font-size: 12px; font-weight: 600; vertical-alignment: center; }
         }
     }
-    hover := TouchArea { mouse-cursor: pointer; clicked => { root.clicked(); } }
+    hover := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+        pointer-event(event) => {
+            if event.button == PointerEventButton.right && event.kind == PointerEventKind.down { root.menu({ x: self.mouse-x, y: self.mouse-y }); }
+        }
+    }
 }
 
 // Today without any activity yet: what recording is doing, and what to do.
@@ -186,8 +194,13 @@ export component HistoryRow inherits Rectangle {
     in property <int> recording;
     callback select;
     // On this row's activity: 0 show its snapshots, 1 summarize it, 2 open its
-    // application's rules. The row need not be selected.
+    // application's rules, 3 stop recording the application, 4 ask to delete
+    // its history, 5 ask to delete this stretch of it. The row need not be
+    // selected.
     callback act(int);
+    // Right-click, or the menu key, asks for the activity's menu here, in
+    // window coordinates.
+    callback menu(Point);
     callback resume;
     callback open-settings;
     height: item.height;
@@ -258,12 +271,7 @@ export component HistoryRow inherits Rectangle {
         }
     }
 
-    // Right-click, or the menu key, offers what the detail pane offers.
-    if root.entry : ContextMenuArea {
-        Menu {
-            MenuItem { title: @tr("查看这段的快照"); activated => { root.act(0); } }
-            MenuItem { title: @tr("这个应用的规则"); activated => { root.act(2); } }
-        }
+    if root.entry : Rectangle {
         Rectangle {
             accessible-role: button;
             accessible-label: item.subtitle == "" ? @tr("{} {}，{}", item.time, item.title, item.duration) : @tr("{} {}，{}，{}", item.time, item.title, item.duration, item.subtitle);
@@ -277,7 +285,15 @@ export component HistoryRow inherits Rectangle {
             drop-shadow-color: Theme.shadow-soft;
             animate background, drop-shadow-blur { duration: 140ms; easing: ease-out; }
 
-            touch := TouchArea { mouse-cursor: pointer; clicked => { root.clicked-focus = true; key.focus(); root.select(); } }
+            touch := TouchArea {
+                mouse-cursor: pointer;
+                clicked => { root.clicked-focus = true; key.focus(); root.select(); }
+                pointer-event(event) => {
+                    if event.button == PointerEventButton.right && event.kind == PointerEventKind.down {
+                        root.menu({ x: self.absolute-position.x + self.mouse-x, y: self.absolute-position.y + self.mouse-y });
+                    }
+                }
+            }
 
             Text {
                 x: HistoryGrid.time-x; width: 48px;
@@ -315,11 +331,19 @@ export component HistoryRow inherits Rectangle {
             icon: item.icon; tint: item.tint; name: item.title;
             stack: item.stack; more: item.more;
             clicked => { root.clicked-focus = true; key.focus(); root.select(); }
+            menu(position) => { root.menu({ x: self.absolute-position.x + position.x, y: self.absolute-position.y + position.y }); }
         }
         key := FocusScope {
             width: 0px;
             focus-lost(reason) => { if reason != FocusReason.window-activation { root.clicked-focus = false; } }
-            key-pressed(event) => { if event.text == " " || event.text == "\n" { root.select(); return accept; } return reject; }
+            key-pressed(event) => {
+                if event.text == " " || event.text == "\n" { root.select(); return accept; }
+                if event.text == Key.Menu || (event.text == Key.F10 && event.modifiers.shift) {
+                    root.menu({ x: root.absolute-position.x + HistoryGrid.text-x, y: root.absolute-position.y + root.height / 2 });
+                    return accept;
+                }
+                return reject;
+            }
         }
     }
 }

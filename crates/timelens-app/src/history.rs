@@ -1242,6 +1242,20 @@ pub fn install(
                 ui_state.borrow_mut().selected_identity = entry.entry.identity.clone();
                 return;
             }
+            if (3..=5).contains(&action) {
+                if let Some(identity) = &entry.entry.identity {
+                    if action == 5 {
+                        crate::collection_ui::offer_stretch(
+                            entry.entry.started_utc_ms,
+                            entry.entry.ended_utc_ms,
+                        );
+                    }
+                    window
+                        .global::<crate::CollectionState>()
+                        .invoke_app_menu(identity.into(), [0, 1, 3][action as usize - 3]);
+                }
+                return;
+            }
             focus_range(&window, &storage, &ui_state, &entry);
             if action == 0 {
                 window.invoke_navigate(2);
@@ -1289,6 +1303,7 @@ mod tests {
             left_click_count: 0,
             middle_click_count: 0,
             right_click_count: 0,
+            latest_input_minute_utc_ms: None,
             monitoring_gaps: vec![],
         }
     }

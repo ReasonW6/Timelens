@@ -343,7 +343,8 @@ fn from_hsl(hue: f32, saturation: f32, lightness: f32) -> (u8, u8, u8) {
 }
 
 /// Prefer a readable FileDescription from the executable's version resource, then
-/// the Start menu name of an `aumid:` identity. Otherwise use the stored name.
+/// the Start menu name of an `aumid:` identity, then the FileDescription of the
+/// executable recorded for an unregistered one. Otherwise use the stored name.
 /// Failures cache None, rather than the fallback, so later stored-name changes
 /// remain visible. The same local-path restrictions and cache bounds as icons
 /// apply; an updated EXE's description may remain cached until eviction/restart.
@@ -359,7 +360,17 @@ pub fn display_name(identity: &str, fallback: &str) -> String {
     let name = match cached {
         Some(name) => name,
         None => {
-            let name = read_file_description(identity).or_else(|| app_item_name(identity));
+            let name = read_file_description(identity)
+                .or_else(|| app_item_name(identity))
+                .or_else(|| {
+                    let path = SOURCES.with(|s| {
+                        s.borrow()
+                            .iter()
+                            .find(|s| s.identity == identity)
+                            .and_then(|s| s.executable_path.clone())
+                    })?;
+                    read_file_description(&format!("path:{path}"))
+                });
             NAME_CACHE.with(|cache| {
                 let mut cache = cache.borrow_mut();
                 if cache.len() >= CACHE_CAPACITY {

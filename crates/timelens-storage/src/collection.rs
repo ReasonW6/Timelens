@@ -62,8 +62,35 @@ impl Storage {
     pub fn merge_links(&self) -> Result<Vec<(String, String)>> {
         Ok(self.connection.prepare("SELECT left_identity,right_identity FROM application_merges ORDER BY left_identity,right_identity")?.query_map([],|r|Ok((r.get(0)?,r.get(1)?)))?.collect::<rusqlite::Result<_>>()?)
     }
+    /// User merges plus the automatic ones. An unpackaged executable that labels
+    /// some windows with its own AppUserModelID, such as Steam's main window, and
+    /// leaves the rest unlabeled, such as its store and friends windows, is one
+    /// application: its `aumid:` and `path:` identities join. An executable
+    /// behind several AppUserModelIDs, such as a browser hosting web apps, stays
+    /// apart, since the unlabeled windows cannot tell which one they belong to.
+    pub(crate) fn merge_edges(&self) -> Result<Vec<(String, String)>> {
+        let mut edges = self.merge_links()?;
+        let mut labels = BTreeMap::<String, Vec<String>>::new();
+        for source in self.application_icon_sources()? {
+            if let Some(path) = source.executable_path {
+                let identity = format!("path:{}", path.replace('/', "\\").to_lowercase());
+                labels.entry(identity).or_default().push(source.identity);
+            }
+        }
+        let mut known = self
+            .connection
+            .prepare("SELECT 1 FROM applications WHERE identity=?1")?;
+        for (path, aumids) in labels {
+            if let [aumid] = aumids.as_slice()
+                && known.exists([&path])?
+            {
+                edges.push((aumid.clone(), path));
+            }
+        }
+        Ok(edges)
+    }
     pub fn merged_members(&self, identity: &str) -> Result<BTreeSet<String>> {
-        Ok(merge_group(identity, &self.merge_links()?))
+        Ok(merge_group(identity, &self.merge_edges()?))
     }
     pub fn set_application_merge(&self, left: &str, right: &str, merge: bool) -> Result<()> {
         if left == right || left.is_empty() || right.is_empty() {
@@ -153,8 +180,9 @@ impl Storage {
         applications: BTreeMap<String, WorkingApplication>,
     ) -> Result<BTreeMap<String, WorkingApplication>> {
         let mut merged = BTreeMap::<String, WorkingApplication>::new();
+        let edges = self.merge_edges()?;
         for (id, mut app) in applications {
-            let root = self.merged_members(&id)?.into_iter().next().unwrap_or(id);
+            let root = merge_group(&id, &edges).pop_first().unwrap_or(id);
             let target = merged.entry(root).or_default();
             target.open_intervals.append(&mut app.open_intervals);
             target
@@ -250,6 +278,14 @@ impl Storage {
         let high = bound(last, 2).unwrap_or(i64::MAX);
         Ok(self.connection.query_row("SELECT COALESCE(SUM(keyboard_count),0),COALESCE(SUM(left_click_count),0),COALESCE(SUM(middle_click_count),0),COALESCE(SUM(right_click_count),0) FROM input_minute_buckets WHERE minute_started_utc_ms >= ?3 AND minute_started_utc_ms < ?4 AND local_date BETWEEN ?1 AND ?2",params![first, last, low, high],|r|Ok([r.get::<_,i64>(0)?.max(0) as u64,r.get::<_,i64>(1)?.max(0) as u64,r.get::<_,i64>(2)?.max(0) as u64,r.get::<_,i64>(3)?.max(0) as u64]))?)
     }
+    /// The start of the latest minute the stored input counts include, if any.
+    pub fn latest_input_minute_utc_ms(&self) -> Result<Option<i64>> {
+        Ok(self.connection.query_row(
+            "SELECT MAX(minute_started_utc_ms) FROM input_minute_buckets",
+            [],
+            |row| row.get(0),
+        )?)
+    }
     /// Presses per physical key over the local dates from `first` to `last`,
     /// both included (YYYY-MM-DD).
     pub fn physical_key_frequencies_between(
@@ -318,6 +354,111 @@ impl Storage {
             .execute_batch("PRAGMA wal_checkpoint(TRUNCATE); VACUUM;")?;
         Ok(rows)
     }
+}
+impl Storage {
+    /// Remove an application's activity and input within `start..end`, as when
+    /// the user deletes one stretch of its use. What lies wholly inside goes and
+    /// what crosses one edge is cut back to it. A window or state that runs
+    /// through the whole stretch stays: splitting it would invent a boundary.
+    /// Nothing after now changes, so open windows and states carry on, and
+    /// input goes by whole minutes. Returns the rows removed or cut.
+    pub fn delete_application_activity_between(
+        &self,
+        identity: &str,
+        start: i64,
+        end: i64,
+    ) -> Result<u64> {
+        let end = end.min(unix_time_ms());
+        if end <= start {
+            return Ok(0);
+        }
+        self.timeline_cache
+            .borrow_mut()
+            .clear(self.connection.total_changes());
+        let members = self.merged_members(identity)?;
+        let tx = Transaction::new_unchecked(&self.connection, TransactionBehavior::Immediate)?;
+        let mut rows = 0;
+        let mut input_rows = 0;
+        const STATES: &str = "window_instance_id IN (
+            SELECT instance_id FROM window_instances WHERE application_identity=?3)";
+        const TRAY: &str = "application_identity=?3";
+        for member in &members {
+            let bounds = params![start, end, member];
+            for (table, owner, began, ended) in [
+                ("window_state_intervals", STATES, "started", "ended"),
+                ("tray_background_intervals", TRAY, "started", "ended"),
+            ] {
+                rows += tx.execute(
+                    &format!(
+                        "DELETE FROM {table} WHERE {owner}
+                         AND {began}_utc_ms>=?1 AND {ended}_utc_ms<=?2"
+                    ),
+                    bounds,
+                )? as u64;
+                rows += clip(&tx, table, owner, began, ended, bounds)?;
+            }
+            // A window goes once nothing of it is left inside.
+            rows += tx.execute(
+                "DELETE FROM window_instances WHERE application_identity=?3
+                 AND opened_utc_ms>=?1 AND closed_utc_ms<=?2
+                 AND NOT EXISTS (SELECT 1 FROM window_state_intervals
+                     WHERE window_instance_id=window_instances.instance_id)",
+                bounds,
+            )? as u64;
+            rows += clip(
+                &tx,
+                "window_instances",
+                "application_identity=?3",
+                "opened",
+                "closed",
+                bounds,
+            )?;
+            input_rows += tx.execute(
+                "DELETE FROM input_minute_buckets WHERE focused_application_identity=?3
+                 AND minute_started_utc_ms>=?1 AND minute_started_utc_ms+60000<=?2",
+                bounds,
+            )? as u64;
+        }
+        for (category, count) in [("activity", rows), ("input", input_rows)] {
+            if count > 0 {
+                tx.execute("INSERT INTO data_availability(data_class,status,started_utc_ms,ended_utc_ms,reason,item_count) VALUES(?,'cleaned',?,?,'user_deleted',?)",params![category,start,end,count as i64])?;
+            }
+        }
+        tx.commit()?;
+        self.connection
+            .execute_batch("PRAGMA wal_checkpoint(TRUNCATE); VACUUM;")?;
+        Ok(rows + input_rows)
+    }
+}
+/// Cut back to `start..end` (?1, ?2) the rows of `table` that `owner` picks
+/// and that cross exactly one edge, moving monotonic time by as much. A row
+/// still open crosses the end.
+fn clip(
+    tx: &Transaction<'_>,
+    table: &str,
+    owner: &str,
+    began: &str,
+    ended: &str,
+    bounds: &[&dyn rusqlite::ToSql],
+) -> Result<u64> {
+    let before = tx.execute(
+        &format!(
+            "UPDATE {table} SET {ended}_monotonic_ms={ended}_monotonic_ms-({ended}_utc_ms-?1),
+                {ended}_utc_ms=?1
+             WHERE {owner} AND {began}_utc_ms<?1 AND {ended}_utc_ms>?1 AND {ended}_utc_ms<=?2"
+        ),
+        bounds,
+    )?;
+    let after = tx.execute(
+        &format!(
+            "UPDATE {table} SET {began}_monotonic_ms={began}_monotonic_ms+(?2-{began}_utc_ms),
+                {began}_utc_ms=?2
+             WHERE {owner} AND {began}_utc_ms>=?1 AND {began}_utc_ms<?2
+               AND COALESCE({ended}_utc_ms,?2+1)>?2"
+        ),
+        bounds,
+    )?;
+    Ok((before + after) as u64)
 }
 pub(crate) fn ingest_system_interval(
     tx: &Transaction<'_>,
@@ -516,6 +657,114 @@ mod tests {
             s.timeline_snapshot(1000, 6000).unwrap().applications.len(),
             2
         );
+    }
+    #[test]
+    fn an_executable_labeling_some_windows_is_one_application() {
+        // The fixture's editor window carries no AppUserModelID.
+        let (_dir, s) = fixtures::storage();
+        let event = |window_id, aumid: &str, path: &str, now, kind| CollectorEvent {
+            observed_at_utc_ms: now,
+            monotonic_ms: now as u64,
+            body: Some(collector_event::Body::WindowTransition(WindowTransition {
+                kind: kind as i32,
+                window: Some(WindowObservation {
+                    window_id,
+                    process_id: 2,
+                    process_started_at_100ns: 3,
+                    application_identity: format!("aumid:{}", aumid.to_lowercase()),
+                    identity_source: IdentitySource::WindowAppUserModelId as i32,
+                    executable_path: Some(path.into()),
+                    app_user_model_id: Some(aumid.into()),
+                    displayed: true,
+                    ..Default::default()
+                }),
+            })),
+        };
+        let editor = "C:\\Private\\Editor.exe";
+        s.ingest_event_batch(&EventBatch {
+            collector_run_id: vec![2; 16],
+            first_sequence: 1,
+            events: vec![
+                event(
+                    5,
+                    "Vendor.Editor",
+                    editor,
+                    7000,
+                    WindowTransitionKind::Opened,
+                ),
+                event(
+                    5,
+                    "Vendor.Editor",
+                    editor,
+                    9000,
+                    WindowTransitionKind::Closed,
+                ),
+            ],
+        })
+        .unwrap();
+        let apps = s.timeline_snapshot(1, 10_000).unwrap().applications;
+        assert_eq!(apps.len(), 1);
+        assert_eq!(apps[0].identity, "aumid:vendor.editor");
+        assert_eq!(apps[0].window_count, 2);
+        assert_eq!(apps[0].opened_ms, 7000);
+        assert_eq!(
+            s.merged_members("path:c:\\private\\editor.exe").unwrap(),
+            BTreeSet::from([
+                "aumid:vendor.editor".to_owned(),
+                "path:c:\\private\\editor.exe".to_owned()
+            ])
+        );
+        // A second label on the same executable leaves the unlabeled windows apart.
+        s.ingest_event_batch(&EventBatch {
+            collector_run_id: vec![2; 16],
+            first_sequence: 3,
+            events: vec![event(
+                6,
+                "Vendor.WebApp",
+                editor,
+                9500,
+                WindowTransitionKind::Opened,
+            )],
+        })
+        .unwrap();
+        assert_eq!(
+            s.timeline_snapshot(1, 10_000).unwrap().applications.len(),
+            3
+        );
+        assert!(s.merge_links().unwrap().is_empty());
+    }
+    #[test]
+    fn deleting_a_stretch_cuts_back_what_crosses_it_and_keeps_what_spans_it() {
+        // The fixture's editor window is open and focused from 1000 to 6000.
+        let (_dir, s) = fixtures::storage();
+        let id = "path:c:\\private\\editor.exe";
+        let opened = |s: &Storage| {
+            s.timeline_snapshot(1, 10_000)
+                .unwrap()
+                .applications
+                .first()
+                .map(|app| (app.opened_ms, app.focused_ms))
+        };
+        // A window running through the whole stretch stays as it is.
+        assert_eq!(
+            s.delete_application_activity_between(id, 2000, 3000)
+                .unwrap(),
+            0
+        );
+        assert_eq!(opened(&s), Some((5000, 5000)));
+        // One crossing an edge is cut back to it.
+        assert_eq!(
+            s.delete_application_activity_between(id, 5000, 7000)
+                .unwrap(),
+            2
+        );
+        assert_eq!(opened(&s), Some((4000, 4000)));
+        assert_eq!(s.data_coverage(5000, 7000).unwrap().0, 0);
+        // What lies wholly inside goes.
+        s.delete_application_activity_between(id, 500, 8000)
+            .unwrap();
+        assert_eq!(opened(&s), None);
+        s.verify_integrity().unwrap();
     }
     #[test]
     fn explicit_app_deletion_removes_history_and_keeps_rules() {

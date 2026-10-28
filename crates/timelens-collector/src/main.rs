@@ -5,6 +5,7 @@ mod collection;
 mod data_directory;
 mod event_wait;
 mod input_identity;
+mod live;
 mod spool;
 
 use std::{
@@ -22,9 +23,10 @@ use std::{
 use anyhow::{Context, Result, bail};
 use timelens_ipc::{
     COLLECTOR_RESET_PAUSED_FILE, COLLECTOR_RESET_REQUEST_FILE, CollectorEvent, EventBatch,
-    IdentitySource as ProtocolIdentitySource, InputMinute, IpcError, MAX_INPUT_KEYS_PER_MINUTE,
-    MonitoringGap, MonitoringGapReason, PhysicalKeyCount, SingleInstanceGuard,
-    TrayTransition as ProtocolTrayTransition, TrayTransitionKind as ProtocolTrayTransitionKind,
+    IdentitySource as ProtocolIdentitySource, InputMinute, IpcError, LiveInput,
+    MAX_INPUT_KEYS_PER_MINUTE, MonitoringGap, MonitoringGapReason, PhysicalKeyCount,
+    SingleInstanceGuard, TrayTransition as ProtocolTrayTransition,
+    TrayTransitionKind as ProtocolTrayTransitionKind,
     WindowObservation as ProtocolWindowObservation, WindowTransition as ProtocolWindowTransition,
     WindowTransitionKind as ProtocolWindowTransitionKind, collector_event, current_pipe_name,
     diagnostics, new_collector_run_id, run_client_event_batch, run_client_probe,
@@ -143,6 +145,7 @@ fn collect_window_events(pipe_name: &str, data_directory: PathBuf) -> Result<()>
         reset_request_path.clone(),
         reset_paused_path.clone(),
     );
+    let mut live = live::LivePreview::spawn(pipe_name.to_owned(), CORE_NAMES);
     let mut collector_run_id = new_collector_run_id()?;
     let mut next_sequence = 1;
     let initial = observer.reconcile_transitions()?;
@@ -311,10 +314,15 @@ fn collect_window_events(pipe_name: &str, data_directory: PathBuf) -> Result<()>
         let until_minute =
             Duration::from_millis((MINUTE_MS - now.rem_euclid(MINUTE_MS)).max(1) as u64);
         let waiting_at = Instant::now();
+        let tick = if live.wanted() {
+            live::WAKE_INTERVAL
+        } else {
+            Duration::from_secs(1)
+        };
         let deadline = waiting_at
             + until_minute
                 .min(last_reconcile.remaining(waiting_at))
-                .min(Duration::from_secs(1));
+                .min(tick);
         let changes = event_wait::until(deadline, |remaining| monitor.wait_for_events(remaining));
         filter.refresh(&data_directory);
         if changes.reconcile || last_reconcile.is_due(Instant::now()) {
@@ -443,6 +451,9 @@ fn collect_window_events(pipe_name: &str, data_directory: PathBuf) -> Result<()>
             )?;
         }
         let completed = input.take_completed(now, mono, local);
+        if live.due() {
+            live.offer(input.live(local));
+        }
         if !completed.is_empty() {
             queue_events(
                 &spool,
@@ -1057,6 +1068,52 @@ impl InputAggregator {
         Ok(())
     }
 
+    /// The attributed input counted so far in `current`'s minute, with keys
+    /// counted by position alone. Input the rules keep anonymous is left out,
+    /// as it is from the statistics this adds to.
+    fn live(&self, current: LocalTimeFacts) -> LiveInput {
+        let mut keys = BTreeMap::<u16, u64>::new();
+        let mut clicks = [0_u64; 3];
+        for (key, counts) in &self.buckets {
+            if key.anonymous_only
+                || key.local_time.minute_started_at_utc_ms != current.minute_started_at_utc_ms
+            {
+                continue;
+            }
+            for ((scan_code, _), count) in &counts.key_counts {
+                let total = keys.entry(*scan_code).or_default();
+                *total = total.saturating_add(*count);
+            }
+            for (total, count) in clicks.iter_mut().zip([
+                counts.left_click_count,
+                counts.middle_click_count,
+                counts.right_click_count,
+            ]) {
+                *total = total.saturating_add(count);
+            }
+        }
+        let count = |value: u64| u32::try_from(value).unwrap_or(u32::MAX);
+        let key_counts = keys
+            .into_iter()
+            .map(|(scan_code, total)| PhysicalKeyCount {
+                scan_code: u32::from(scan_code),
+                keyboard_layout: 0,
+                count: count(total),
+            })
+            .collect::<Vec<_>>();
+        LiveInput {
+            minute_started_at_utc_ms: current.minute_started_at_utc_ms,
+            local_date: current.local_date(),
+            keyboard_count: key_counts
+                .iter()
+                .fold(0_u32, |sum, key| sum.saturating_add(key.count)),
+            left_click_count: count(clicks[0]),
+            middle_click_count: count(clicks[1]),
+            right_click_count: count(clicks[2]),
+            key_counts,
+        }
+    }
+
     fn take_new_overflow(&mut self) -> bool {
         if self.overflowed && !self.overflow_reported {
             self.overflow_reported = true;
@@ -1469,12 +1526,39 @@ mod tests {
                 .take_completed(1_700_000_070_000, 30_000, minute)
                 .is_empty()
         );
+        // The open minute previews by key position, without its layout.
+        let live = aggregator.live(minute);
+        assert_eq!(
+            live.minute_started_at_utc_ms,
+            minute.minute_started_at_utc_ms
+        );
+        assert_eq!(live.local_date, minute.local_date());
+        assert_eq!(
+            (
+                live.keyboard_count,
+                live.left_click_count,
+                live.middle_click_count
+            ),
+            (3, 2, 1)
+        );
+        assert_eq!(
+            live.key_counts,
+            [PhysicalKeyCount {
+                scan_code: 0x1e,
+                keyboard_layout: 0,
+                count: 3
+            }]
+        );
         let next_minute = LocalTimeFacts {
             minute_started_at_utc_ms: minute.minute_started_at_utc_ms + MINUTE_MS,
             ..minute
         };
         let events = aggregator.take_completed(1_700_000_100_000, 60_000, next_minute);
         assert_eq!(events.len(), 1);
+        // A sealed minute leaves the preview empty.
+        let live = aggregator.live(next_minute);
+        assert_eq!(live.keyboard_count + live.left_click_count, 0);
+        assert!(live.key_counts.is_empty());
         let Some(collector_event::Body::InputMinute(bucket)) = &events[0].body else {
             panic!("completed input bucket was not emitted");
         };

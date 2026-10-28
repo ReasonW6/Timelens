@@ -169,6 +169,8 @@ pub struct TimelineSnapshot {
     pub left_click_count: u64,
     pub middle_click_count: u64,
     pub right_click_count: u64,
+    /// The start of the latest minute the input counts include, if any.
+    pub latest_input_minute_utc_ms: Option<i64>,
     pub monitoring_gaps: Vec<TimelineGap>,
 }
 
@@ -745,7 +747,8 @@ impl Storage {
             "SELECT COALESCE(SUM(keyboard_count), 0),
                     COALESCE(SUM(left_click_count), 0),
                     COALESCE(SUM(middle_click_count), 0),
-                    COALESCE(SUM(right_click_count), 0)
+                    COALESCE(SUM(right_click_count), 0),
+                    MAX(minute_started_utc_ms)
              FROM input_minute_buckets
              WHERE minute_started_utc_ms < ?2
                AND minute_started_utc_ms + 60000 > ?1",
@@ -756,6 +759,7 @@ impl Storage {
                     row.get::<_, i64>(1)?,
                     row.get::<_, i64>(2)?,
                     row.get::<_, i64>(3)?,
+                    row.get::<_, Option<i64>>(4)?,
                 ))
             },
         )?;
@@ -784,6 +788,7 @@ impl Storage {
             left_click_count: nonnegative_u64(input_totals.1),
             middle_click_count: nonnegative_u64(input_totals.2),
             right_click_count: nonnegative_u64(input_totals.3),
+            latest_input_minute_utc_ms: input_totals.4,
             monitoring_gaps: gaps,
         })
     }

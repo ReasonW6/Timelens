@@ -474,6 +474,7 @@ mod tests {
             left_click_count: 0,
             middle_click_count: 0,
             right_click_count: 0,
+            latest_input_minute_utc_ms: None,
             monitoring_gaps: Vec::new(),
         };
         assert_eq!(

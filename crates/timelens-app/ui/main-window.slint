@@ -45,13 +45,26 @@ component Metric inherits VerticalLayout {
     in property <string> label;
     in property <string> value;
     in property <image> icon;
+    // A count `value` spells out: it rolls to each new one, digit by digit,
+    // and `value` shows once it arrives.
+    in property <float> count: -1;
+    private property <float> rolling: root.count;
+    animate rolling { duration: 700ms; easing: ease-out; }
+    pure function three(part: int) -> string { return (part < 100 ? "0" : "") + (part < 10 ? "0" : "") + part; }
+    // Grouped by thousands with commas, as the counts are everywhere else.
+    pure function grouped(value: float) -> string {
+        return value < 1000 ? "" + floor(value)
+            : value < 1000000 ? floor(value / 1000) + "," + root.three(mod(floor(value), 1000))
+            : value < 1000000000 ? floor(value / 1000000) + "," + root.three(mod(floor(value / 1000), 1000)) + "," + root.three(mod(floor(value), 1000))
+            : floor(value / 1000000000) + "," + root.three(mod(floor(value / 1000000), 1000)) + "," + root.three(mod(floor(value / 1000), 1000)) + "," + root.three(mod(floor(value), 1000));
+    }
     spacing: 4px;
     HorizontalLayout {
         spacing: 6px;
         if root.icon.width > 0 : Rectangle { width: 14px; Image { width: 14px; height: 14px; source: root.icon; colorize: Theme.ink-3; } }
         Eyebrow { text: root.label; }
     }
-    Text { text: root.value; color: Theme.ink; font-family: Theme.font-display; font-size: 22px; font-weight: 600; overflow: elide; }
+    Text { text: root.count < 0 || root.rolling == root.count ? root.value : root.grouped(root.rolling); color: Theme.ink; font-family: Theme.font-display; font-size: 22px; font-weight: 600; overflow: elide; }
 }
 
 // The detail of something the user selected. It appears only on selection and
@@ -391,6 +404,28 @@ component QuickRange inherits Rectangle {
     key := FocusScope { width: 0px; key-pressed(event) => { if event.text == " " || event.text == "\n" { root.clicked(); return accept; } return reject; } }
 }
 
+// One action in a right-click menu; a dangerous one reads in red.
+component MenuAction inherits Rectangle {
+    in property <string> text;
+    in property <image> icon;
+    in property <bool> danger;
+    callback clicked;
+    height: 32px;
+    border-radius: 8px;
+    background: touch.has-hover || key.has-focus ? (root.danger ? Theme.danger-soft : Theme.hover-tint) : transparent;
+    forward-focus: key;
+    accessible-role: button;
+    accessible-label: root.text;
+    accessible-action-default => { root.clicked(); }
+    HorizontalLayout {
+        padding-left: 10px; padding-right: 12px; spacing: 10px;
+        VerticalLayout { alignment: center; Image { width: 15px; height: 15px; source: root.icon; colorize: root.danger ? Theme.danger : Theme.ink-3; } }
+        Text { text: root.text; color: root.danger ? Theme.danger : Theme.ink; font-size: 13px; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; }
+    }
+    touch := TouchArea { mouse-cursor: pointer; clicked => { root.clicked(); } }
+    key := FocusScope { width: 0px; key-pressed(event) => { if event.text == " " || event.text == "\n" { root.clicked(); return accept; } return reject; } }
+}
+
 // A month to pick a day from. Days after today, or before the earliest the
 // caller allows, are not offered.
 component MonthGrid inherits VerticalLayout {
@@ -714,6 +749,9 @@ export component AppWindow inherits Window {
     in property <string> mouse-value: @tr("0 次");
     in property <string> range-keyboard: "0";
     in property <string> range-mouse: "0";
+    // The same two counts as numbers, for them to roll.
+    in property <float> range-keyboard-count;
+    in property <float> range-mouse-count;
     in property <string> retention-value: @tr("30 天 · 100 MiB");
     in property <int> retention-days: 30;
     // The space limit in MiB, how much the records use, and how far back they reach.
@@ -917,7 +955,7 @@ export component AppWindow inherits Window {
     callback history-step(int);
     callback history-detail-ready;
     // On the activity with this key: 0 show its snapshots, 2 select its
-    // application.
+    // application, 3 stop recording it, 4 ask to delete its history.
     callback detail-action(string, int);
     // Puts back the range a page had before the timeline set it.
     callback range-origin-restore;
@@ -994,7 +1032,8 @@ export component AppWindow inherits Window {
         root.apps-scope-changed();
         if root.stats-tab == 1 { CollectionState.action(7); }
     }
-    // 0 show its snapshots, 2 open its application's rules.
+    // 0 show its snapshots, 2 open its application's rules, 3 stop recording
+    // the application, 4 ask to delete its history.
     function act-on-activity(key: string, action: int) {
         root.detail-action(key, action);
         // The rules page opens on the application the activity selected.
@@ -1064,6 +1103,69 @@ export component AppWindow inherits Window {
                 QuickRange { text: @tr("1 小时"); clicked => { pause-menu.close(); CollectionState.pause-for(60); } }
                 QuickRange { text: @tr("直到明天"); clicked => { pause-menu.close(); CollectionState.pause-for(-2); } }
                 QuickRange { text: @tr("直到手动继续"); clicked => { pause-menu.close(); CollectionState.pause-for(-1); } }
+            }
+        }
+    }
+    // The right-click menu of an application in the statistics (kind 0) or of
+    // an activity on the timeline (kind 1), opened where it was asked for.
+    private property <int> menu-kind;
+    private property <AppRow> menu-app;
+    private property <string> menu-key;
+    private property <string> menu-name;
+    private property <Point> menu-at;
+    function open-app-menu(app: AppRow, at: Point) {
+        root.menu-kind = 0;
+        root.menu-app = app;
+        root.menu-name = app.name;
+        root.menu-at = at;
+        item-menu.show();
+    }
+    function open-activity-menu(key: string, name: string, at: Point) {
+        root.menu-kind = 1;
+        root.menu-key = key;
+        root.menu-name = name;
+        root.menu-at = at;
+        item-menu.show();
+    }
+    // As on an activity: 0 its details or snapshots, 2 the rules, 3 stop
+    // recording, 4 delete all its history, 5 delete this stretch of it.
+    function menu-act(action: int) {
+        item-menu.close();
+        if root.menu-kind == 1 {
+            root.act-on-activity(root.menu-key, action);
+        } else if action == 0 {
+            root.windows-expanded = false;
+            root.app-detail-open = true;
+            root.app-selected(root.menu-app.original-index);
+        } else if action == 2 {
+            CollectionState.app-menu(root.menu-app.identity, 2);
+            root.open-settings(2);
+        } else {
+            CollectionState.app-menu(root.menu-app.identity, action == 3 ? 0 : action == 4 ? 1 : 3);
+        }
+    }
+    item-menu := PopupWindow {
+        x: min(root.menu-at.x, root.width - 244px);
+        y: root.menu-at.y + menu-sheet.preferred-height + 8px > root.height ? max(8px, root.menu-at.y - menu-sheet.preferred-height) : root.menu-at.y;
+        width: 236px;
+        height: menu-sheet.preferred-height;
+        close-policy: PopupClosePolicy.close-on-click-outside;
+        Rectangle {
+            background: Theme.surface;
+            border-radius: 12px;
+            border-width: 1px; border-color: Theme.line-strong;
+            drop-shadow-blur: 24px; drop-shadow-offset-y: 8px; drop-shadow-color: Theme.shadow-strong;
+            menu-sheet := VerticalLayout {
+                padding: 6px; spacing: 1px;
+                Text { x: 10px; height: 28px; text: root.menu-name; color: Theme.ink-3; font-size: 12px; vertical-alignment: center; overflow: elide; }
+                if root.menu-kind == 0 : MenuAction { text: @tr("查看详情"); icon: @image-url("icons/app-window.svg"); clicked => { root.menu-act(0); } }
+                if root.menu-kind == 1 : MenuAction { text: @tr("查看这段的快照"); icon: @image-url("icons/photo.svg"); clicked => { root.menu-act(0); } }
+                MenuAction { text: @tr("不再记录这个应用"); icon: @image-url("icons/ban.svg"); clicked => { root.menu-act(3); } }
+                MenuAction { text: @tr("这个应用的规则"); icon: @image-url("icons/adjustments-horizontal.svg"); clicked => { root.menu-act(2); } }
+                Rectangle { height: 9px; Rectangle { x: 6px; width: parent.width - 12px; height: 1px; background: Theme.line; } }
+                // All records leave no stretch narrower than the whole.
+                if root.menu-kind == 1 || !root.stats-all : MenuAction { text: @tr("删除本次记录…"); icon: @image-url("icons/trash.svg"); danger: true; clicked => { root.menu-act(5); } }
+                MenuAction { text: @tr("删除这个应用的全部记录…"); icon: @image-url("icons/trash.svg"); danger: true; clicked => { root.menu-act(4); } }
             }
         }
     }
@@ -1286,6 +1388,7 @@ export component AppWindow inherits Window {
                                                         recording: CollectionState.paused ? 3 : root.collector-state == 2 ? 2 : root.collector-state == 1 ? 1 : 0;
                                                         select => { if item.kind == 5 { root.history-load-more(); } else { root.history-select(item.key); } }
                                                         act(action) => { root.act-on-activity(item.key, action); }
+                                                        menu(position) => { root.open-activity-menu(item.key, item.title, position); }
                                                         resume => { CollectionState.paused = false; CollectionState.action(0); }
                                                         open-settings => { root.open-settings(0); }
                                                     }
@@ -1551,15 +1654,16 @@ export component AppWindow inherits Window {
                                         opacity: root.apps-loading && root.apps.length > 0 ? 0.5 : 1;
                                         overview := VerticalLayout {
                                             padding: 18px; spacing: 14px;
+                                            // Four equal columns, so the dividers stay put as the counts grow.
                                             HorizontalLayout {
                                                 spacing: 18px;
-                                                Metric { label: @tr("聚焦总计"); value: root.focus-total; icon: @image-url("icons/clock.svg"); horizontal-stretch: 1; }
+                                                Metric { label: @tr("聚焦总计"); value: root.focus-total; icon: @image-url("icons/clock.svg"); horizontal-stretch: 1; preferred-width: 0px; }
                                                 Rectangle { width: 1px; background: Theme.line; }
-                                                Metric { label: @tr("应用"); value: root.apps.length; icon: @image-url("icons/layout-grid.svg"); horizontal-stretch: 1; }
+                                                Metric { label: @tr("应用"); value: root.apps.length; icon: @image-url("icons/layout-grid.svg"); horizontal-stretch: 1; preferred-width: 0px; }
                                                 Rectangle { width: 1px; background: Theme.line; }
-                                                Metric { label: @tr("键盘"); value: root.range-keyboard; icon: @image-url("icons/keyboard.svg"); horizontal-stretch: 1; }
+                                                Metric { label: @tr("键盘"); value: root.range-keyboard; count: root.range-keyboard-count; icon: @image-url("icons/keyboard.svg"); horizontal-stretch: 1; preferred-width: 0px; }
                                                 Rectangle { width: 1px; background: Theme.line; }
-                                                Metric { label: @tr("鼠标点击"); value: root.range-mouse; icon: @image-url("icons/mouse.svg"); horizontal-stretch: 1; }
+                                                Metric { label: @tr("鼠标点击"); value: root.range-mouse; count: root.range-mouse-count; icon: @image-url("icons/mouse.svg"); horizontal-stretch: 1; preferred-width: 0px; }
                                             }
                                             if root.apps.length > 0 : HorizontalLayout {
                                                 height: 8px; spacing: 2px;
@@ -1632,8 +1736,27 @@ export component AppWindow inherits Window {
                                                         ShareBar { ratio: app.focus-ratio; tint: app.tint; }
                                                     }
                                                 }
-                                                app-touch := TouchArea { mouse-cursor: pointer; clicked => { app-key.focus(); root.windows-expanded = false; root.app-detail-open = true; root.app-selected(app.original-index); } }
-                                                app-key := FocusScope { width: 0px; key-pressed(event) => { if event.text == " " || event.text == "\n" { root.windows-expanded = false; root.app-detail-open = true; root.app-selected(app.original-index); return accept; } return reject; } }
+                                                app-touch := TouchArea {
+                                                    mouse-cursor: pointer;
+                                                    clicked => { app-key.focus(); root.windows-expanded = false; root.app-detail-open = true; root.app-selected(app.original-index); }
+                                                    // Right-click acts on the application.
+                                                    pointer-event(event) => {
+                                                        if event.button == PointerEventButton.right && event.kind == PointerEventKind.down {
+                                                            root.open-app-menu(app, { x: self.absolute-position.x + self.mouse-x, y: self.absolute-position.y + self.mouse-y });
+                                                        }
+                                                    }
+                                                }
+                                                app-key := FocusScope {
+                                                    width: 0px;
+                                                    key-pressed(event) => {
+                                                        if event.text == " " || event.text == "\n" { root.windows-expanded = false; root.app-detail-open = true; root.app-selected(app.original-index); return accept; }
+                                                        if event.text == Key.Menu || (event.text == Key.F10 && event.modifiers.shift) {
+                                                            root.open-app-menu(app, { x: app-touch.absolute-position.x + 60px, y: app-touch.absolute-position.y + 30px });
+                                                            return accept;
+                                                        }
+                                                        return reject;
+                                                    }
+                                                }
                                             }
                                         }
                                     }
@@ -2142,16 +2265,25 @@ export component AppWindow inherits Window {
 
     if CollectionState.confirm != 0 : ConfirmationDialog {
         z: 100;
-        title: CollectionState.confirm == 1 ? @tr("删除「{}」的全部历史？", CollectionState.app-name) : @tr("合并「{}」与「{}」？", CollectionState.app-name, CollectionState.apps[CollectionState.merge-index]);
-        explanation: CollectionState.confirm == 1 ? CollectionState.impact : CollectionState.merge-preview;
-        detail: CollectionState.confirm == 1 ? @tr("匿名累计总数会保留，快照图片与外部文件也会保留。此操作无法撤销。") : @tr("两者合并成一项显示，原始记录不改写，之后可以在「已有合并」里解除。");
-        accept-text: CollectionState.confirm == 1 ? @tr("删除历史") : @tr("合并");
+        title: CollectionState.confirm == 1 ? @tr("删除「{}」的全部历史？", CollectionState.app-name)
+            : CollectionState.confirm == 3 ? @tr("删除「{}」的本次记录？", CollectionState.app-name)
+            : @tr("合并「{}」与「{}」？", CollectionState.app-name, CollectionState.apps[CollectionState.merge-index]);
+        explanation: CollectionState.confirm == 1 ? CollectionState.impact
+            : CollectionState.confirm == 3 ? @tr("{} 之间它的活动和输入明细会删除，无法恢复。", CollectionState.stretch)
+            : CollectionState.merge-preview;
+        detail: CollectionState.confirm == 1 ? @tr("匿名累计总数会保留，快照图片与外部文件也会保留。此操作无法撤销。")
+            : CollectionState.confirm == 3 ? @tr("贯穿整段的窗口与正在进行的部分保留；匿名累计总数、键位热度和快照不受影响。")
+            : @tr("两者合并成一项显示，原始记录不改写，之后可以在「已有合并」里解除。");
+        accept-text: CollectionState.confirm == 1 ? @tr("删除历史") : CollectionState.confirm == 3 ? @tr("删除记录") : @tr("合并");
         dismissed => { CollectionState.confirm = 0; Theme.modal-open = false; settings-nav.focus(); }
         accepted => {
             if CollectionState.confirm == 1 {
                 CollectionState.delete-confirmed = true;
                 CollectionState.confirm = 0;
                 CollectionState.action(5);
+            } else if CollectionState.confirm == 3 {
+                CollectionState.confirm = 0;
+                CollectionState.action(6);
             } else {
                 CollectionState.merge-confirmed = true;
                 CollectionState.confirm = 0;

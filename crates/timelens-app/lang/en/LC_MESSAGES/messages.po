@@ -1676,3 +1676,15 @@ msgstr "; old encrypted data is cleaned up later: {}"
 #: ui_scale.rs
 msgid "界面缩放设置未能保存：{}"
 msgstr "Could not save the interface scale: {}"
+
+#: collection_ui.rs
+msgid "已不再记录「{}」的活动，已有记录保留，可在应用规则中恢复"
+msgstr "Stopped recording activity of \"{}\"; existing records stay, and App rules can undo this"
+
+#: collection_ui.rs
+msgid "请选择要删除的时段"
+msgstr "Choose a stretch to delete"
+
+#: collection_ui.rs
+msgid "已删除「{}」的本次记录"
+msgstr "Deleted this stretch of \"{}\""

@@ -161,7 +161,7 @@ impl Storage {
             cached.advance(end);
             // With no dirty application the filtered query returns only the totals.
             if !cached.dirty.is_empty() || cached.totals_dirty {
-                let edges = self.merge_links()?;
+                let edges = self.merge_edges()?;
                 let mut roots = BTreeSet::new();
                 let mut sources = BTreeSet::new();
                 for id in &cached.dirty {
@@ -181,6 +181,7 @@ impl Storage {
                 snapshot.left_click_count = refreshed.left_click_count;
                 snapshot.middle_click_count = refreshed.middle_click_count;
                 snapshot.right_click_count = refreshed.right_click_count;
+                snapshot.latest_input_minute_utc_ms = refreshed.latest_input_minute_utc_ms;
                 snapshot.monitoring_gaps = refreshed.monitoring_gaps;
                 sort_applications(&mut snapshot.applications);
                 cached.dirty.clear();
@@ -240,7 +241,7 @@ impl Storage {
     ) -> Result<HashMap<String, Projection>> {
         let start = snapshot.range_started_utc_ms;
         let end = snapshot.range_ended_utc_ms;
-        let edges = self.merge_links()?;
+        let edges = self.merge_edges()?;
         let mut roots = HashMap::new();
         let mut canonical = |id: String| {
             roots
