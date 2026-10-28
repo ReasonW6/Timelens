@@ -13,6 +13,53 @@ use timelens_storage::Storage;
 struct Data {
     apps: Vec<(String, String)>,
     links: Vec<(String, String)>,
+    /// The stretch a deletion of one stretch of history covers, once asked.
+    stretch: Option<(i64, i64)>,
+    /// The rule switches of the application chosen as they were shown:
+    /// activity, input and snapshots.
+    shown: (bool, bool, bool),
+}
+thread_local! {
+    /// The stretch an activity's menu asks to delete next; the statistics
+    /// range otherwise.
+    static NEXT_STRETCH: std::cell::Cell<Option<(i64, i64)>> = const { std::cell::Cell::new(None) };
+}
+/// Ask next to delete `start..end` of an application, as an activity covers.
+pub fn offer_stretch(start: i64, end: i64) {
+    NEXT_STRETCH.with(|next| next.set(Some((start, end))));
+}
+/// What the statistics cover now, unless all records.
+fn statistics_stretch(w: &AppWindow, state: &UiState) -> Option<(i64, i64)> {
+    let now = crate::unix_time_ms();
+    match crate::apps_scope(w, state) {
+        crate::AppsScope::All => None,
+        crate::AppsScope::Range(start, end) => Some((start, end.min(now))),
+        crate::AppsScope::Recent(length) => Some((now.saturating_sub(length), now)),
+    }
+}
+/// A stretch in words, with its date and times of day.
+fn stretch_label(start: i64, end: i64) -> String {
+    let local = |t: i64| chrono::Local.timestamp_millis_opt(t).single();
+    let (Some(from), Some(to)) = (local(start), local(end)) else {
+        return String::new();
+    };
+    let day = |t: &chrono::DateTime<chrono::Local>| t.format(tr!("%-m月%-d日")).to_string();
+    if from.date_naive() == to.date_naive() {
+        format!(
+            "{} {}–{}",
+            day(&from),
+            from.format("%H:%M"),
+            to.format("%H:%M")
+        )
+    } else {
+        format!(
+            "{} {} – {} {}",
+            day(&from),
+            from.format("%H:%M"),
+            day(&to),
+            to.format("%H:%M")
+        )
+    }
 }
 fn lock(s: &Arc<Mutex<Storage>>) -> Result<std::sync::MutexGuard<'_, Storage>> {
     s.lock().map_err(|_| anyhow!(tr!("存储锁不可用")))
@@ -99,15 +146,25 @@ fn refresh(w: &AppWindow, d: &mut Data, s: &Storage) -> Result<()> {
     );
     Ok(())
 }
-fn select(w: &AppWindow, d: &Data, s: &Storage, index: i32) -> Result<()> {
+/// A switch shows a rule on when any application merged into the one chosen
+/// has it, as the collector leaves out what any of them is excluded from.
+fn select(w: &AppWindow, d: &mut Data, s: &Storage, index: i32) -> Result<()> {
     let (id, name) = d.apps.get(index as usize).context(tr!("请选择应用"))?;
     let p = s.collection_policy()?;
+    let shots = s.snapshot_exclusions()?;
+    let members = s.merged_members(id)?;
+    let any = |has: &dyn Fn(&String) -> bool| members.iter().any(has);
+    d.shown = (
+        any(&|m| p.activity.contains(m)),
+        any(&|m| p.input.contains(m)),
+        any(&|m| shots.contains(m)),
+    );
     let g = w.global::<CollectionState>();
     g.set_app_index(index);
     g.set_app_name(name.into());
-    g.set_activity(p.activity.contains(id));
-    g.set_input(p.input.contains(id));
-    g.set_snapshots(s.snapshot_exclusions()?.contains(id));
+    g.set_activity(d.shown.0);
+    g.set_input(d.shown.1);
+    g.set_snapshots(d.shown.2);
     let windows = s.application_deletion_impact(id)?;
     g.set_impact(trn!(windows, "将删除「{}」的 {} 个窗口实例。", name, windows).into());
     g.set_delete_confirmed(false);
@@ -115,6 +172,13 @@ fn select(w: &AppWindow, d: &Data, s: &Storage, index: i32) -> Result<()> {
     g.set_merge_index(-1);
     g.set_merge_preview("".into());
     Ok(())
+}
+/// How saving the switch of a rule changes the lists of the applications
+/// merged into the one chosen. On, every one of them is excluded. Turned off,
+/// none is. Left off, each keeps what it has, such as one that joined the
+/// group after the switch was shown.
+fn rule_change(on: bool, shown: bool) -> Option<bool> {
+    if on || shown { Some(on) } else { None }
 }
 /// The rules two applications share once merged: each list takes both.
 fn merge_preview(d: &Data, s: &Storage, first: i32, second: i32) -> Result<String> {
@@ -146,8 +210,67 @@ pub fn install(
     timeline: Rc<RefCell<UiState>>,
 ) -> Result<()> {
     let data = Rc::new(RefCell::new(Data::default()));
+    SOURCE.with(|source| *source.borrow_mut() = Some((storage.clone(), timeline.clone())));
     let (sender, receiver) = mpsc::channel::<(i32, String, Result<Option<String>, String>)>();
+    // Whether the running rule change came from an application's menu.
+    let from_menu = Rc::new(std::cell::Cell::new(false));
     refresh(w, &mut data.borrow_mut(), &*lock(&storage)?)?;
+    {
+        let weak = w.as_weak();
+        let data = data.clone();
+        let storage = storage.clone();
+        let timeline = timeline.clone();
+        let from_menu = from_menu.clone();
+        w.global::<CollectionState>()
+            .on_app_menu(move |identity, action| {
+                let Some(w) = weak.upgrade() else {
+                    return;
+                };
+                let g = w.global::<CollectionState>();
+                if action == 2 {
+                    // The rules page selects it as it opens.
+                    timeline.borrow_mut().selected_identity = Some(identity.into());
+                    return;
+                }
+                let stretch = NEXT_STRETCH.with(|next| next.take());
+                if g.get_busy() {
+                    return;
+                }
+                let stretch = if action == 3 {
+                    match stretch.or_else(|| statistics_stretch(&w, &timeline.borrow())) {
+                        Some(stretch) => Some(stretch),
+                        None => return,
+                    }
+                } else {
+                    None
+                };
+                let result = (|| {
+                    let s = lock(&storage)?;
+                    let mut d = data.borrow_mut();
+                    refresh(&w, &mut d, &s)?;
+                    let index = d
+                        .apps
+                        .iter()
+                        .position(|(id, _)| id == identity.as_str())
+                        .context(tr!("请选择应用"))?;
+                    select(&w, &mut d, &s, index as i32)
+                })();
+                if let Err(e) = result {
+                    g.set_status(tr!("读取统计失败：{}", e).into());
+                } else if let Some((start, end)) = stretch {
+                    data.borrow_mut().stretch = Some((start, end));
+                    g.set_stretch(stretch_label(start, end).into());
+                    g.set_confirm(3);
+                } else if action == 0 {
+                    // Its other rules stay as they are.
+                    g.set_activity(true);
+                    from_menu.set(true);
+                    g.invoke_action(2);
+                } else {
+                    g.set_confirm(1);
+                }
+            });
+    }
     {
         let weak = w.as_weak();
         let data = data.clone();
@@ -186,7 +309,7 @@ pub fn install(
                         .and_then(|id| d.apps.iter().position(|(i, _)| i == id))
                         .unwrap_or(0);
                     if !d.apps.is_empty() {
-                        select(&w, &d, &s, index as i32)?;
+                        select(&w, &mut d, &s, index as i32)?;
                     }
                     Ok::<_, anyhow::Error>(())
                 })();
@@ -203,7 +326,8 @@ pub fn install(
         let storage = storage.clone();
         w.global::<CollectionState>().on_choose(move |index| {
             if let Some(w) = weak.upgrade()
-                && let Err(e) = lock(&storage).and_then(|s| select(&w, &data.borrow(), &s, index))
+                && let Err(e) =
+                    lock(&storage).and_then(|s| select(&w, &mut data.borrow_mut(), &s, index))
             {
                 w.global::<CollectionState>()
                     .set_status(tr!("读取统计失败：{}", e).into());
@@ -222,10 +346,7 @@ pub fn install(
             return;
         }
         if action == 7 {
-            let result = lock(&worker_storage).and_then(|s| statistics(&w, &s, &timeline.borrow()));
-            if let Err(e) = result {
-                g.set_status(tr!("读取统计失败：{}", e).into());
-            }
+            load_statistics(&w, &worker_storage, &timeline.borrow(), false);
             return;
         }
         let d = state_data.borrow();
@@ -238,6 +359,8 @@ pub fn install(
             .get(g.get_merge_index() as usize)
             .map(|(id, _)| id.clone());
         let link = d.links.get(g.get_link_index() as usize).cloned();
+        let stretch = d.stretch;
+        let shown = d.shown;
         let name = g.get_app_name().to_string();
         drop(d);
         let flags = (
@@ -280,17 +403,29 @@ pub fn install(
                         2 => {
                             let id = id.context(tr!("请选择应用"))?;
                             let mut p = s.collection_policy()?;
-                            for member in s.merged_members(&id)? {
-                                for (list, enabled) in
-                                    [(&mut p.activity, flags.1), (&mut p.input, flags.2)]
-                                {
-                                    if enabled {
-                                        list.insert(member.clone());
-                                    } else {
-                                        list.remove(&member);
+                            let members = s.merged_members(&id)?;
+                            for (list, on, was) in [
+                                (&mut p.activity, flags.1, shown.0),
+                                (&mut p.input, flags.2, shown.1),
+                            ] {
+                                if let Some(excluded) = rule_change(on, was) {
+                                    for member in &members {
+                                        if excluded {
+                                            list.insert(member.clone());
+                                        } else {
+                                            list.remove(member);
+                                        }
                                     }
                                 }
-                                s.set_snapshot_excluded(&member, flags.3, crate::unix_time_ms())?;
+                            }
+                            if let Some(excluded) = rule_change(flags.3, shown.2) {
+                                for member in &members {
+                                    s.set_snapshot_excluded(
+                                        member,
+                                        excluded,
+                                        crate::unix_time_ms(),
+                                    )?;
+                                }
                             }
                             s.set_collection_policy(p)?;
                         }
@@ -309,6 +444,20 @@ pub fn install(
                             let (a, b) = link.context(tr!("请选择合并关联"))?;
                             s.set_application_merge(&a, &b, false)?;
                             crate::history::invalidate();
+                        }
+                        6 => {
+                            let (start, end) = stretch.context(tr!("请选择要删除的时段"))?;
+                            if s.delete_application_activity_between(
+                                &id.context(tr!("请选择应用"))?,
+                                start,
+                                end,
+                            )? == 0
+                            {
+                                // Nothing was there to delete, which it says
+                                // instead of that it is deleted.
+                                return Ok(Some(String::new()));
+                            }
+                            crate::data_ui::dataset_changed();
                         }
                         5 => {
                             if !confirmed {
@@ -336,6 +485,7 @@ pub fn install(
         let g = w.global::<CollectionState>();
         while let Ok((action, name, result)) = receiver.try_recv() {
             g.set_busy(false);
+            let menu = action == 2 && from_menu.replace(false);
             if action != 1
                 && let Ok(s) = storage.try_lock()
             {
@@ -345,7 +495,7 @@ pub fn install(
                 if refresh(&w, &mut d, &s).is_ok() && !d.apps.is_empty() {
                     let index = g.get_app_index().clamp(0, d.apps.len() as i32 - 1);
                     if g.get_app_index() >= 0 || action == 5 {
-                        let _ = select(&w, &d, &s, index);
+                        let _ = select(&w, &mut d, &s, index);
                     }
                 }
             }
@@ -358,6 +508,15 @@ pub fn install(
                     };
                     g.set_status(tr!("{}：{}", what, e).into());
                 }
+                Ok(None) if menu => {
+                    g.set_status(
+                        tr!(
+                            "已不再记录「{}」的活动，已有记录保留，可在应用规则中恢复",
+                            name
+                        )
+                        .into(),
+                    );
+                }
                 Ok(None) if action == 2 => {
                     g.set_status(tr!("已更新「{}」的规则，立即生效，不影响已有记录", name).into());
                 }
@@ -366,6 +525,8 @@ pub fn install(
                 }
                 Ok(None) if action == 4 => g.set_status(tr!("已解除合并，恢复合并前的规则").into()),
                 Ok(None) if action == 5 => g.set_status(tr!("已删除「{}」的历史", name).into()),
+                Ok(None) if action == 6 => g.set_status(tr!("已删除「{}」的本次记录", name).into()),
+                Ok(Some(_)) if action == 6 => g.set_status(tr!("这段时间没有可删除的记录").into()),
                 Ok(None) if action == 0 => g.set_status(
                     if g.get_paused() {
                         tr!("已暂停记录")
@@ -388,7 +549,7 @@ pub fn install(
                                 g.set_apps(strings(d.apps.iter().map(|(_, n)| n.clone())));
                             }
                             let index = d.apps.iter().position(|(i, _)| i == &id).unwrap_or(0);
-                            let _ = select(&w, &d, &s, index as i32);
+                            let _ = select(&w, &mut d, &s, index as i32);
                         }
                     }
                 }
@@ -435,76 +596,169 @@ fn date_label(date: &str) -> String {
         .unwrap_or_else(|_| date.to_owned())
 }
 
-fn statistics(w: &AppWindow, s: &Storage, range: &UiState) -> Result<()> {
-    let g = w.global::<CollectionState>();
+/// What the statistics page reads for a range: the dates it covers, whether
+/// whole, and its times unless it is all records.
+struct StatisticsAsk {
+    dates: (String, String),
+    whole: bool,
+    range: Option<(i64, i64)>,
+}
+
+/// What the statistics page shows of a range, read off the UI thread.
+struct Statistics {
+    keys: KeyTotals,
+    totals: [u64; 4],
+    length: f64,
+    system: Vec<(String, u64)>,
+    marks: std::collections::BTreeMap<String, u64>,
+}
+
+/// How many statistics reads were asked for, since only the latest shows,
+/// and whether it is under way.
+#[derive(Default)]
+struct StatisticsReads {
+    asked: u64,
+    pending: bool,
+}
+
+/// The storage and the range the periodic refresh reads statistics from.
+type StatisticsSource = (Arc<Mutex<Storage>>, Rc<RefCell<UiState>>);
+
+thread_local! {
+    static READS: RefCell<StatisticsReads> = RefCell::new(StatisticsReads::default());
+    static SOURCE: RefCell<Option<StatisticsSource>> = const { RefCell::new(None) };
+}
+
+fn read_statistics(s: &Storage, ask: &StatisticsAsk) -> Result<Statistics> {
+    let (first, last) = &ask.dates;
+    let [_, left, middle, right] = s.input_totals_between(first, last)?;
+    let now = crate::unix_time_ms();
+    let keys = KeyTotals {
+        keys: s
+            .physical_key_frequencies_between(first, last)?
+            .into_iter()
+            .collect(),
+        mouse: [left, middle, right],
+        stored_minutes: s.stored_input_minutes_near(now)?,
+        refreshed: std::time::Instant::now(),
+    };
+    // All records start with the first one, not at the query's lower bound.
+    let (start, end) = match ask.range {
+        Some(range) => range,
+        None => {
+            // System states may start before the first application window.
+            let first = [s.earliest_activity_utc_ms()?, s.earliest_system_utc_ms()?]
+                .into_iter()
+                .flatten()
+                .min();
+            (first.unwrap_or(now), now)
+        }
+    };
+    Ok(Statistics {
+        keys,
+        totals: s.permanent_input_totals()?,
+        length: end.saturating_sub(start).max(1) as f64,
+        system: s
+            .system_totals(start, end)?
+            .into_iter()
+            .filter(|(_, ms)| *ms > 0)
+            .collect(),
+        marks: s.system_marks(start, end)?,
+    })
+}
+
+/// Read the statistics of the chosen range in the background and show them
+/// once read. A periodic refresh is `quiet`: failing, it says nothing and
+/// waits as long as after a read that worked.
+fn load_statistics(w: &AppWindow, storage: &Arc<Mutex<Storage>>, range: &UiState, quiet: bool) {
     let all = w.get_stats_all();
     let (first, last, whole) = range_dates((!all).then_some(range));
     if first.is_empty() {
-        anyhow::bail!(tr!("所选时段不可用"));
+        if !quiet {
+            w.global::<CollectionState>()
+                .set_status(tr!("读取统计失败：{}", tr!("所选时段不可用")).into());
+        }
+        return;
     }
+    let ask = StatisticsAsk {
+        dates: (first, last),
+        whole,
+        range: (!all).then_some((range.range_started_utc_ms, range.range_ended_utc_ms)),
+    };
+    let asked = READS.with(|reads| {
+        let mut reads = reads.borrow_mut();
+        reads.asked += 1;
+        reads.pending = true;
+        reads.asked
+    });
+    let storage = storage.clone();
+    let weak = w.as_weak();
+    std::thread::spawn(move || {
+        let read = lock(&storage).and_then(|s| read_statistics(&s, &ask));
+        let _ = weak.upgrade_in_event_loop(move |w| {
+            let latest = READS.with(|reads| {
+                let mut reads = reads.borrow_mut();
+                let latest = reads.asked == asked;
+                reads.pending &= !latest;
+                latest
+            });
+            if !latest {
+                return;
+            }
+            match read {
+                Ok(statistics) => show_statistics(&w, &ask, statistics),
+                Err(e) => {
+                    KEYS.with(|keys| {
+                        if let Some(stored) = &mut keys.borrow_mut().stored {
+                            stored.refreshed = std::time::Instant::now();
+                        }
+                    });
+                    if !quiet {
+                        w.global::<CollectionState>()
+                            .set_status(tr!("读取统计失败：{}", e).into());
+                    }
+                }
+            }
+        });
+    });
+}
+
+/// Read the key statistics again, as they are shown live.
+pub fn refresh_keys(w: &AppWindow) {
+    SOURCE.with(|source| {
+        if let Some((storage, range)) = &*source.borrow() {
+            load_statistics(w, storage, &range.borrow(), true);
+        }
+    });
+}
+
+fn show_statistics(w: &AppWindow, ask: &StatisticsAsk, statistics: Statistics) {
+    let g = w.global::<CollectionState>();
+    let (first, last) = &ask.dates;
     g.set_scope(
-        if all {
+        if ask.range.is_none() {
             tr!("全部记录").to_owned()
         } else if first == last {
-            date_label(&first)
+            date_label(first)
         } else {
-            format!("{}–{}", date_label(&first), date_label(&last))
+            format!("{}–{}", date_label(first), date_label(last))
         }
         .into(),
     );
-    g.set_partial_day(!whole);
-    let frequencies: std::collections::BTreeMap<_, _> = s
-        .physical_key_frequencies_between(&first, &last)?
-        .into_iter()
-        .collect();
-    let max = KEYBOARD
-        .iter()
-        .filter_map(|(code, ..)| frequencies.get(code).copied())
-        .max()
-        .unwrap_or(1)
-        .max(1) as f32;
-    let keys = KEYBOARD
-        .iter()
-        .map(|&(code, label, x, y, w, h)| {
-            let count = frequencies.get(&code).copied().unwrap_or(0);
-            KeyCell {
-                label: label.into(),
-                count: crate::grouped_count(count).into(),
-                strength: (count as f32 / max).sqrt(),
-                x,
-                y,
-                w,
-                h,
-            }
-        })
-        .collect::<Vec<_>>();
-    let unplaced = frequencies
-        .iter()
-        .filter(|(code, _)| !KEYBOARD.iter().any(|(placed, ..)| placed == *code))
-        .map(|(_, count)| count)
-        .sum::<u64>();
-    g.set_unplaced_keys(if unplaced == 0 {
-        "".into()
-    } else {
-        trn!(
-            unplaced,
-            "另有 {} 次按键不在这张键盘图上，例如 Home、Delete 等编辑键或输入法切换键。",
-            crate::grouped_count(unplaced)
-        )
-        .into()
+    g.set_partial_day(!ask.whole);
+    KEYS.with(|keys| {
+        let mut keys = keys.borrow_mut();
+        // Another range starts afresh, without lighting what it adds.
+        if keys.dates != ask.dates {
+            *keys = KeyView {
+                dates: ask.dates.clone(),
+                ..KeyView::default()
+            };
+        }
+        keys.stored = Some(statistics.keys);
     });
-    let [_, left, middle, right] = s.input_totals_between(&first, &last)?;
-    let most = left.max(middle).max(right).max(1) as f32;
-    let heat = |count: u64| ButtonHeat {
-        count: crate::grouped_count(count).into(),
-        strength: (count as f32 / most).sqrt(),
-    };
-    g.set_mouse_left(heat(left));
-    g.set_mouse_middle(heat(middle));
-    g.set_mouse_right(heat(right));
-    g.set_keys(Rc::new(VecModel::from(keys)).into());
-    let totals = s.permanent_input_totals()?;
-    let [keyboard, left, middle, right] = totals.map(crate::grouped_count);
+    show_keys(w);
+    let [keyboard, left, middle, right] = statistics.totals.map(crate::grouped_count);
     g.set_totals(
         tr!(
             "键盘 {} · 左键 {} · 中键 {} · 右键 {}",
@@ -515,24 +769,8 @@ fn statistics(w: &AppWindow, s: &Storage, range: &UiState) -> Result<()> {
         )
         .into(),
     );
-    // All records start with the first one, not at the query's lower bound.
-    let now = crate::unix_time_ms();
-    let (start, end) = if all {
-        // System states may start before the first application window.
-        let first = [s.earliest_activity_utc_ms()?, s.earliest_system_utc_ms()?]
-            .into_iter()
-            .flatten()
-            .min();
-        (first.unwrap_or(now), now)
-    } else {
-        (range.range_started_utc_ms, range.range_ended_utc_ms)
-    };
-    let length = end.saturating_sub(start).max(1) as f64;
-    let mut totals = s
-        .system_totals(start, end)?
-        .into_iter()
-        .filter(|(_, ms)| *ms > 0)
-        .collect::<Vec<_>>();
+    let length = statistics.length;
+    let mut totals = statistics.system;
     totals.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
     let rows = totals
         .into_iter()
@@ -553,7 +791,8 @@ fn statistics(w: &AppWindow, s: &Storage, range: &UiState) -> Result<()> {
     g.set_system(Rc::new(VecModel::from(rows)).into());
     // Instants take no time; they are counted instead.
     g.set_system_marks(
-        s.system_marks(start, end)?
+        statistics
+            .marks
             .into_iter()
             .map(|(kind, count)| {
                 trn!(
@@ -567,7 +806,141 @@ fn statistics(w: &AppWindow, s: &Storage, range: &UiState) -> Result<()> {
             .join(" · ")
             .into(),
     );
-    Ok(())
+}
+/// The key and mouse counts stored for the dates shown, and when they were read.
+struct KeyTotals {
+    keys: std::collections::BTreeMap<u32, u64>,
+    mouse: [u64; 3],
+    /// The recent minutes they include, whose live previews are left out.
+    stored_minutes: std::collections::BTreeSet<i64>,
+    refreshed: std::time::Instant,
+}
+
+/// The key statistics on screen: the dates they cover, their stored counts,
+/// what each mouse button last showed, and what lights each key or button.
+/// A key's light flips each time it is pressed live, telling nothing of how
+/// often.
+#[derive(Default)]
+struct KeyView {
+    dates: (String, String),
+    stored: Option<KeyTotals>,
+    showing: bool,
+    pulses: std::collections::BTreeMap<u32, i32>,
+    mouse_shown: [u64; 3],
+    mouse_pulses: [i32; 3],
+}
+
+thread_local! {
+    static KEYS: RefCell<KeyView> = RefCell::new(KeyView::default());
+}
+
+/// Stored counts are read again this often while shown live: a key's count
+/// goes up only once its minute is stored, and previews never wait long for
+/// the minutes they stand in for.
+const KEYS_REFRESH: std::time::Duration = std::time::Duration::from_secs(30);
+
+pub fn keys_due(now: std::time::Instant) -> bool {
+    !READS.with(|reads| reads.borrow().pending)
+        && KEYS.with(|keys| {
+            keys.borrow()
+                .stored
+                .as_ref()
+                .is_some_and(|stored| now.duration_since(stored.refreshed) >= KEYS_REFRESH)
+        })
+}
+
+/// Light the keys just pressed on `date`, if the dates shown include it.
+pub fn flash_keys(date: &str, codes: &[u32]) {
+    KEYS.with(|view| {
+        let view = &mut *view.borrow_mut();
+        let (first, last) = &view.dates;
+        if view.stored.is_none() || !(first.as_str()..=last.as_str()).contains(&date) {
+            return;
+        }
+        for code in codes {
+            *view.pulses.entry(*code).or_default() ^= 1;
+        }
+    });
+}
+
+/// Show the key and mouse statistics: the stored counts and, for the dates
+/// shown, live clicks not stored yet. Keys light as they are pressed live
+/// (see [`flash_keys`]); their counts go up once their minute is stored.
+pub fn show_keys(w: &AppWindow) {
+    KEYS.with(|view| {
+        let view = &mut *view.borrow_mut();
+        let Some(stored) = &view.stored else {
+            return;
+        };
+        let (first, last) = &view.dates;
+        let live = crate::live_input::unstored(&stored.stored_minutes, |input| {
+            (first.as_str()..=last.as_str()).contains(&input.local_date.as_str())
+        });
+        let frequencies = &stored.keys;
+        // What shows first lights nothing.
+        let first_show = !std::mem::replace(&mut view.showing, true);
+        let max = KEYBOARD
+            .iter()
+            .filter_map(|(code, ..)| frequencies.get(code).copied())
+            .max()
+            .unwrap_or(1)
+            .max(1) as f32;
+        let keys = KEYBOARD
+            .iter()
+            .map(|&(code, label, x, y, w, h)| {
+                let count = frequencies.get(&code).copied().unwrap_or(0);
+                KeyCell {
+                    label: label.into(),
+                    count: crate::grouped_count(count).into(),
+                    strength: (count as f32 / max).sqrt(),
+                    pulse: view.pulses.get(&code).copied().unwrap_or(0),
+                    x,
+                    y,
+                    w,
+                    h,
+                }
+            })
+            .collect::<Vec<_>>();
+        let unplaced = frequencies
+            .iter()
+            .filter(|(code, _)| !KEYBOARD.iter().any(|(placed, ..)| placed == *code))
+            .map(|(_, count)| count)
+            .sum::<u64>();
+        let g = w.global::<CollectionState>();
+        g.set_unplaced_keys(if unplaced == 0 {
+            "".into()
+        } else {
+            trn!(
+                unplaced,
+                "另有 {} 次按键不在这张键盘图上，例如 Home、Delete 等编辑键或输入法切换键。",
+                crate::grouped_count(unplaced)
+            )
+            .into()
+        });
+        let mouse: [u64; 3] = std::array::from_fn(|i| stored.mouse[i] + live[i + 1]);
+        for ((count, shown), pulse) in mouse
+            .iter()
+            .zip(view.mouse_shown)
+            .zip(&mut view.mouse_pulses)
+        {
+            if !first_show && *count > shown {
+                *pulse += 1;
+            }
+        }
+        view.mouse_shown = mouse;
+        let most = mouse.into_iter().max().unwrap_or(0).max(1) as f32;
+        let heat = |i: usize| ButtonHeat {
+            count: crate::grouped_count(mouse[i]).into(),
+            strength: (mouse[i] as f32 / most).sqrt(),
+            pulse: view.mouse_pulses[i],
+        };
+        g.set_mouse_left(heat(0));
+        g.set_mouse_middle(heat(1));
+        g.set_mouse_right(heat(2));
+        g.set_keys(crate::ui_model::sync(g.get_keys(), keys, |a, b| {
+            a.label == b.label && a.x == b.x && a.y == b.y
+        }));
+    });
 }
 fn system_label(kind: &str) -> &str {
     match kind {
@@ -685,9 +1058,19 @@ const KEYBOARD: &[(u32, &str, f32, f32, f32, f32)] = &[
 
 #[cfg(test)]
 mod tests {
-    use super::{KEYBOARD, range_dates};
+    use super::{KEYBOARD, range_dates, rule_change};
     use crate::UiState;
     use chrono::TimeZone;
+
+    #[test]
+    fn saving_a_group_rule_never_lifts_an_exclusion_not_shown() {
+        // On adds every member; turned off from on lifts it from all of them.
+        assert_eq!(rule_change(true, false), Some(true));
+        assert_eq!(rule_change(true, true), Some(true));
+        assert_eq!(rule_change(false, true), Some(false));
+        // Left off, a member that has the rule anyway keeps it.
+        assert_eq!(rule_change(false, false), None);
+    }
 
     #[test]
     fn range_dates_cover_whole_days_and_flag_parts_of_days() {

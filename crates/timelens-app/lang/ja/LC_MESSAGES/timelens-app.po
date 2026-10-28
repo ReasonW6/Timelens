@@ -1723,3 +1723,35 @@ msgstr "表示倍率"
 #: main-window.slint
 msgid "在 Windows 显示缩放的基础上放大或缩小界面；屏幕放不下时自动减小放大比例。"
 msgstr "Windows の表示スケールに加えて画面を拡大・縮小します。画面に収まらないときは拡大率を自動で下げます。"
+
+#: main-window.slint
+msgid "查看详情"
+msgstr "詳細を表示"
+
+#: main-window.slint timeline.slint
+msgid "不再记录这个应用"
+msgstr "このアプリを記録しない"
+
+#: main-window.slint timeline.slint
+msgid "删除这个应用的全部记录…"
+msgstr "このアプリの記録をすべて削除…"
+
+#: main-window.slint
+msgid "删除本次记录…"
+msgstr "今回の記録を削除…"
+
+#: main-window.slint
+msgid "删除「{}」的本次记录？"
+msgstr "「{}」の今回の記録を削除しますか？"
+
+#: main-window.slint
+msgid "{} 之间它的活动和输入明细会删除，无法恢复。"
+msgstr "{} のこのアプリのアクティビティと入力の詳細が削除され、元に戻せません。"
+
+#: main-window.slint
+msgid "贯穿整段的窗口与正在进行的部分保留；匿名累计总数、键位热度和快照不受影响。"
+msgstr "期間全体にまたがるウィンドウと進行中の部分は残ります。匿名の累計、キーのヒートマップ、スナップショットには影響しません。"
+
+#: main-window.slint
+msgid "删除记录"
+msgstr "記録を削除"

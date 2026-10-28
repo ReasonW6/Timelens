@@ -212,7 +212,7 @@ cargo build --release -p timelens-app -p timelens-collector
 - **2026-09-06 · Paper 原生界面**：六个主页面和恢复窗口按选定的设计重做，验收过程见[界面验收](design-qa.md)。
 - **2026-09-05 · 里程碑 1–5**：窗口与输入采集、时间线、快照、便携备份恢复、数据迁移和安装维护全部实现。
 
-当前协议版本为 v4，数据库 schema 为 v15。
+当前协议版本为 v6，数据库 schema 为 v16。
 
 ## 许可证
 

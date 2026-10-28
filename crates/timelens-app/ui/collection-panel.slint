@@ -2,8 +2,9 @@ import { ComboBox, ScrollView } from "std-widgets.slint";
 import { Theme, Action, Badge, Label, Note, SectionTitle, Rule, CheckBox, StatusLine, Segmented, Segment, Switch, SettingRow, SettingsHeader, SettingsGroup, SettingExpander } from "theme.slint";
 
 // A key's position and size are in key units on the 93-key board.
-export struct KeyCell { label: string, count: string, strength: float, x: float, y: float, w: float, h: float }
-export struct ButtonHeat { count: string, strength: float }
+// `pulse` changes each time the key or button is pressed, which lights it.
+export struct KeyCell { label: string, count: string, strength: float, pulse: int, x: float, y: float, w: float, h: float }
+export struct ButtonHeat { count: string, strength: float, pulse: int }
 // A system state over the range: its name, time and share of the range.
 export struct SystemRow { label: string, duration: string, share: string, ratio: float }
 export global CollectionState {
@@ -30,9 +31,15 @@ export global CollectionState {
     // The chosen application's name, and the rules a merge would leave both.
     in-out property <string> app-name;
     in-out property <string> merge-preview;
-    // The confirmation open over the window: 1 delete history, 2 merge.
+    // The confirmation open over the window: 1 delete history, 2 merge, 3
+    // delete one stretch of history, which `stretch` names.
     in-out property <int> confirm;
+    in-out property <string> stretch;
     callback merge-chosen(int);
+    // An application's right-click menu: 0 stop recording its activity, 1 ask
+    // to delete its history, 2 open the rules page on it, 3 ask to delete the
+    // stretch of it on screen.
+    callback app-menu(string, int);
     in-out property <string> status;
     // What the key statistics cover, and whether that is only part of a day,
     // which key and mouse counts, kept per day, cannot show.
@@ -67,6 +74,23 @@ global Heat {
     }
 }
 
+// Lights up for a moment each time `pulse` goes up, then fades.
+component Flash inherits Rectangle {
+    in property <int> pulse;
+    private property <bool> lit;
+    background: Theme.warn-line;
+    opacity: 0;
+    changed pulse => { root.lit = true; }
+    Timer { interval: 90ms; running: root.lit; triggered => { root.lit = false; } }
+    states [
+        lit when root.lit : {
+            opacity: 0.85;
+            in { animate opacity { duration: 40ms; } }
+            out { animate opacity { duration: 520ms; easing: ease-out; } }
+        }
+    ]
+}
+
 // One mouse button: the body's outline clipped to the button's part, so each
 // button keeps the rounded corners of the mouse it sits on.
 component MouseButtonArea inherits Rectangle {
@@ -81,6 +105,8 @@ component MouseButtonArea inherits Rectangle {
         width: root.body-width; height: root.body-height;
         border-radius: root.body-radius;
         background: Theme.heat-hot.mix(Theme.heat-cold, root.heat.strength);
+        animate background { duration: 300ms; easing: ease-out; }
+        Flash { pulse: root.heat.pulse; border-radius: parent.border-radius; }
     }
     Text {
         y: root.height - 30px; height: 20px;
@@ -118,6 +144,7 @@ component MouseHeatMap inherits Rectangle {
         border-width: 2px;
         border-color: Theme.layer;
         background: Theme.heat-hot.mix(Theme.heat-cold, CollectionState.mouse-middle.strength);
+        Flash { pulse: CollectionState.mouse-middle.pulse; border-radius: parent.border-radius; }
     }
     Rectangle { y: root.button-height; height: 1px; background: Theme.line; }
     Rectangle { border-radius: root.radius; border-width: 1px; border-color: Theme.outline; }
@@ -325,6 +352,8 @@ export component CollectionPanel inherits Rectangle {
                             border-color: key.strength > 0 ? Theme.heat-line : Theme.line;
                             // Slint mix() applies the factor to its receiver: zero stays paper-gray.
                             background: Theme.heat-hot.mix(Theme.heat-cold, key.strength);
+                            animate background { duration: 300ms; easing: ease-out; }
+                            Flash { pulse: key.pulse; border-radius: 5px; }
                             VerticalLayout {
                                 padding: 3px;
                                 spacing: 1px;

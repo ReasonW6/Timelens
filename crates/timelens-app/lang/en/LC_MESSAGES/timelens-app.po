@@ -1726,3 +1726,35 @@ msgstr "Interface scale"
 #: main-window.slint
 msgid "在 Windows 显示缩放的基础上放大或缩小界面；屏幕放不下时自动减小放大比例。"
 msgstr "Enlarges or shrinks the interface on top of the Windows display scale; enlarging eases off when the screen cannot fit it."
+
+#: main-window.slint
+msgid "查看详情"
+msgstr "View details"
+
+#: main-window.slint timeline.slint
+msgid "不再记录这个应用"
+msgstr "Stop recording this app"
+
+#: main-window.slint timeline.slint
+msgid "删除这个应用的全部记录…"
+msgstr "Delete all records of this app…"
+
+#: main-window.slint
+msgid "删除本次记录…"
+msgstr "Delete this stretch…"
+
+#: main-window.slint
+msgid "删除「{}」的本次记录？"
+msgstr "Delete this stretch of \"{}\"?"
+
+#: main-window.slint
+msgid "{} 之间它的活动和输入明细会删除，无法恢复。"
+msgstr "Its activity and input details between {} will be deleted and cannot be restored."
+
+#: main-window.slint
+msgid "贯穿整段的窗口与正在进行的部分保留；匿名累计总数、键位热度和快照不受影响。"
+msgstr "Windows that span the whole stretch and anything still in progress stay; anonymous totals, key heat and snapshots are not affected."
+
+#: main-window.slint
+msgid "删除记录"
+msgstr "Delete records"

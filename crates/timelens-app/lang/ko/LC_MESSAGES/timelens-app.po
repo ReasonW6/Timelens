@@ -1723,3 +1723,35 @@ msgstr "인터페이스 배율"
 #: main-window.slint
 msgid "在 Windows 显示缩放的基础上放大或缩小界面；屏幕放不下时自动减小放大比例。"
 msgstr "Windows 디스플레이 배율에 더해 화면을 확대하거나 축소합니다. 화면에 다 들어가지 않으면 확대 비율을 자동으로 낮춥니다."
+
+#: main-window.slint
+msgid "查看详情"
+msgstr "세부 정보 보기"
+
+#: main-window.slint timeline.slint
+msgid "不再记录这个应用"
+msgstr "이 앱 기록하지 않기"
+
+#: main-window.slint timeline.slint
+msgid "删除这个应用的全部记录…"
+msgstr "이 앱의 모든 기록 삭제…"
+
+#: main-window.slint
+msgid "删除本次记录…"
+msgstr "이번 기록 삭제…"
+
+#: main-window.slint
+msgid "删除「{}」的本次记录？"
+msgstr "'{}'의 이번 기록을 삭제할까요?"
+
+#: main-window.slint
+msgid "{} 之间它的活动和输入明细会删除，无法恢复。"
+msgstr "{} 사이의 활동과 입력 세부 정보가 삭제되며 복구할 수 없습니다."
+
+#: main-window.slint
+msgid "贯穿整段的窗口与正在进行的部分保留；匿名累计总数、键位热度和快照不受影响。"
+msgstr "구간 전체에 걸친 창과 진행 중인 부분은 유지되며, 익명 누적 합계, 키 히트맵과 스냅샷은 영향을 받지 않습니다."
+
+#: main-window.slint
+msgid "删除记录"
+msgstr "기록 삭제"

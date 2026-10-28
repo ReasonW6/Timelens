@@ -1649,3 +1649,19 @@ msgstr "。古い暗号化データはあとで整理します: {}"
 #: ui_scale.rs
 msgid "界面缩放设置未能保存：{}"
 msgstr "表示倍率の設定を保存できなかった: {}"
+
+#: collection_ui.rs
+msgid "已不再记录「{}」的活动，已有记录保留，可在应用规则中恢复"
+msgstr "「{}」のアクティビティを記録しないようにしました。既存の記録は残り、アプリのルールで元に戻せます"
+
+#: collection_ui.rs
+msgid "请选择要删除的时段"
+msgstr "削除する期間を選択してください"
+
+#: collection_ui.rs
+msgid "已删除「{}」的本次记录"
+msgstr "「{}」の今回の記録を削除しました"
+
+#: collection_ui.rs
+msgid "这段时间没有可删除的记录"
+msgstr "この時間帯に削除できる記録はありません"

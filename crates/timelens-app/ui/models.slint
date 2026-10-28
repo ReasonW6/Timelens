@@ -22,6 +22,8 @@ export struct HistoryItem {
     stack: [StackApp], more: int,
     shares: [ShareSlice],
     rail-top: bool, rail-bottom: bool,
+    // An activity of an application known by identity, which its menu acts on.
+    has-app: bool,
 }
 // Where each day's rows start and end in the list, for the sticky day header.
 export struct DayAnchor { title: string, subtitle: string, duration: string, apps: string, shares: [ShareSlice], top: length, bottom: length }

@@ -1723,3 +1723,35 @@ msgstr "介面縮放"
 #: main-window.slint
 msgid "在 Windows 显示缩放的基础上放大或缩小界面；屏幕放不下时自动减小放大比例。"
 msgstr "在 Windows 顯示縮放的基礎上放大或縮小介面；螢幕放不下時自動減小放大比例。"
+
+#: main-window.slint
+msgid "查看详情"
+msgstr "檢視詳細資料"
+
+#: main-window.slint timeline.slint
+msgid "不再记录这个应用"
+msgstr "不再記錄這個應用程式"
+
+#: main-window.slint timeline.slint
+msgid "删除这个应用的全部记录…"
+msgstr "刪除這個應用程式的全部記錄…"
+
+#: main-window.slint
+msgid "删除本次记录…"
+msgstr "刪除本次記錄…"
+
+#: main-window.slint
+msgid "删除「{}」的本次记录？"
+msgstr "刪除「{}」的本次記錄？"
+
+#: main-window.slint
+msgid "{} 之间它的活动和输入明细会删除，无法恢复。"
+msgstr "{} 之間它的活動和輸入明細會刪除，無法復原。"
+
+#: main-window.slint
+msgid "贯穿整段的窗口与正在进行的部分保留；匿名累计总数、键位热度和快照不受影响。"
+msgstr "貫穿整段的視窗與正在進行的部分保留；匿名累計總數、按鍵熱度和快照不受影響。"
+
+#: main-window.slint
+msgid "删除记录"
+msgstr "刪除記錄"

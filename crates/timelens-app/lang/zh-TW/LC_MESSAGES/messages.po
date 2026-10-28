@@ -1649,3 +1649,19 @@ msgstr "；舊加密資料稍後清理：{}"
 #: ui_scale.rs
 msgid "界面缩放设置未能保存：{}"
 msgstr "介面縮放設定未能儲存：{}"
+
+#: collection_ui.rs
+msgid "已不再记录「{}」的活动，已有记录保留，可在应用规则中恢复"
+msgstr "已不再記錄「{}」的活動，已有記錄保留，可在應用程式規則中恢復"
+
+#: collection_ui.rs
+msgid "请选择要删除的时段"
+msgstr "請選擇要刪除的時段"
+
+#: collection_ui.rs
+msgid "已删除「{}」的本次记录"
+msgstr "已刪除「{}」的本次記錄"
+
+#: collection_ui.rs
+msgid "这段时间没有可删除的记录"
+msgstr "這段時間沒有可刪除的記錄"
