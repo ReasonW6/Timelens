@@ -278,13 +278,23 @@ impl Storage {
         let high = bound(last, 2).unwrap_or(i64::MAX);
         Ok(self.connection.query_row("SELECT COALESCE(SUM(keyboard_count),0),COALESCE(SUM(left_click_count),0),COALESCE(SUM(middle_click_count),0),COALESCE(SUM(right_click_count),0) FROM input_minute_buckets WHERE minute_started_utc_ms >= ?3 AND minute_started_utc_ms < ?4 AND local_date BETWEEN ?1 AND ?2",params![first, last, low, high],|r|Ok([r.get::<_,i64>(0)?.max(0) as u64,r.get::<_,i64>(1)?.max(0) as u64,r.get::<_,i64>(2)?.max(0) as u64,r.get::<_,i64>(3)?.max(0) as u64]))?)
     }
-    /// The start of the latest minute the stored input counts include, if any.
-    pub fn latest_input_minute_utc_ms(&self) -> Result<Option<i64>> {
-        Ok(self.connection.query_row(
-            "SELECT MAX(minute_started_utc_ms) FROM input_minute_buckets",
-            [],
-            |row| row.get(0),
-        )?)
+    /// The starts of the minutes within twenty minutes of `now` whose input is
+    /// stored. Live previews are told apart by minute against these rather
+    /// than against the latest one, which deleting history moves back and a
+    /// clock set back leaves ahead.
+    pub fn stored_input_minutes_near(&self, now: i64) -> Result<BTreeSet<i64>> {
+        const NEAR: i64 = 20 * 60_000;
+        Ok(self
+            .connection
+            .prepare(
+                "SELECT DISTINCT minute_started_utc_ms FROM input_minute_buckets
+                 WHERE minute_started_utc_ms >= ?1 AND minute_started_utc_ms < ?2",
+            )?
+            .query_map(
+                params![now.saturating_sub(NEAR), now.saturating_add(NEAR)],
+                |row| row.get(0),
+            )?
+            .collect::<rusqlite::Result<_>>()?)
     }
     /// Presses per physical key over the local dates from `first` to `last`,
     /// both included (YYYY-MM-DD).
@@ -361,7 +371,9 @@ impl Storage {
     /// what crosses one edge is cut back to it. A window or state that runs
     /// through the whole stretch stays: splitting it would invent a boundary.
     /// Nothing after now changes, so open windows and states carry on, and
-    /// input goes by whole minutes. Returns the rows removed or cut.
+    /// input goes by whole minutes. What the collector still has on its way
+    /// for the stretch is kept out as it arrives. Returns the rows removed or
+    /// cut; with none, nothing is written.
     pub fn delete_application_activity_between(
         &self,
         identity: &str,
@@ -372,9 +384,6 @@ impl Storage {
         if end <= start {
             return Ok(0);
         }
-        self.timeline_cache
-            .borrow_mut()
-            .clear(self.connection.total_changes());
         let members = self.merged_members(identity)?;
         let tx = Transaction::new_unchecked(&self.connection, TransactionBehavior::Immediate)?;
         let mut rows = 0;
@@ -419,12 +428,24 @@ impl Storage {
                 bounds,
             )? as u64;
         }
+        if rows + input_rows == 0 {
+            return Ok(0);
+        }
+        for member in &members {
+            tx.execute(
+                "INSERT INTO deleted_application_stretches VALUES(?1,?2,?3)",
+                params![member, start, end],
+            )?;
+        }
         for (category, count) in [("activity", rows), ("input", input_rows)] {
             if count > 0 {
                 tx.execute("INSERT INTO data_availability(data_class,status,started_utc_ms,ended_utc_ms,reason,item_count) VALUES(?,'cleaned',?,?,'user_deleted',?)",params![category,start,end,count as i64])?;
             }
         }
         tx.commit()?;
+        self.timeline_cache
+            .borrow_mut()
+            .clear(self.connection.total_changes());
         self.connection
             .execute_batch("PRAGMA wal_checkpoint(TRUNCATE); VACUUM;")?;
         Ok(rows + input_rows)
@@ -745,13 +766,25 @@ mod tests {
                 .first()
                 .map(|app| (app.opened_ms, app.focused_ms))
         };
-        // A window running through the whole stretch stays as it is.
+        let written = |s: &Storage| {
+            s.connection
+                .query_row(
+                    "SELECT (SELECT COUNT(*) FROM data_availability)
+                          + (SELECT COUNT(*) FROM deleted_application_stretches)",
+                    [],
+                    |r| r.get::<_, i64>(0),
+                )
+                .unwrap()
+        };
+        // A window running through the whole stretch stays as it is, and
+        // deleting nothing leaves no trace.
         assert_eq!(
             s.delete_application_activity_between(id, 2000, 3000)
                 .unwrap(),
             0
         );
         assert_eq!(opened(&s), Some((5000, 5000)));
+        assert_eq!(written(&s), 0);
         // One crossing an edge is cut back to it.
         assert_eq!(
             s.delete_application_activity_between(id, 5000, 7000)
@@ -765,6 +798,102 @@ mod tests {
             .unwrap();
         assert_eq!(opened(&s), None);
         s.verify_integrity().unwrap();
+    }
+    #[test]
+    fn what_arrives_late_for_a_deleted_stretch_stays_deleted() {
+        let (_dir, s) = fixtures::storage();
+        let id = "path:c:\\apps\\late.exe";
+        let window = |window_id, at: i64, kind: WindowTransitionKind, focused| CollectorEvent {
+            observed_at_utc_ms: at,
+            monotonic_ms: at as u64,
+            body: Some(collector_event::Body::WindowTransition(WindowTransition {
+                kind: kind as i32,
+                window: Some(WindowObservation {
+                    window_id,
+                    process_id: 7,
+                    process_started_at_100ns: 8,
+                    application_identity: id.into(),
+                    identity_source: IdentitySource::ExecutablePath as i32,
+                    executable_path: Some("C:\\apps\\late.exe".into()),
+                    displayed: true,
+                    focused,
+                    ..Default::default()
+                }),
+            })),
+        };
+        let input = |minute: i64| CollectorEvent {
+            observed_at_utc_ms: minute + 60_500,
+            monotonic_ms: (minute + 60_500) as u64,
+            body: Some(collector_event::Body::InputMinute(InputMinute {
+                minute_started_at_utc_ms: minute,
+                local_date: "1970-01-01".into(),
+                focused_application_identity: Some(id.into()),
+                left_click_count: 4,
+                ..Default::default()
+            })),
+        };
+        let batch = |first_sequence, events| EventBatch {
+            collector_run_id: vec![1; 16],
+            first_sequence,
+            events,
+        };
+        s.ingest_event_batch(&batch(
+            3,
+            vec![
+                window(9, 10_000, WindowTransitionKind::Opened, true),
+                input(60_000),
+            ],
+        ))
+        .unwrap();
+        // The open state and window are cut back to the end, the minute goes.
+        assert_eq!(
+            s.delete_application_activity_between(id, 5_000, 300_000)
+                .unwrap(),
+            3
+        );
+        // The collector had more of the stretch on its way, then carried on.
+        s.ingest_event_batch(&batch(
+            5,
+            vec![
+                window(9, 130_000, WindowTransitionKind::Updated, false),
+                input(120_000),
+                window(9, 200_000, WindowTransitionKind::Closed, false),
+                window(10, 350_000, WindowTransitionKind::Opened, true),
+            ],
+        ))
+        .unwrap();
+        let apps = s.timeline_snapshot(1, 400_000).unwrap().applications;
+        let late = apps.iter().find(|app| app.identity == id).unwrap();
+        assert_eq!((late.window_count, late.opened_ms), (1, 50_000));
+        assert_eq!(
+            s.input_totals_between("1970-01-01", "1970-01-01").unwrap(),
+            [0; 4]
+        );
+        let inverted: i64 = s
+            .connection
+            .query_row(
+                "SELECT (SELECT COUNT(*) FROM window_state_intervals
+                         WHERE ended_utc_ms < started_utc_ms)
+                      + (SELECT COUNT(*) FROM window_instances
+                         WHERE closed_utc_ms < opened_utc_ms)",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(inverted, 0);
+        s.verify_integrity().unwrap();
+        // A day on, nothing more is on its way and the record of it goes.
+        s.apply_retention(300_000 + 86_400_001).unwrap();
+        assert_eq!(
+            s.connection
+                .query_row(
+                    "SELECT COUNT(*) FROM deleted_application_stretches",
+                    [],
+                    |r| r.get::<_, i64>(0)
+                )
+                .unwrap(),
+            0
+        );
     }
     #[test]
     fn explicit_app_deletion_removes_history_and_keeps_rules() {

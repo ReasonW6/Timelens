@@ -1661,3 +1661,7 @@ msgstr "삭제할 구간을 선택하세요"
 #: collection_ui.rs
 msgid "已删除「{}」的本次记录"
 msgstr "'{}'의 이번 기록을 삭제했습니다"
+
+#: collection_ui.rs
+msgid "这段时间没有可删除的记录"
+msgstr "이 시간대에는 삭제할 기록이 없습니다"

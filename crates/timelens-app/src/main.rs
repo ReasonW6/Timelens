@@ -574,6 +574,31 @@ fn run_window(
     }
     {
         let weak = window.as_weak();
+        let ui_state = Rc::clone(&ui_state);
+        let action_busy = Arc::clone(&action_busy);
+        window.on_app_identity_selected(move |identity| {
+            let mut state = ui_state.borrow_mut();
+            if action_busy.load(Ordering::Acquire)
+                || !state
+                    .application_identities
+                    .iter()
+                    .any(|i| i.as_str() == identity.as_str())
+            {
+                return false;
+            }
+            state.selected_identity = Some(identity.into());
+            let shown = state.apps.shown.clone();
+            drop(state);
+            if let Some((scope, snapshot)) = shown
+                && let Some(window) = weak.upgrade()
+            {
+                render_apps(&window, &ui_state, &snapshot, scope == AppsScope::All);
+            }
+            true
+        });
+    }
+    {
+        let weak = window.as_weak();
         let storage = Arc::clone(&storage);
         let ui_state = Rc::clone(&ui_state);
         let action_busy = Arc::clone(&action_busy);
@@ -690,7 +715,7 @@ fn run_window(
             && window.get_stats_tab() == 1
             && collection_ui::keys_due(Instant::now())
         {
-            collection.invoke_action(7);
+            collection_ui::refresh_keys(&window);
         }
         if ui_active {
             request_apps(&window, &timer_storage, &timer_state);

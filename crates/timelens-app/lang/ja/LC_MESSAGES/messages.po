@@ -1661,3 +1661,7 @@ msgstr "削除する期間を選択してください"
 #: collection_ui.rs
 msgid "已删除「{}」的本次记录"
 msgstr "「{}」の今回の記録を削除しました"
+
+#: collection_ui.rs
+msgid "这段时间没有可删除的记录"
+msgstr "この時間帯に削除できる記録はありません"

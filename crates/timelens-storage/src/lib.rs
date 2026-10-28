@@ -58,7 +58,7 @@ const BACKUP_FILE: &str = "timelens.sqlite3.migration-backup";
 const KEY_MAGIC: &[u8; 8] = b"TLKEY\0\0\x01";
 const KEY_BYTES: usize = 32;
 const DPAPI_ENTROPY: &[u8] = b"Timelens local data key v1";
-const LATEST_SCHEMA_VERSION: i64 = 15;
+const LATEST_SCHEMA_VERSION: i64 = 16;
 
 #[derive(Debug, thiserror::Error)]
 pub enum StorageError {
@@ -169,8 +169,9 @@ pub struct TimelineSnapshot {
     pub left_click_count: u64,
     pub middle_click_count: u64,
     pub right_click_count: u64,
-    /// The start of the latest minute the input counts include, if any.
-    pub latest_input_minute_utc_ms: Option<i64>,
+    /// The minutes near the time of the query whose input is stored, by their
+    /// start: live previews of those are already counted.
+    pub recent_input_minutes: std::collections::BTreeSet<i64>,
     pub monitoring_gaps: Vec<TimelineGap>,
 }
 
@@ -747,8 +748,7 @@ impl Storage {
             "SELECT COALESCE(SUM(keyboard_count), 0),
                     COALESCE(SUM(left_click_count), 0),
                     COALESCE(SUM(middle_click_count), 0),
-                    COALESCE(SUM(right_click_count), 0),
-                    MAX(minute_started_utc_ms)
+                    COALESCE(SUM(right_click_count), 0)
              FROM input_minute_buckets
              WHERE minute_started_utc_ms < ?2
                AND minute_started_utc_ms + 60000 > ?1",
@@ -759,7 +759,6 @@ impl Storage {
                     row.get::<_, i64>(1)?,
                     row.get::<_, i64>(2)?,
                     row.get::<_, i64>(3)?,
-                    row.get::<_, Option<i64>>(4)?,
                 ))
             },
         )?;
@@ -788,7 +787,7 @@ impl Storage {
             left_click_count: nonnegative_u64(input_totals.1),
             middle_click_count: nonnegative_u64(input_totals.2),
             right_click_count: nonnegative_u64(input_totals.3),
-            latest_input_minute_utc_ms: input_totals.4,
+            recent_input_minutes: self.stored_input_minutes_near(unix_time_ms())?,
             monitoring_gaps: gaps,
         })
     }
@@ -905,6 +904,12 @@ impl Storage {
         if let Some(cutoff) = activity_cutoff {
             outcome.merge(self.cleanup_before(cutoff, "retention_time")?);
         }
+        // What the collector had on its way when history was deleted arrives
+        // within moments; a day later nothing more will.
+        self.connection.execute(
+            "DELETE FROM deleted_application_stretches WHERE ended_utc_ms < ?1",
+            params![now_utc_ms.saturating_sub(86_400_000)],
+        )?;
 
         let mut compacted = false;
         while self.exceeds_size_limit(policy.max_bytes, &mut compacted, || {
@@ -1142,6 +1147,7 @@ impl Storage {
             "collector_runs",
             "runtime_health",
             "data_availability",
+            "deleted_application_stretches",
         ];
         let mut deleted_rows = 0_u64;
         for table in tables {
@@ -1855,6 +1861,20 @@ const MIGRATIONS: &[Migration] = &[
         DROP TABLE IF EXISTS local_reports;
     ",
     },
+    // What the user deleted of an application's history lately, so batches
+    // still on their way from the collector do not bring it back.
+    Migration {
+        version: 16,
+        sql: "
+        CREATE TABLE IF NOT EXISTS deleted_application_stretches (
+            application_identity TEXT NOT NULL,
+            started_utc_ms INTEGER NOT NULL,
+            ended_utc_ms INTEGER NOT NULL CHECK (ended_utc_ms > started_utc_ms)
+        ) STRICT;
+        CREATE INDEX IF NOT EXISTS deleted_application_stretches_by_identity
+            ON deleted_application_stretches (application_identity, ended_utc_ms);
+    ",
+    },
 ];
 
 fn validate_event_order(events: &[CollectorEvent]) -> Result<()> {
@@ -2065,6 +2085,8 @@ fn ingest_tray_transition(
         .optional()?;
     match (kind, open_interval) {
         (TrayTransitionKind::Started, None) => {
+            let (started, monotonic) =
+                start_after_deletions(transaction, &transition.application_identity, event)?;
             transaction.execute(
                 "INSERT INTO tray_background_intervals (
                     application_identity, process_id, process_started_at_100ns,
@@ -2074,14 +2096,23 @@ fn ingest_tray_transition(
                     &transition.application_identity,
                     i64::from(transition.process_id),
                     to_i64(transition.process_started_at_100ns, "process start time")?,
-                    event.observed_at_utc_ms,
-                    to_i64(event.monotonic_ms, "monotonic timestamp")?,
+                    started,
+                    monotonic,
                     run_id,
                     to_i64(sequence, "sequence")?
                 ],
             )?;
         }
         (TrayTransitionKind::Ended, Some(interval_id)) => {
+            // Ending before it starts, it lies wholly in deleted history.
+            if transaction.execute(
+                "DELETE FROM tray_background_intervals
+                 WHERE interval_id = ?1 AND started_utc_ms > ?2",
+                params![interval_id, event.observed_at_utc_ms],
+            )? == 1
+            {
+                return Ok(());
+            }
             transaction.execute(
                 "UPDATE tray_background_intervals SET
                     ended_utc_ms = ?2, ended_monotonic_ms = ?3,
@@ -2154,55 +2185,69 @@ fn ingest_input_minute(
     minute: &InputMinute,
 ) -> Result<()> {
     validate_input_minute(event, minute)?;
+    // A minute the user has deleted of its application since stays deleted;
+    // the daily counts never lose it, as they do not on deletion either.
+    let deleted = match &minute.focused_application_identity {
+        Some(identity) => transaction.query_row(
+            "SELECT EXISTS(SELECT 1 FROM deleted_application_stretches
+             WHERE application_identity = ?1 AND started_utc_ms <= ?2
+               AND ended_utc_ms >= ?2 + 60000)",
+            params![identity, minute.minute_started_at_utc_ms],
+            |row| row.get::<_, bool>(0),
+        )?,
+        None => false,
+    };
     if !minute.anonymous_only {
-        let existing_bucket = transaction
-            .query_row(
-                "SELECT bucket_id FROM input_minute_buckets
-             WHERE minute_started_utc_ms = ?1
-               AND timezone_offset_minutes = ?2
-               AND focused_application_identity IS ?3",
-                params![
-                    minute.minute_started_at_utc_ms,
-                    minute.timezone_offset_minutes,
-                    &minute.focused_application_identity
-                ],
-                |row| row.get::<_, i64>(0),
-            )
-            .optional()?;
-        if let Some(bucket_id) = existing_bucket {
-            transaction.execute(
-                "UPDATE input_minute_buckets SET
-                keyboard_count = keyboard_count + ?2,
-                left_click_count = left_click_count + ?3,
-                middle_click_count = middle_click_count + ?4,
-                right_click_count = right_click_count + ?5
-             WHERE bucket_id = ?1",
-                params![
-                    bucket_id,
-                    i64::from(minute.keyboard_count),
-                    i64::from(minute.left_click_count),
-                    i64::from(minute.middle_click_count),
-                    i64::from(minute.right_click_count)
-                ],
-            )?;
-        } else {
-            transaction.execute(
-                "INSERT INTO input_minute_buckets (
-                minute_started_utc_ms, timezone_offset_minutes, local_date,
-                focused_application_identity, keyboard_count, left_click_count,
-                middle_click_count, right_click_count
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-                params![
-                    minute.minute_started_at_utc_ms,
-                    minute.timezone_offset_minutes,
-                    &minute.local_date,
-                    &minute.focused_application_identity,
-                    i64::from(minute.keyboard_count),
-                    i64::from(minute.left_click_count),
-                    i64::from(minute.middle_click_count),
-                    i64::from(minute.right_click_count)
-                ],
-            )?;
+        if !deleted {
+            let existing_bucket = transaction
+                .query_row(
+                    "SELECT bucket_id FROM input_minute_buckets
+                 WHERE minute_started_utc_ms = ?1
+                   AND timezone_offset_minutes = ?2
+                   AND focused_application_identity IS ?3",
+                    params![
+                        minute.minute_started_at_utc_ms,
+                        minute.timezone_offset_minutes,
+                        &minute.focused_application_identity
+                    ],
+                    |row| row.get::<_, i64>(0),
+                )
+                .optional()?;
+            if let Some(bucket_id) = existing_bucket {
+                transaction.execute(
+                    "UPDATE input_minute_buckets SET
+                    keyboard_count = keyboard_count + ?2,
+                    left_click_count = left_click_count + ?3,
+                    middle_click_count = middle_click_count + ?4,
+                    right_click_count = right_click_count + ?5
+                 WHERE bucket_id = ?1",
+                    params![
+                        bucket_id,
+                        i64::from(minute.keyboard_count),
+                        i64::from(minute.left_click_count),
+                        i64::from(minute.middle_click_count),
+                        i64::from(minute.right_click_count)
+                    ],
+                )?;
+            } else {
+                transaction.execute(
+                    "INSERT INTO input_minute_buckets (
+                    minute_started_utc_ms, timezone_offset_minutes, local_date,
+                    focused_application_identity, keyboard_count, left_click_count,
+                    middle_click_count, right_click_count
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                    params![
+                        minute.minute_started_at_utc_ms,
+                        minute.timezone_offset_minutes,
+                        &minute.local_date,
+                        &minute.focused_application_identity,
+                        i64::from(minute.keyboard_count),
+                        i64::from(minute.left_click_count),
+                        i64::from(minute.middle_click_count),
+                        i64::from(minute.right_click_count)
+                    ],
+                )?;
+            }
         }
 
         for key in &minute.key_counts {
@@ -2428,6 +2473,8 @@ fn open_window_instance(
             "window opened while the same sensor handle is already open".to_owned(),
         ));
     }
+    let (opened, monotonic) =
+        start_after_deletions(transaction, &window.application_identity, event)?;
     transaction.execute(
         "INSERT INTO window_instances (
             run_id, sensor_window_id, process_id, process_started_at_100ns,
@@ -2439,8 +2486,8 @@ fn open_window_instance(
             i64::from(window.process_id),
             to_i64(window.process_started_at_100ns, "process start time")?,
             &window.application_identity,
-            event.observed_at_utc_ms,
-            to_i64(event.monotonic_ms, "monotonic timestamp")?,
+            opened,
+            monotonic,
             to_i64(sequence, "sequence")?
         ],
     )?;
@@ -2513,10 +2560,21 @@ fn close_window_instance(
         })?;
     validate_open_window(window, &open)?;
     close_window_state(transaction, open.instance_id, event)?;
+    // Closing before it opens, it lies wholly in deleted history.
+    if transaction.execute(
+        "DELETE FROM window_instances
+         WHERE instance_id = ?1 AND opened_utc_ms > ?2
+           AND NOT EXISTS (SELECT 1 FROM window_state_intervals
+               WHERE window_instance_id = window_instances.instance_id)",
+        params![open.instance_id, event.observed_at_utc_ms],
+    )? == 1
+    {
+        return Ok(());
+    }
     let changed = transaction.execute(
         "UPDATE window_instances SET
-            closed_utc_ms = ?2,
-            closed_monotonic_ms = ?3,
+            closed_utc_ms = MAX(opened_utc_ms, ?2),
+            closed_monotonic_ms = MAX(opened_monotonic_ms, ?3),
             close_sequence = ?4
          WHERE instance_id = ?1 AND closed_utc_ms IS NULL",
         params![
@@ -2542,6 +2600,8 @@ fn insert_window_state(
     event: &CollectorEvent,
     window: &WindowObservation,
 ) -> Result<()> {
+    let (started, monotonic) =
+        start_after_deletions(transaction, &window.application_identity, event)?;
     transaction.execute(
         "INSERT INTO window_state_intervals (
             window_instance_id, started_utc_ms, started_monotonic_ms,
@@ -2550,8 +2610,8 @@ fn insert_window_state(
          ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
         params![
             instance_id,
-            event.observed_at_utc_ms,
-            to_i64(event.monotonic_ms, "monotonic timestamp")?,
+            started,
+            monotonic,
             run_id,
             to_i64(sequence, "sequence")?,
             bool_i64(window.displayed),
@@ -2568,23 +2628,53 @@ fn close_window_state(
     instance_id: i64,
     event: &CollectorEvent,
 ) -> Result<()> {
-    let changed = transaction.execute(
-        "UPDATE window_state_intervals SET
+    // Ending before it starts, it lies wholly in deleted history.
+    let deleted = transaction.execute(
+        "DELETE FROM window_state_intervals
+         WHERE window_instance_id = ?1 AND ended_utc_ms IS NULL AND started_utc_ms > ?2",
+        params![instance_id, event.observed_at_utc_ms],
+    )?;
+    let changed = deleted
+        + transaction.execute(
+            "UPDATE window_state_intervals SET
             ended_utc_ms = ?2,
             ended_monotonic_ms = ?3
          WHERE window_instance_id = ?1 AND ended_utc_ms IS NULL",
-        params![
-            instance_id,
-            event.observed_at_utc_ms,
-            to_i64(event.monotonic_ms, "monotonic timestamp")?
-        ],
-    )?;
+            params![
+                instance_id,
+                event.observed_at_utc_ms,
+                to_i64(event.monotonic_ms, "monotonic timestamp")?
+            ],
+        )?;
     if changed != 1 {
         return Err(StorageError::InvalidBatch(
             "window has no open state interval".to_owned(),
         ));
     }
     Ok(())
+}
+
+/// Where what `event` observed of `identity` starts: at the event, unless the
+/// user has deleted that time of its history since. Then it starts where the
+/// deletion ends, its monotonic time moved by as much, and what ends before
+/// that is dropped as it ends.
+fn start_after_deletions(
+    transaction: &Transaction<'_>,
+    identity: &str,
+    event: &CollectorEvent,
+) -> Result<(i64, i64)> {
+    let at = event.observed_at_utc_ms;
+    let monotonic = to_i64(event.monotonic_ms, "monotonic timestamp")?;
+    let deleted_until = transaction.query_row(
+        "SELECT MAX(ended_utc_ms) FROM deleted_application_stretches
+         WHERE application_identity = ?1 AND started_utc_ms <= ?2 AND ended_utc_ms > ?2",
+        params![identity, at],
+        |row| row.get::<_, Option<i64>>(0),
+    )?;
+    Ok(match deleted_until {
+        Some(end) => (end, monotonic.saturating_add(end - at)),
+        None => (at, monotonic),
+    })
 }
 
 fn bool_i64(value: bool) -> i64 {

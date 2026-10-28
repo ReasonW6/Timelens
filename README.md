@@ -216,7 +216,7 @@ The documents below are written in Simplified Chinese.
 - **2026-09-06 · Paper-native UI**: the six main pages and the recovery window were rebuilt to the chosen design; see [UI acceptance](design-qa.md) for the review process.
 - **2026-09-05 · Milestones 1–5**: window and input collection, timeline, snapshots, portable backup and restore, data relocation, and installation maintenance are all implemented.
 
-Current protocol version is v4 and the database schema is v15.
+Current protocol version is v6 and the database schema is v16.
 
 ## License
 

@@ -140,7 +140,7 @@ fn instance_mutex_name(component: &str) -> Result<Vec<u16>> {
 pub fn current_pipe_name() -> Result<String> {
     let sid = current_user_sid()?;
     let session = current_session_id()?;
-    Ok(format!(r"\\.\pipe\Timelens.{sid}.{session}.collector.v5"))
+    Ok(format!(r"\\.\pipe\Timelens.{sid}.{session}.collector.v6"))
 }
 
 pub fn run_server_probe(pipe_name: &str, expected_peer_names: &[&str]) -> Result<HandshakeReport> {
@@ -906,11 +906,6 @@ mod tests {
             local_date: "2023-11-15".into(),
             keyboard_count: 2,
             left_click_count: 1,
-            key_counts: vec![crate::PhysicalKeyCount {
-                scan_code: 0x1e,
-                keyboard_layout: 0,
-                count: 2,
-            }],
             ..Default::default()
         };
 

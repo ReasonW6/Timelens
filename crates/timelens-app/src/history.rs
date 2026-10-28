@@ -442,6 +442,7 @@ fn flatten_days<'a>(
         shares: ModelRc::default(),
         rail_top: false,
         rail_bottom: false,
+        has_app: false,
     };
     // More history waits above; the row loads it when clicked.
     let can_load = query.is_empty() && loaded >= 0 && loaded < horizon;
@@ -612,6 +613,7 @@ fn flatten_days<'a>(
                     items.push(HistoryItem {
                         kind: KIND_ENTRY,
                         key: item.key.clone().into(),
+                        has_app: entry.identity.is_some(),
                         height: ENTRY_HEIGHT,
                         title: if visible {
                             name.into()
@@ -735,6 +737,7 @@ fn same_item(a: &HistoryItem, b: &HistoryItem) -> bool {
         shares,
         rail_top,
         rail_bottom,
+        has_app,
     } = a;
     *kind == b.kind
         && *key == b.key
@@ -752,6 +755,7 @@ fn same_item(a: &HistoryItem, b: &HistoryItem) -> bool {
         && same_rows(shares, &b.shares, |a, b| a == b)
         && *rail_top == b.rail_top
         && *rail_bottom == b.rail_bottom
+        && *has_app == b.has_app
 }
 
 fn same_image(a: &Image, b: &Image) -> bool {
@@ -1303,7 +1307,7 @@ mod tests {
             left_click_count: 0,
             middle_click_count: 0,
             right_click_count: 0,
-            latest_input_minute_utc_ms: None,
+            recent_input_minutes: Default::default(),
             monitoring_gaps: vec![],
         }
     }

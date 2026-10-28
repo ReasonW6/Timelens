@@ -409,10 +409,12 @@ component MenuAction inherits Rectangle {
     in property <string> text;
     in property <image> icon;
     in property <bool> danger;
+    // Where the menu's arrow keys are.
+    in property <bool> active;
     callback clicked;
     height: 32px;
     border-radius: 8px;
-    background: touch.has-hover || key.has-focus ? (root.danger ? Theme.danger-soft : Theme.hover-tint) : transparent;
+    background: touch.has-hover || key.has-focus || root.active ? (root.danger ? Theme.danger-soft : Theme.hover-tint) : transparent;
     forward-focus: key;
     accessible-role: button;
     accessible-label: root.text;
@@ -960,6 +962,9 @@ export component AppWindow inherits Window {
     // Puts back the range a page had before the timeline set it.
     callback range-origin-restore;
     callback app-selected(int);
+    // Select the application shown by this identity, wherever it is listed
+    // now; whether it still is.
+    callback app-identity-selected(string) -> bool;
     callback horizon-selected(int);
     callback retention-selected(int);
     callback run-cleanup;
@@ -1113,18 +1118,31 @@ export component AppWindow inherits Window {
     private property <string> menu-key;
     private property <string> menu-name;
     private property <Point> menu-at;
+    // An activity no application is known for offers its snapshots alone.
+    private property <bool> menu-has-app;
+    // The menu's entries as the actions below, in order, and the one the
+    // arrow keys are on, or -1.
+    private property <[float]> menu-actions: !root.menu-has-app ? [0] : root.menu-kind == 1 || !root.stats-all ? [0, 3, 2, 5, 4] : [0, 3, 2, 4];
+    private property <int> menu-focus: -1;
+    pure function menu-on(action: int) -> bool {
+        return root.menu-focus >= 0 && root.menu-actions[root.menu-focus] == action;
+    }
     function open-app-menu(app: AppRow, at: Point) {
         root.menu-kind = 0;
         root.menu-app = app;
         root.menu-name = app.name;
+        root.menu-has-app = true;
         root.menu-at = at;
+        root.menu-focus = -1;
         item-menu.show();
     }
-    function open-activity-menu(key: string, name: string, at: Point) {
+    function open-activity-menu(key: string, name: string, has-app: bool, at: Point) {
         root.menu-kind = 1;
         root.menu-key = key;
         root.menu-name = name;
+        root.menu-has-app = has-app;
         root.menu-at = at;
+        root.menu-focus = -1;
         item-menu.show();
     }
     // As on an activity: 0 its details or snapshots, 2 the rules, 3 stop
@@ -1134,9 +1152,11 @@ export component AppWindow inherits Window {
         if root.menu-kind == 1 {
             root.act-on-activity(root.menu-key, action);
         } else if action == 0 {
-            root.windows-expanded = false;
-            root.app-detail-open = true;
-            root.app-selected(root.menu-app.original-index);
+            // The list may have been sorted again since the menu opened.
+            if root.app-identity-selected(root.menu-app.identity) {
+                root.windows-expanded = false;
+                root.app-detail-open = true;
+            }
         } else if action == 2 {
             CollectionState.app-menu(root.menu-app.identity, 2);
             root.open-settings(2);
@@ -1150,22 +1170,46 @@ export component AppWindow inherits Window {
         width: 236px;
         height: menu-sheet.preferred-height;
         close-policy: PopupClosePolicy.close-on-click-outside;
-        Rectangle {
-            background: Theme.surface;
-            border-radius: 12px;
-            border-width: 1px; border-color: Theme.line-strong;
-            drop-shadow-blur: 24px; drop-shadow-offset-y: 8px; drop-shadow-color: Theme.shadow-strong;
-            menu-sheet := VerticalLayout {
-                padding: 6px; spacing: 1px;
-                Text { x: 10px; height: 28px; text: root.menu-name; color: Theme.ink-3; font-size: 12px; vertical-alignment: center; overflow: elide; }
-                if root.menu-kind == 0 : MenuAction { text: @tr("查看详情"); icon: @image-url("icons/app-window.svg"); clicked => { root.menu-act(0); } }
-                if root.menu-kind == 1 : MenuAction { text: @tr("查看这段的快照"); icon: @image-url("icons/photo.svg"); clicked => { root.menu-act(0); } }
-                MenuAction { text: @tr("不再记录这个应用"); icon: @image-url("icons/ban.svg"); clicked => { root.menu-act(3); } }
-                MenuAction { text: @tr("这个应用的规则"); icon: @image-url("icons/adjustments-horizontal.svg"); clicked => { root.menu-act(2); } }
-                Rectangle { height: 9px; Rectangle { x: 6px; width: parent.width - 12px; height: 1px; background: Theme.line; } }
-                // All records leave no stretch narrower than the whole.
-                if root.menu-kind == 1 || !root.stats-all : MenuAction { text: @tr("删除本次记录…"); icon: @image-url("icons/trash.svg"); danger: true; clicked => { root.menu-act(5); } }
-                MenuAction { text: @tr("删除这个应用的全部记录…"); icon: @image-url("icons/trash.svg"); danger: true; clicked => { root.menu-act(4); } }
+        // The menu takes the keyboard as it opens: arrows move, Enter or
+        // Space chooses, Escape closes.
+        FocusScope {
+            init => { self.focus(); }
+            key-pressed(event) => {
+                if event.text == Key.Escape {
+                    item-menu.close();
+                    return accept;
+                }
+                if event.text == Key.DownArrow {
+                    root.menu-focus = Math.mod(root.menu-focus + 1, root.menu-actions.length);
+                    return accept;
+                }
+                if event.text == Key.UpArrow {
+                    root.menu-focus = root.menu-focus <= 0 ? root.menu-actions.length - 1 : root.menu-focus - 1;
+                    return accept;
+                }
+                if (event.text == "\n" || event.text == " ") && root.menu-focus >= 0 {
+                    root.menu-act(root.menu-actions[root.menu-focus]);
+                    return accept;
+                }
+                return reject;
+            }
+            Rectangle {
+                background: Theme.surface;
+                border-radius: 12px;
+                border-width: 1px; border-color: Theme.line-strong;
+                drop-shadow-blur: 24px; drop-shadow-offset-y: 8px; drop-shadow-color: Theme.shadow-strong;
+                menu-sheet := VerticalLayout {
+                    padding: 6px; spacing: 1px;
+                    Text { x: 10px; height: 28px; text: root.menu-name; color: Theme.ink-3; font-size: 12px; vertical-alignment: center; overflow: elide; }
+                    if root.menu-kind == 0 : MenuAction { text: @tr("查看详情"); icon: @image-url("icons/app-window.svg"); active: root.menu-on(0); clicked => { root.menu-act(0); } }
+                    if root.menu-kind == 1 : MenuAction { text: @tr("查看这段的快照"); icon: @image-url("icons/photo.svg"); active: root.menu-on(0); clicked => { root.menu-act(0); } }
+                    if root.menu-has-app : MenuAction { text: @tr("不再记录这个应用"); icon: @image-url("icons/ban.svg"); active: root.menu-on(3); clicked => { root.menu-act(3); } }
+                    if root.menu-has-app : MenuAction { text: @tr("这个应用的规则"); icon: @image-url("icons/adjustments-horizontal.svg"); active: root.menu-on(2); clicked => { root.menu-act(2); } }
+                    if root.menu-has-app : Rectangle { height: 9px; Rectangle { x: 6px; width: parent.width - 12px; height: 1px; background: Theme.line; } }
+                    // All records leave no stretch narrower than the whole.
+                    if root.menu-has-app && (root.menu-kind == 1 || !root.stats-all) : MenuAction { text: @tr("删除本次记录…"); icon: @image-url("icons/trash.svg"); danger: true; active: root.menu-on(5); clicked => { root.menu-act(5); } }
+                    if root.menu-has-app : MenuAction { text: @tr("删除这个应用的全部记录…"); icon: @image-url("icons/trash.svg"); danger: true; active: root.menu-on(4); clicked => { root.menu-act(4); } }
+                }
             }
         }
     }
@@ -1388,7 +1432,7 @@ export component AppWindow inherits Window {
                                                         recording: CollectionState.paused ? 3 : root.collector-state == 2 ? 2 : root.collector-state == 1 ? 1 : 0;
                                                         select => { if item.kind == 5 { root.history-load-more(); } else { root.history-select(item.key); } }
                                                         act(action) => { root.act-on-activity(item.key, action); }
-                                                        menu(position) => { root.open-activity-menu(item.key, item.title, position); }
+                                                        menu(position) => { root.open-activity-menu(item.key, item.title, item.has-app, position); }
                                                         resume => { CollectionState.paused = false; CollectionState.action(0); }
                                                         open-settings => { root.open-settings(0); }
                                                     }

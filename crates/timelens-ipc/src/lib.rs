@@ -17,7 +17,7 @@ pub use windows::{
     run_server_collector_message, run_server_probe, trust_peer_directory,
 };
 
-pub const PROTOCOL_VERSION: u32 = 5;
+pub const PROTOCOL_VERSION: u32 = 6;
 pub const MAX_FRAME_BYTES: usize = 64 * 1024;
 pub const MAX_BATCH_EVENTS: usize = 512;
 pub const MAX_EXECUTABLE_PATH_BYTES: usize = 1024;

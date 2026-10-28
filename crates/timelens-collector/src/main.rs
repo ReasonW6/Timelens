@@ -1068,23 +1068,21 @@ impl InputAggregator {
         Ok(())
     }
 
-    /// The attributed input counted so far in `current`'s minute, with keys
-    /// counted by position alone. Input the rules keep anonymous is left out,
-    /// as it is from the statistics this adds to.
+    /// The attributed input counted so far in `current`'s minute, as totals
+    /// alone: which keys were pressed waits for the sealed minute, so previews
+    /// a quarter second apart never tell the order of the presses. Input the
+    /// rules keep anonymous is left out, as it is from the statistics this
+    /// adds to.
     fn live(&self, current: LocalTimeFacts) -> LiveInput {
-        let mut keys = BTreeMap::<u16, u64>::new();
-        let mut clicks = [0_u64; 3];
+        let mut totals = [0_u64; 4];
         for (key, counts) in &self.buckets {
             if key.anonymous_only
                 || key.local_time.minute_started_at_utc_ms != current.minute_started_at_utc_ms
             {
                 continue;
             }
-            for ((scan_code, _), count) in &counts.key_counts {
-                let total = keys.entry(*scan_code).or_default();
-                *total = total.saturating_add(*count);
-            }
-            for (total, count) in clicks.iter_mut().zip([
+            for (total, count) in totals.iter_mut().zip([
+                counts.keyboard_count,
                 counts.left_click_count,
                 counts.middle_click_count,
                 counts.right_click_count,
@@ -1093,24 +1091,13 @@ impl InputAggregator {
             }
         }
         let count = |value: u64| u32::try_from(value).unwrap_or(u32::MAX);
-        let key_counts = keys
-            .into_iter()
-            .map(|(scan_code, total)| PhysicalKeyCount {
-                scan_code: u32::from(scan_code),
-                keyboard_layout: 0,
-                count: count(total),
-            })
-            .collect::<Vec<_>>();
         LiveInput {
             minute_started_at_utc_ms: current.minute_started_at_utc_ms,
             local_date: current.local_date(),
-            keyboard_count: key_counts
-                .iter()
-                .fold(0_u32, |sum, key| sum.saturating_add(key.count)),
-            left_click_count: count(clicks[0]),
-            middle_click_count: count(clicks[1]),
-            right_click_count: count(clicks[2]),
-            key_counts,
+            keyboard_count: count(totals[0]),
+            left_click_count: count(totals[1]),
+            middle_click_count: count(totals[2]),
+            right_click_count: count(totals[3]),
         }
     }
 
@@ -1526,7 +1513,7 @@ mod tests {
                 .take_completed(1_700_000_070_000, 30_000, minute)
                 .is_empty()
         );
-        // The open minute previews by key position, without its layout.
+        // The open minute previews totals alone, never which keys.
         let live = aggregator.live(minute);
         assert_eq!(
             live.minute_started_at_utc_ms,
@@ -1541,14 +1528,6 @@ mod tests {
             ),
             (3, 2, 1)
         );
-        assert_eq!(
-            live.key_counts,
-            [PhysicalKeyCount {
-                scan_code: 0x1e,
-                keyboard_layout: 0,
-                count: 3
-            }]
-        );
         let next_minute = LocalTimeFacts {
             minute_started_at_utc_ms: minute.minute_started_at_utc_ms + MINUTE_MS,
             ..minute
@@ -1558,7 +1537,6 @@ mod tests {
         // A sealed minute leaves the preview empty.
         let live = aggregator.live(next_minute);
         assert_eq!(live.keyboard_count + live.left_click_count, 0);
-        assert!(live.key_counts.is_empty());
         let Some(collector_event::Body::InputMinute(bucket)) = &events[0].body else {
             panic!("completed input bucket was not emitted");
         };

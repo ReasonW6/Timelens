@@ -12,6 +12,9 @@ pub(crate) struct TimelineCache {
 
 struct Cached {
     snapshot: Arc<TimelineSnapshot>,
+    /// The merges the snapshot groups applications by. New windows can add
+    /// automatic ones, which regroup applications already shown.
+    edges: Vec<(String, String)>,
     projections: HashMap<String, Projection>,
     next_boundary: i64,
     dirty: BTreeSet<String>,
@@ -157,11 +160,22 @@ impl Storage {
                 })
                 .and_then(|i| cache.entries.remove(i))
         };
-        let mut cached = if let Some(mut cached) = cached {
+        // Merges change only with the data, so they are read again only then.
+        let cached = match cached {
+            Some(cached) if !cached.dirty.is_empty() || cached.totals_dirty => {
+                let edges = self.merge_edges()?;
+                (edges == cached.edges).then_some((cached, edges))
+            }
+            Some(cached) => {
+                let edges = cached.edges.clone();
+                Some((cached, edges))
+            }
+            None => None,
+        };
+        let mut cached = if let Some((mut cached, edges)) = cached {
             cached.advance(end);
             // With no dirty application the filtered query returns only the totals.
             if !cached.dirty.is_empty() || cached.totals_dirty {
-                let edges = self.merge_edges()?;
                 let mut roots = BTreeSet::new();
                 let mut sources = BTreeSet::new();
                 for id in &cached.dirty {
@@ -181,19 +195,20 @@ impl Storage {
                 snapshot.left_click_count = refreshed.left_click_count;
                 snapshot.middle_click_count = refreshed.middle_click_count;
                 snapshot.right_click_count = refreshed.right_click_count;
-                snapshot.latest_input_minute_utc_ms = refreshed.latest_input_minute_utc_ms;
+                snapshot.recent_input_minutes = refreshed.recent_input_minutes;
                 snapshot.monitoring_gaps = refreshed.monitoring_gaps;
                 sort_applications(&mut snapshot.applications);
                 cached.dirty.clear();
                 cached.totals_dirty = false;
-                cached.projections = self.timeline_projections(&cached.snapshot)?;
                 cached.next_boundary = self.timeline_next_boundary(end)?;
             }
             cached
         } else {
+            // Regrouped applications are read whole again, as a first view is.
             let snapshot = self.timeline_snapshot(start, end)?;
             Cached {
-                projections: self.timeline_projections(&snapshot)?,
+                edges: self.merge_edges()?,
+                projections: HashMap::new(),
                 next_boundary: self.timeline_next_boundary(end)?,
                 snapshot: Arc::new(snapshot),
                 dirty: BTreeSet::new(),
@@ -202,7 +217,7 @@ impl Storage {
         };
         // Sorting can change a segment's index when two windows start together.
         // Rebuild the tiny live projection without revisiting completed intervals.
-        cached.projections = self.timeline_projections(&cached.snapshot)?;
+        cached.projections = self.timeline_projections(&cached.snapshot, &cached.edges)?;
         let result = cached.snapshot.clone();
         let mut cache = self.timeline_cache.borrow_mut();
         cache.changes = changes;
@@ -238,15 +253,15 @@ impl Storage {
     fn timeline_projections(
         &self,
         snapshot: &TimelineSnapshot,
+        edges: &[(String, String)],
     ) -> Result<HashMap<String, Projection>> {
         let start = snapshot.range_started_utc_ms;
         let end = snapshot.range_ended_utc_ms;
-        let edges = self.merge_edges()?;
         let mut roots = HashMap::new();
         let mut canonical = |id: String| {
             roots
                 .entry(id.clone())
-                .or_insert_with(|| merge_group(&id, &edges).pop_first().unwrap())
+                .or_insert_with(|| merge_group(&id, edges).pop_first().unwrap())
                 .clone()
         };
         let mut result = HashMap::<String, Projection>::new();
@@ -635,6 +650,40 @@ mod tests {
         s.clear_all().unwrap();
         assert!(s.timeline_cache.borrow().entries.is_empty());
         assert!(check(&s, -1, 700).applications.is_empty());
+    }
+
+    #[test]
+    fn an_automatic_merge_appearing_later_regroups_cached_applications() {
+        let (_dir, s) = fixture();
+        // Steam's store window first, without an AppUserModelID.
+        ingest(
+            &s,
+            1,
+            vec![window(
+                1,
+                "steam",
+                0,
+                WindowTransitionKind::Opened,
+                true,
+                true,
+            )],
+        );
+        assert_eq!(check(&s, -1, 100).applications.len(), 1);
+        // Then its main window, labeled with one.
+        let mut labeled = window(2, "steam", 150, WindowTransitionKind::Opened, true, false);
+        let Some(collector_event::Body::WindowTransition(transition)) = labeled.body.as_mut()
+        else {
+            unreachable!()
+        };
+        let observation = transition.window.as_mut().unwrap();
+        observation.application_identity = "aumid:valve.steam.client".into();
+        observation.identity_source = IdentitySource::WindowAppUserModelId as i32;
+        observation.app_user_model_id = Some("Valve.Steam.Client".into());
+        ingest(&s, 2, vec![labeled]);
+        let view = check(&s, -1, 200);
+        assert_eq!(view.applications.len(), 1);
+        assert_eq!(view.applications[0].window_count, 2);
+        assert_eq!(check(&s, -1, 300).applications.len(), 1);
     }
 
     #[test]

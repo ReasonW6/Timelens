@@ -1688,3 +1688,7 @@ msgstr "Choose a stretch to delete"
 #: collection_ui.rs
 msgid "已删除「{}」的本次记录"
 msgstr "Deleted this stretch of \"{}\""
+
+#: collection_ui.rs
+msgid "这段时间没有可删除的记录"
+msgstr "Nothing was recorded here to delete"
