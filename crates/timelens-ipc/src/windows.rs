@@ -160,6 +160,7 @@ pub fn run_server_probe(pipe_name: &str, expected_peer_names: &[&str]) -> Result
             through_sequence: sequence,
             accepted: true,
             permanent: false,
+            keys: false,
         })),
     )?;
     Ok(report)
@@ -221,7 +222,7 @@ pub fn run_server_collector_message<F, L>(
 ) -> Result<HandshakeReport>
 where
     F: FnOnce(&EventBatch) -> std::result::Result<(), BatchRejection>,
-    L: FnOnce(&LiveInput) -> bool,
+    L: FnOnce(&LiveInput) -> LiveAnswer,
 {
     let (mut pipe, report) = accept_authenticated_server(pipe_name, expected_peer_names)?;
     let message = protocol::read_frame(&mut pipe)?;
@@ -233,6 +234,7 @@ where
                     through_sequence: sequence,
                     accepted: true,
                     permanent: false,
+                    keys: false,
                 })),
             )?;
             return Ok(report);
@@ -241,10 +243,14 @@ where
         Some(envelope::Body::LiveInput(input)) => {
             protocol::write_frame(
                 &mut pipe,
-                &Envelope::new(envelope::Body::Ack(Ack {
-                    through_sequence: 0,
-                    accepted: show(&input),
-                    permanent: false,
+                &Envelope::new(envelope::Body::Ack({
+                    let answer = show(&input);
+                    Ack {
+                        through_sequence: 0,
+                        accepted: answer.more,
+                        permanent: false,
+                        keys: answer.keys,
+                    }
                 })),
             )?;
             return Ok(report);
@@ -264,6 +270,7 @@ where
                 through_sequence,
                 accepted: false,
                 permanent: rejection.permanent,
+                keys: false,
             })),
         )?;
         return Err(IpcError::BatchRejected(rejection.message));
@@ -274,6 +281,7 @@ where
             through_sequence,
             accepted: true,
             permanent: false,
+            keys: false,
         })),
     )?;
     Ok(report)
@@ -301,6 +309,7 @@ pub fn run_client_event_batch(
             through_sequence: acknowledged,
             accepted: false,
             permanent: true,
+            ..
         })) if acknowledged == through_sequence => Err(IpcError::BatchRejectedPermanently(
             "the Timelens core can never persist the batch".to_owned(),
         )),
@@ -308,6 +317,7 @@ pub fn run_client_event_batch(
             through_sequence: acknowledged,
             accepted: false,
             permanent: false,
+            ..
         })) if acknowledged == through_sequence => Err(IpcError::BatchRejected(
             "the Timelens core did not persist the batch".to_owned(),
         )),
@@ -317,12 +327,22 @@ pub fn run_client_event_batch(
     }
 }
 
-/// Sends a live input preview; true when the core wants more of them.
+/// What the core answers a live input preview.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct LiveAnswer {
+    /// Whether it wants more previews.
+    pub more: bool,
+    /// Whether they should say which keys are pressed: only while the core
+    /// shows that, not just the totals.
+    pub keys: bool,
+}
+
+/// Sends a live input preview and returns the core's answer.
 pub fn run_client_live_input(
     pipe_name: &str,
     expected_peer_names: &[&str],
     input: &LiveInput,
-) -> Result<bool> {
+) -> Result<LiveAnswer> {
     let (mut pipe, _) = connect_authenticated_client(pipe_name, expected_peer_names)?;
     protocol::write_frame(
         &mut pipe,
@@ -332,8 +352,12 @@ pub fn run_client_live_input(
         Some(envelope::Body::Ack(Ack {
             through_sequence: 0,
             accepted,
+            keys,
             ..
-        })) => Ok(accepted),
+        })) => Ok(LiveAnswer {
+            more: accepted,
+            keys,
+        }),
         _ => Err(IpcError::InvalidMessage(
             "server did not acknowledge the live input".to_owned(),
         )),
@@ -898,7 +922,10 @@ mod tests {
                 &server_pipe,
                 &[server_name.as_str()],
                 |_| panic!("live input must not be persisted"),
-                |input| input.keyboard_count == 2,
+                |input| LiveAnswer {
+                    more: input.keyboard_count == 2,
+                    keys: input.key_counts.len() == 1,
+                },
             )
         });
         let input = LiveInput {
@@ -906,10 +933,21 @@ mod tests {
             local_date: "2023-11-15".into(),
             keyboard_count: 2,
             left_click_count: 1,
+            key_counts: vec![crate::PhysicalKeyCount {
+                scan_code: 0x1e,
+                keyboard_layout: 0,
+                count: 2,
+            }],
             ..Default::default()
         };
 
-        assert!(run_client_live_input(&pipe_name, &[current_name.as_str()], &input).unwrap());
+        assert_eq!(
+            run_client_live_input(&pipe_name, &[current_name.as_str()], &input).unwrap(),
+            LiveAnswer {
+                more: true,
+                keys: true
+            }
+        );
         server.join().unwrap().unwrap();
     }
 
@@ -927,7 +965,7 @@ mod tests {
                     assert_eq!(batch.first_sequence, 1);
                     Ok(())
                 },
-                |_| false,
+                |_| LiveAnswer::default(),
             )
         });
 
@@ -950,7 +988,7 @@ mod tests {
                 &server_pipe,
                 &[server_name.as_str()],
                 |_| Err(BatchRejection::transient("storage unavailable")),
-                |_| false,
+                |_| LiveAnswer::default(),
             )
         });
 
@@ -975,7 +1013,7 @@ mod tests {
                 &server_pipe,
                 &[server_name.as_str()],
                 |_| Err(BatchRejection::permanent("sequence is not contiguous")),
-                |_| false,
+                |_| LiveAnswer::default(),
             )
         });
 

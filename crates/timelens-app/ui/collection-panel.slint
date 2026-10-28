@@ -2,7 +2,7 @@ import { ComboBox, ScrollView } from "std-widgets.slint";
 import { Theme, Action, Badge, Label, Note, SectionTitle, Rule, CheckBox, StatusLine, Segmented, Segment, Switch, SettingRow, SettingsHeader, SettingsGroup, SettingExpander } from "theme.slint";
 
 // A key's position and size are in key units on the 93-key board.
-// `pulse` goes up each time the count does, which lights the key or button.
+// `pulse` changes each time the key or button is pressed, which lights it.
 export struct KeyCell { label: string, count: string, strength: float, pulse: int, x: float, y: float, w: float, h: float }
 export struct ButtonHeat { count: string, strength: float, pulse: int }
 // A system state over the range: its name, time and share of the range.

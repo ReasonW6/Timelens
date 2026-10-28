@@ -12,9 +12,9 @@ pub use protocol::{
     WindowTransition, WindowTransitionKind, collector_event, envelope,
 };
 pub use windows::{
-    BatchRejection, HandshakeReport, PeerVerification, SingleInstanceGuard, current_pipe_name,
-    new_collector_run_id, run_client_event_batch, run_client_live_input, run_client_probe,
-    run_server_collector_message, run_server_probe, trust_peer_directory,
+    BatchRejection, HandshakeReport, LiveAnswer, PeerVerification, SingleInstanceGuard,
+    current_pipe_name, new_collector_run_id, run_client_event_batch, run_client_live_input,
+    run_client_probe, run_server_collector_message, run_server_probe, trust_peer_directory,
 };
 
 pub const PROTOCOL_VERSION: u32 = 6;

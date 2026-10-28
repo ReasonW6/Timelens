@@ -47,9 +47,9 @@ use anyhow::{Context, Result, bail};
 use chrono::TimeZone;
 use slint::{Image, Model, ModelRc, SharedString, Timer, TimerMode, VecModel};
 use timelens_ipc::{
-    BatchRejection, COLLECTOR_RESET_PAUSED_FILE, COLLECTOR_RESET_REQUEST_FILE, PROTOCOL_VERSION,
-    SingleInstanceGuard, current_pipe_name, diagnostics, run_server_collector_message,
-    run_server_probe, trust_peer_directory,
+    BatchRejection, COLLECTOR_RESET_PAUSED_FILE, COLLECTOR_RESET_REQUEST_FILE, LiveAnswer,
+    PROTOCOL_VERSION, SingleInstanceGuard, current_pipe_name, diagnostics,
+    run_server_collector_message, run_server_probe, trust_peer_directory,
 };
 use timelens_storage::{
     CoverageGap, ExportFormat, RetentionPolicy, SnapshotDisplay, SnapshotMissingReason,
@@ -482,7 +482,10 @@ fn run_window(
                             live_input::receive(&window, input);
                         });
                     }
-                    wanted
+                    LiveAnswer {
+                        more: wanted,
+                        keys: live_input::keys_wanted(),
+                    }
                 },
             );
             // Live input arrives several times a second while shown; it says
@@ -710,7 +713,10 @@ fn run_window(
         collection.set_status("".into());
         window.set_action_busy(timer_busy.load(Ordering::Acquire));
         let ui_active = window.window().is_visible() && !window.window().is_minimized();
-        live_input::set_wanted(ui_active && window.get_page() == 3);
+        live_input::set_wanted(
+            ui_active && window.get_page() == 3,
+            window.get_stats_tab() == 1,
+        );
         if live_input::wanted()
             && window.get_stats_tab() == 1
             && collection_ui::keys_due(Instant::now())

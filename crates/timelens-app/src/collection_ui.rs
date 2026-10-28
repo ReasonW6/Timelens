@@ -817,14 +817,14 @@ struct KeyTotals {
 }
 
 /// The key statistics on screen: the dates they cover, their stored counts,
-/// and what each key and mouse button last showed, with how often it has
-/// gone up since, which lights it.
+/// what each mouse button last showed, and what lights each key or button.
+/// A key's light flips each time it is pressed live, telling nothing of how
+/// often.
 #[derive(Default)]
 struct KeyView {
     dates: (String, String),
     stored: Option<KeyTotals>,
     showing: bool,
-    shown: std::collections::BTreeMap<u32, u64>,
     pulses: std::collections::BTreeMap<u32, i32>,
     mouse_shown: [u64; 3],
     mouse_pulses: [i32; 3],
@@ -834,9 +834,9 @@ thread_local! {
     static KEYS: RefCell<KeyView> = RefCell::new(KeyView::default());
 }
 
-/// Stored counts are read again this often while shown live: which keys were
-/// pressed shows only once their minute is stored, and previews never wait
-/// long for the minutes they stand in for.
+/// Stored counts are read again this often while shown live: a key's count
+/// goes up only once its minute is stored, and previews never wait long for
+/// the minutes they stand in for.
 const KEYS_REFRESH: std::time::Duration = std::time::Duration::from_secs(30);
 
 pub fn keys_due(now: std::time::Instant) -> bool {
@@ -849,9 +849,23 @@ pub fn keys_due(now: std::time::Instant) -> bool {
         })
 }
 
+/// Light the keys just pressed on `date`, if the dates shown include it.
+pub fn flash_keys(date: &str, codes: &[u32]) {
+    KEYS.with(|view| {
+        let view = &mut *view.borrow_mut();
+        let (first, last) = &view.dates;
+        if view.stored.is_none() || !(first.as_str()..=last.as_str()).contains(&date) {
+            return;
+        }
+        for code in codes {
+            *view.pulses.entry(*code).or_default() ^= 1;
+        }
+    });
+}
+
 /// Show the key and mouse statistics: the stored counts and, for the dates
-/// shown, live clicks not stored yet. Live input never says which keys, so a
-/// key shows and lights only once its minute is stored.
+/// shown, live clicks not stored yet. Keys light as they are pressed live
+/// (see [`flash_keys`]); their counts go up once their minute is stored.
 pub fn show_keys(w: &AppWindow) {
     KEYS.with(|view| {
         let view = &mut *view.borrow_mut();
@@ -865,12 +879,6 @@ pub fn show_keys(w: &AppWindow) {
         let frequencies = &stored.keys;
         // What shows first lights nothing.
         let first_show = !std::mem::replace(&mut view.showing, true);
-        for (code, count) in frequencies {
-            if !first_show && *count > view.shown.get(code).copied().unwrap_or(0) {
-                *view.pulses.entry(*code).or_default() += 1;
-            }
-        }
-        view.shown.clone_from(frequencies);
         let max = KEYBOARD
             .iter()
             .filter_map(|(code, ..)| frequencies.get(code).copied())
