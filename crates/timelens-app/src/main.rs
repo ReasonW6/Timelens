@@ -16,6 +16,7 @@ mod pause;
 #[cfg(debug_assertions)]
 mod qa;
 mod recovery;
+mod short_apps;
 mod snapshot;
 mod snapshot_grid;
 mod startup;
@@ -455,6 +456,9 @@ fn run_window(
         relabel.set(true)
     });
     let _pause_timer = pause::install(&window, control_directory.clone());
+    short_apps::load(&control_directory);
+    window.set_short_apps_hidden(short_apps::current().on);
+    window.set_short_apps_seconds(short_apps::current().seconds.to_string().into());
     window.set_storage_status(storage_status.into());
     window.set_collector_status(tr!("等待受信采集器事件…").into());
     window.set_build_version(env!("CARGO_PKG_VERSION").into());
@@ -568,6 +572,21 @@ fn run_window(
             state.selected_identity = state.application_identities.get(index as usize).cloned();
             let shown = state.apps.shown.clone();
             drop(state);
+            if let Some((scope, snapshot)) = shown
+                && let Some(window) = weak.upgrade()
+            {
+                render_apps(&window, &ui_state, &snapshot, scope == AppsScope::All);
+            }
+        });
+    }
+    {
+        let weak = window.as_weak();
+        let ui_state = Rc::clone(&ui_state);
+        let control = control_directory.clone();
+        window.on_short_apps_changed(move |on, seconds| {
+            let seconds = short_apps::seconds(&seconds).unwrap_or(short_apps::current().seconds);
+            short_apps::set(&control, short_apps::Rule { on, seconds });
+            let shown = ui_state.borrow().apps.shown.clone();
             if let Some((scope, snapshot)) = shown
                 && let Some(window) = weak.upgrade()
             {
@@ -1186,21 +1205,25 @@ fn render_apps(
         .range_ended_utc_ms
         .saturating_sub(range_start)
         .max(1) as f64;
+    let rule = short_apps::current();
+    let applications = snapshot
+        .applications
+        .iter()
+        .filter(|application| !rule.hides(application.opened_ms))
+        .collect::<Vec<_>>();
+    let hidden = snapshot.applications.len() - applications.len();
     let mut state = ui_state.borrow_mut();
     let follows_now = state.follow_now;
     if state.selected_identity.as_ref().is_none_or(|selected| {
-        !snapshot
-            .applications
+        !applications
             .iter()
             .any(|application| &application.identity == selected)
     }) {
-        state.selected_identity = snapshot
-            .applications
+        state.selected_identity = applications
             .first()
             .map(|application| application.identity.clone());
     }
-    state.application_identities = snapshot
-        .applications
+    state.application_identities = applications
         .iter()
         .map(|application| application.identity.clone())
         .collect();
@@ -1208,8 +1231,7 @@ fn render_apps(
         .selected_identity
         .as_ref()
         .and_then(|identity| {
-            snapshot
-                .applications
+            applications
                 .iter()
                 .position(|application| &application.identity == identity)
         })
@@ -1223,8 +1245,7 @@ fn render_apps(
         .map(|application| application.focused_ms)
         .fold(0_u64, u64::saturating_add)
         .max(1) as f64;
-    let app_rows = snapshot
-        .applications
+    let app_rows = applications
         .iter()
         .enumerate()
         .map(|(index, application)| AppRow {
@@ -1250,13 +1271,24 @@ fn render_apps(
     live_input::set_overview(window, snapshot, all || follows_now);
     window.set_focus_total(format_duration(timeline_view::total_focus_ms(snapshot)).into());
     window.set_apps_range(timeline_ui::apps_range_label(snapshot, range_start, all).into());
+    window.set_apps_hidden(if hidden > 0 {
+        trn!(
+            hidden,
+            "另有 {} 个打开不到 {} 秒的应用未显示",
+            hidden,
+            rule.seconds
+        )
+        .into()
+    } else {
+        Default::default()
+    });
     window.set_apps(ui_model::sync(window.get_apps(), app_rows, |a, b| {
         a.identity == b.identity
     }));
     timeline_ui::filter_apps(window);
     window.set_selected_index(selected_index);
 
-    let selected = (selected_index >= 0).then(|| &snapshot.applications[selected_index as usize]);
+    let selected = (selected_index >= 0).then(|| applications[selected_index as usize]);
     render_application(window, selected, snapshot, range_start);
 }
 

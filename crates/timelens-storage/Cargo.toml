@@ -16,6 +16,7 @@ chrono.workspace = true
 rusqlite.workspace = true
 thiserror.workspace = true
 timelens-ipc = { path = "../timelens-ipc" }
+timelens-observer = { path = "../timelens-observer" }
 windows-sys.workspace = true
 zeroize.workspace = true
 zip.workspace = true

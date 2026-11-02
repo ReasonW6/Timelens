@@ -1533,8 +1533,8 @@ msgid "设置"
 msgstr "설정"
 
 #: main-window.slint
-msgid "设置 Timelens 的外观与启动方式。"
-msgstr "Timelens의 모양과 시작 방식을 설정합니다."
+msgid "设置 Timelens 的外观、统计显示与启动方式。"
+msgstr "Timelens의 모양, 통계 표시, 시작 방식을 설정합니다."
 
 #: main-window.slint
 msgid "语言"
@@ -1755,3 +1755,15 @@ msgstr "구간 전체에 걸친 창과 진행 중인 부분은 유지되며, 익
 #: main-window.slint
 msgid "删除记录"
 msgstr "기록 삭제"
+
+#: main-window.slint
+msgid "隐藏短时应用"
+msgstr "짧게 연 앱 숨기기"
+
+#: main-window.slint
+msgid "统计中不显示打开时间不到设定秒数的应用。它们照常记录，时间线里仍然可见。"
+msgstr "설정한 초보다 짧게 열린 앱은 통계에 표시하지 않습니다. 기록은 평소대로 되며 타임라인에는 계속 표시됩니다."
+
+#: main-window.slint
+msgid "秒"
+msgstr "초"

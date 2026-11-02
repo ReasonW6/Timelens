@@ -510,6 +510,27 @@ impl Storage {
         )?)
     }
 
+    /// Windows' own surfaces recorded before they were left out. Their history
+    /// stays but is not shown, as they are not applications.
+    fn system_component_identities(&self) -> Result<std::collections::BTreeSet<String>> {
+        let mut statement = self.connection.prepare(
+            "SELECT DISTINCT application_identity, executable_path
+             FROM application_metadata_revisions
+             WHERE executable_path IS NOT NULL",
+        )?;
+        let rows = statement.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?;
+        let mut hidden = std::collections::BTreeSet::new();
+        for row in rows {
+            let (identity, path) = row?;
+            if timelens_observer::is_system_component(&path) {
+                hidden.insert(identity);
+            }
+        }
+        Ok(hidden)
+    }
+
     pub fn timeline_snapshot(
         &self,
         range_started_utc_ms: i64,
@@ -691,6 +712,8 @@ impl Storage {
             }
         }
 
+        let hidden = self.system_component_identities()?;
+        applications.retain(|identity, _| !hidden.contains(identity));
         let mut timeline_applications = Vec::with_capacity(applications.len());
         for (identity, mut working) in self.merge_working_applications(applications)? {
             working

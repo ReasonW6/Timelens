@@ -831,6 +831,8 @@ export component AppWindow inherits Window {
     // Statistics cover all records unless narrowed to the shared range.
     in-out property <bool> stats-all: true;
     in property <string> apps-range;
+    // How many applications the short-application rule leaves out, in words.
+    in property <string> apps-hidden;
     // How much of the totals' range was observed, and every stretch it is
     // missing; no coverage without any record.
     in property <string> apps-coverage;
@@ -979,6 +981,9 @@ export component AppWindow inherits Window {
     callback language-selected(int);
     // 80%, 90%, 100%, 110%, 125% and 150% of the Windows display scale.
     in-out property <int> ui-scale-choice: 2;
+    in-out property <bool> short-apps-hidden: true;
+    in-out property <string> short-apps-seconds: "30";
+    callback short-apps-changed(bool, string);
     callback ui-scale-selected(int);
     callback startup-changed(bool);
     callback startup-ready;
@@ -1743,7 +1748,7 @@ export component AppWindow inherits Window {
                                         height: 34px;
                                         LineEdit { width: 280px; text <=> root.app-search; placeholder-text: @tr("查找应用"); edited => { root.app-search-changed(); } }
                                         Rectangle { horizontal-stretch: 1; }
-                                        Note { text: root.apps-loading ? @tr("正在统计…") : @tr("{} · 点选应用查看详情", root.apps-range); vertical-alignment: center; }
+                                        Note { text: root.apps-loading ? @tr("正在统计…") : @tr("{} · 点选应用查看详情", root.apps-range) + (root.apps-hidden == "" ? "" : " · " + root.apps-hidden); vertical-alignment: center; }
                                     }
                                     if root.page == 3 && root.stats-tab == 0 && root.filtered-apps.length > 0 : ListView {
                                         vertical-stretch: 1;
@@ -2034,7 +2039,7 @@ export component AppWindow inherits Window {
                                 color: Theme.ink; font-size: 20px; font-weight: 600;
                             }
                             Note {
-                                text: root.settings-tab == 6 ? @tr("设置 Timelens 的外观与启动方式。")
+                                text: root.settings-tab == 6 ? @tr("设置 Timelens 的外观、统计显示与启动方式。")
                                     : root.settings-tab == 0 ? @tr("Timelens 记录什么、不记录什么。")
                                     : root.settings-tab == 1 ? @tr("定时拍摄屏幕快照，帮你回忆当时在做什么。")
                                     : root.settings-tab == 2 ? @tr("为单个应用设置排除、合并显示或删除历史。")
@@ -2085,6 +2090,33 @@ export component AppWindow inherits Window {
                                             model: ["80%", "90%", "100%", "110%", "125%", "150%"];
                                             current-index <=> root.ui-scale-choice;
                                             selected => { root.ui-scale-selected(self.current-index); }
+                                        }
+                                    }
+                                }
+                                SettingsHeader { text: @tr("统计"); }
+                                SettingsGroup {
+                                    SettingRow {
+                                        title: @tr("隐藏短时应用");
+                                        description: @tr("统计中不显示打开时间不到设定秒数的应用。它们照常记录，时间线里仍然可见。");
+                                        icon: @image-url("icons/clock.svg");
+                                        HorizontalLayout {
+                                            spacing: 8px;
+                                            LineEdit {
+                                                width: 72px; height: 34px;
+                                                input-type: number;
+                                                text <=> root.short-apps-seconds;
+                                                enabled: root.short-apps-hidden;
+                                                edited => { root.short-apps-changed(root.short-apps-hidden, self.text); }
+                                            }
+                                            Text { text: @tr("秒"); color: Theme.ink-2; font-size: 13px; vertical-alignment: center; }
+                                            Switch {
+                                                label: @tr("隐藏短时应用");
+                                                checked: root.short-apps-hidden;
+                                                toggled(on) => {
+                                                    root.short-apps-hidden = on;
+                                                    root.short-apps-changed(on, root.short-apps-seconds);
+                                                }
+                                            }
                                         }
                                     }
                                 }

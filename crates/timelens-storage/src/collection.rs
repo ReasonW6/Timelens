@@ -896,6 +896,50 @@ mod tests {
         );
     }
     #[test]
+    fn windows_own_surfaces_recorded_before_are_not_shown() {
+        let (_dir, s) = fixtures::storage();
+        let shown = |s: &Storage| {
+            s.timeline_snapshot(1, 10_000)
+                .unwrap()
+                .applications
+                .into_iter()
+                .map(|app| app.identity)
+                .collect::<Vec<_>>()
+        };
+        let before = shown(&s);
+        // The lock screen, recorded by a collector that still took it for one.
+        let aumid = "Microsoft.LockApp_cw5n1h2txyewy!WindowsDefaultLockScreen";
+        s.ingest_event_batch(&EventBatch {
+            collector_run_id: vec![4; 16],
+            first_sequence: 1,
+            events: vec![CollectorEvent {
+                observed_at_utc_ms: 7000,
+                monotonic_ms: 7000,
+                body: Some(collector_event::Body::WindowTransition(WindowTransition {
+                    kind: WindowTransitionKind::Opened as i32,
+                    window: Some(WindowObservation {
+                        window_id: 6,
+                        process_id: 4,
+                        process_started_at_100ns: 5,
+                        application_identity: format!("aumid:{}", aumid.to_lowercase()),
+                        identity_source: IdentitySource::WindowAppUserModelId as i32,
+                        executable_path: Some(
+                            r"C:\Windows\SystemApps\Microsoft.LockApp_cw5n1h2txyewy\LockApp.exe"
+                                .into(),
+                        ),
+                        app_user_model_id: Some(aumid.into()),
+                        displayed: true,
+                        focused: true,
+                        ..Default::default()
+                    }),
+                })),
+            }],
+        })
+        .unwrap();
+        assert_eq!(shown(&s), before);
+        assert!(!before.is_empty());
+    }
+    #[test]
     fn explicit_app_deletion_removes_history_and_keeps_rules() {
         let (_dir, s) = fixtures::storage();
         let id = "path:c:\\private\\editor.exe";

@@ -1536,8 +1536,8 @@ msgid "设置"
 msgstr "Settings"
 
 #: main-window.slint
-msgid "设置 Timelens 的外观与启动方式。"
-msgstr "Set how Timelens looks and starts."
+msgid "设置 Timelens 的外观、统计显示与启动方式。"
+msgstr "Set how Timelens looks, what statistics show and how it starts."
 
 #: main-window.slint
 msgid "语言"
@@ -1758,3 +1758,15 @@ msgstr "Windows that span the whole stretch and anything still in progress stay;
 #: main-window.slint
 msgid "删除记录"
 msgstr "Delete records"
+
+#: main-window.slint
+msgid "隐藏短时应用"
+msgstr "Hide brief applications"
+
+#: main-window.slint
+msgid "统计中不显示打开时间不到设定秒数的应用。它们照常记录，时间线里仍然可见。"
+msgstr "Statistics leave out applications open for fewer than the set seconds. They are still recorded and remain on the timeline."
+
+#: main-window.slint
+msgid "秒"
+msgstr "seconds"

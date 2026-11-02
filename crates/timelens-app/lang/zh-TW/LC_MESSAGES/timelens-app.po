@@ -1533,8 +1533,8 @@ msgid "设置"
 msgstr "設定"
 
 #: main-window.slint
-msgid "设置 Timelens 的外观与启动方式。"
-msgstr "設定 Timelens 的外觀與啟動方式。"
+msgid "设置 Timelens 的外观、统计显示与启动方式。"
+msgstr "設定 Timelens 的外觀、統計顯示與啟動方式。"
 
 #: main-window.slint
 msgid "语言"
@@ -1755,3 +1755,15 @@ msgstr "貫穿整段的視窗與正在進行的部分保留；匿名累計總數
 #: main-window.slint
 msgid "删除记录"
 msgstr "刪除記錄"
+
+#: main-window.slint
+msgid "隐藏短时应用"
+msgstr "隱藏短時應用程式"
+
+#: main-window.slint
+msgid "统计中不显示打开时间不到设定秒数的应用。它们照常记录，时间线里仍然可见。"
+msgstr "統計中不顯示開啟時間不到設定秒數的應用程式。它們照常記錄，時間軸中仍然可見。"
+
+#: main-window.slint
+msgid "秒"
+msgstr "秒"

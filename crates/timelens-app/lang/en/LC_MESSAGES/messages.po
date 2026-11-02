@@ -1692,3 +1692,9 @@ msgstr "Deleted this stretch of \"{}\""
 #: collection_ui.rs
 msgid "这段时间没有可删除的记录"
 msgstr "Nothing was recorded here to delete"
+
+#: main.rs
+msgid "另有 {} 个打开不到 {} 秒的应用未显示"
+msgid_plural "另有 {} 个打开不到 {} 秒的应用未显示"
+msgstr[0] "{} more application open under {} seconds is not shown"
+msgstr[1] "{} more applications open under {} seconds are not shown"
