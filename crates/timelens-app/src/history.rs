@@ -442,6 +442,7 @@ fn flatten_days<'a>(
         shares: ModelRc::default(),
         rail_top: false,
         rail_bottom: false,
+        has_app: false,
     };
     // More history waits above; the row loads it when clicked.
     let can_load = query.is_empty() && loaded >= 0 && loaded < horizon;
@@ -612,6 +613,7 @@ fn flatten_days<'a>(
                     items.push(HistoryItem {
                         kind: KIND_ENTRY,
                         key: item.key.clone().into(),
+                        has_app: entry.identity.is_some(),
                         height: ENTRY_HEIGHT,
                         title: if visible {
                             name.into()
@@ -735,6 +737,7 @@ fn same_item(a: &HistoryItem, b: &HistoryItem) -> bool {
         shares,
         rail_top,
         rail_bottom,
+        has_app,
     } = a;
     *kind == b.kind
         && *key == b.key
@@ -752,6 +755,7 @@ fn same_item(a: &HistoryItem, b: &HistoryItem) -> bool {
         && same_rows(shares, &b.shares, |a, b| a == b)
         && *rail_top == b.rail_top
         && *rail_bottom == b.rail_bottom
+        && *has_app == b.has_app
 }
 
 fn same_image(a: &Image, b: &Image) -> bool {
@@ -1242,6 +1246,20 @@ pub fn install(
                 ui_state.borrow_mut().selected_identity = entry.entry.identity.clone();
                 return;
             }
+            if (3..=5).contains(&action) {
+                if let Some(identity) = &entry.entry.identity {
+                    if action == 5 {
+                        crate::collection_ui::offer_stretch(
+                            entry.entry.started_utc_ms,
+                            entry.entry.ended_utc_ms,
+                        );
+                    }
+                    window
+                        .global::<crate::CollectionState>()
+                        .invoke_app_menu(identity.into(), [0, 1, 3][action as usize - 3]);
+                }
+                return;
+            }
             focus_range(&window, &storage, &ui_state, &entry);
             if action == 0 {
                 window.invoke_navigate(2);
@@ -1289,6 +1307,7 @@ mod tests {
             left_click_count: 0,
             middle_click_count: 0,
             right_click_count: 0,
+            recent_input_minutes: Default::default(),
             monitoring_gaps: vec![],
         }
     }

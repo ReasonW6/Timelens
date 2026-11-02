@@ -751,6 +751,7 @@ mod tests {
             left_click_count: 0,
             middle_click_count: 0,
             right_click_count: 0,
+            recent_input_minutes: Default::default(),
             monitoring_gaps: Vec::new(),
         }
     }

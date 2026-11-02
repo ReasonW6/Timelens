@@ -60,7 +60,7 @@ UI：`crates/timelens-app/ui/*.slint` 通过 `main.rs` 里的 `slint::slint!` �
 ## 必须遵守的产品约束
 
 - 只记录用户可切换的顶层窗口；同一应用的多个窗口重叠时间不重复累计。
-- 不采集窗口标题、网址、文档内容、剪贴板或原始按键序列；输入只保留聚合计数（Minute input bucket、Daily key frequency）。
+- 不采集窗口标题、网址、文档内容、剪贴板或原始按键序列；输入只保留聚合计数（Minute input bucket、Daily key frequency）。统计页的实时输入预览（含逐键闪烁）是允许的例外，边界见票据 20：只在对应页面显示时发送，不落盘、不进日志，界面只留最新一帧累计数。
 - UI 保持普通权限；不要给采集器增加新的能力面。AI 总结已移除（票据 18），应用不发起网络请求。
 - 未知/缺失数据要显式记录（Monitoring gap、Snapshot omission、Data availability record），不要推测或补齐。
 - 低 CPU、低内存、小安装体积是硬性约束（常驻进程组 100 MiB 门槛）。

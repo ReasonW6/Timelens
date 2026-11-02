@@ -13,7 +13,7 @@ A logical program presented as one Timelens card. It groups all observed window 
 _Avoid_: Process, window, executable
 
 **Application identity**:
-The stable identity that connects an application's windows and history. Display name, icon, or publisher alone never establishes identity, and a user-confirmed merge may connect identities that Timelens conservatively kept separate.
+The stable identity that connects an application's windows and history. Display name, icon, or publisher alone never establishes identity, and a user-confirmed merge may connect identities that Timelens conservatively kept separate. An unpackaged executable that labels only some of its windows with a single AppUserModelID is one application; an executable behind several AppUserModelIDs stays separate.
 _Avoid_: Application name, executable name
 
 **Application metadata revision**:

@@ -16,7 +16,7 @@ pub fn fit_after_show<T: ComponentHandle + 'static>(component: &T) {
 }
 
 /// Like [`fit_after_show`], but the main window's first show in a run also
-/// grows it to most of the monitor.
+/// sizes it to its monitor.
 pub fn open_main<T: ComponentHandle + 'static>(component: &T) {
     after_show(component, true);
 }
@@ -63,26 +63,29 @@ fn fit_available_space(window: &Window, grow: bool) {
     }
     let scale = window.scale_factor();
     let size = if grow {
-        opening_size(size, info.rcWork, scale)
+        opening_size(info.rcWork, scale)
     } else {
         size
     };
-    // A grown window is centered even when it already fits where it is.
+    // A sized window is centered even when it already fits where it is.
     if let Some((position, size)) = fitted_geometry(position, size, info.rcWork, scale, grow) {
         window.set_size(size);
         window.set_position(position);
     }
 }
 
-/// Most of the work area, up to a logical size past which lines only get
-/// longer, and never smaller than the window already is.
-fn opening_size(size: PhysicalSize, work: RECT, scale: f32) -> PhysicalSize {
-    let share = |available: i32, part: f32, limit: f32| {
-        (available.max(0) as f32 * part).min(limit * scale) as u32
+/// About two fifths of the work area, so other windows stay in view: at least
+/// wide enough in logical pixels that the sidebar keeps its labels (it folds
+/// into a rail below 1100), as on a 1920×1080 laptop at 125%, and at most a
+/// logical size past which lines only get longer. A minimum larger than the
+/// monitor is fitted afterwards.
+fn opening_size(work: RECT, scale: f32) -> PhysicalSize {
+    let share = |available: i32, part: f32, least: f32, most: f32| {
+        (available.max(0) as f32 * part).clamp(least * scale, most * scale) as u32
     };
     PhysicalSize::new(
-        size.width.max(share(work.right - work.left, 0.84, 1760.0)),
-        size.height.max(share(work.bottom - work.top, 0.88, 1100.0)),
+        share(work.right - work.left, 0.6, 1120.0, 1600.0),
+        share(work.bottom - work.top, 0.66, 600.0, 1000.0),
     )
 }
 
@@ -149,34 +152,36 @@ mod tests {
     }
 
     #[test]
-    fn opens_large_and_centered_but_not_past_the_limit() {
+    fn opens_at_a_share_of_the_monitor_and_centered() {
         let work = RECT {
             left: 0,
             top: 0,
             right: 1920,
             bottom: 1040,
         };
-        let size = opening_size(PhysicalSize::new(1440, 900), work, 1.0);
-        assert_eq!(size, PhysicalSize::new(1612, 915));
+        let size = opening_size(work, 1.0);
+        assert_eq!(size, PhysicalSize::new(1152, 686));
         let (position, fitted) =
             fitted_geometry(PhysicalPosition::new(0, 0), size, work, 1.0, true).unwrap();
         assert_eq!(fitted, size);
-        assert_eq!(position, PhysicalPosition::new(146, 38));
-        // A wide monitor stops at the limit; a window already larger stays so.
+        assert_eq!(position, PhysicalPosition::new(376, 153));
+        // The same monitor at 125% keeps the logical minimum, which leaves
+        // the sidebar its labels, and still fits.
+        let scaled = opening_size(work, 1.25);
+        assert_eq!(scaled, PhysicalSize::new(1400, 750));
+        assert!(scaled.width as f32 / 1.25 >= 1100.0);
+        let (_, fitted) =
+            fitted_geometry(PhysicalPosition::new(0, 0), scaled, work, 1.25, true).unwrap();
+        assert_eq!(fitted, scaled);
+        // A wide monitor stops at the limit, in logical pixels.
         let wide = RECT {
             left: 0,
             top: 0,
             right: 3840,
             bottom: 2100,
         };
-        assert_eq!(
-            opening_size(PhysicalSize::new(1440, 900), wide, 1.0),
-            PhysicalSize::new(1760, 1100)
-        );
-        assert_eq!(
-            opening_size(PhysicalSize::new(2000, 1200), wide, 1.0),
-            PhysicalSize::new(2000, 1200)
-        );
+        assert_eq!(opening_size(wide, 1.0), PhysicalSize::new(1600, 1000));
+        assert_eq!(opening_size(wide, 1.5), PhysicalSize::new(2304, 1386));
     }
 
     #[test]

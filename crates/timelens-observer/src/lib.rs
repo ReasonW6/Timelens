@@ -46,7 +46,7 @@ use windows::{
                 EVENT_OBJECT_DESTROY, EVENT_OBJECT_HIDE, EVENT_OBJECT_UNCLOAKED,
                 EVENT_SYSTEM_DESKTOPSWITCH, EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_MINIMIZEEND,
                 EVENT_SYSTEM_MINIMIZESTART, EVENT_SYSTEM_MOVESIZEEND, EnumWindows, GA_ROOT,
-                GW_OWNER, GWL_EXSTYLE, GetAncestor, GetClassNameW, GetForegroundWindow, GetWindow,
+                GW_OWNER, GWL_EXSTYLE, GetAncestor, GetForegroundWindow, GetWindow,
                 GetWindowLongPtrW, GetWindowRect, GetWindowThreadProcessId, IsIconic, IsWindow,
                 IsWindowVisible, MSG, MWMO_INPUTAVAILABLE, MsgWaitForMultipleObjectsEx,
                 OBJID_WINDOW, PM_REMOVE, PeekMessageW, QS_ALLINPUT, TranslateMessage,
@@ -1028,8 +1028,10 @@ fn query_process_string(
 }
 
 fn resolve_identity(hwnd: HWND, process: &ProcessInfo) -> Option<ResolvedIdentity> {
-    if process.path.as_deref().is_some_and(is_one_time_installer)
-        || (process.path.as_deref().is_some_and(is_system_app) && is_core_window(hwnd))
+    if process
+        .path
+        .as_deref()
+        .is_some_and(|path| is_one_time_installer(path) || is_system_component(path))
     {
         return None;
     }
@@ -1121,17 +1123,26 @@ fn window_rect(hwnd: HWND) -> Option<RECT> {
     Some(rect)
 }
 
-/// Start, Search, the notification center, the touch keyboard and the lock screen
-/// are top-level core windows of Windows' own system apps. A packaged application
-/// shows its core window inside an ApplicationFrameHost frame instead.
-fn is_system_app(path: &str) -> bool {
-    normalize_path(path).contains(r"\windows\systemapps\")
-}
-
-fn is_core_window(hwnd: HWND) -> bool {
-    let mut class = [0_u16; 32];
-    let length = unsafe { GetClassNameW(hwnd, &mut class) }.max(0) as usize;
-    String::from_utf16_lossy(&class[..length]) == "Windows.UI.Core.CoreWindow"
+/// Windows' own surfaces are not applications the user works in, so they are
+/// never recorded, and history recorded before is not shown. Start, Search, the
+/// notification center, the touch keyboard and the lock screen are Windows'
+/// system apps; quick settings, file pickers, the "open with" chooser and
+/// sign-in prompts are shell hosts in System32.
+pub fn is_system_component(path: &str) -> bool {
+    const SHELL_HOSTS: [&str; 7] = [
+        "shellhost.exe",
+        "pickerhost.exe",
+        "openwith.exe",
+        "credentialuibroker.exe",
+        "logonui.exe",
+        "consent.exe",
+        "smartscreen.exe",
+    ];
+    let path = normalize_path(path);
+    path.contains(r"\windows\systemapps\")
+        || path.rsplit_once('\\').is_some_and(|(folder, name)| {
+            folder.ends_with(r"\windows\system32") && SHELL_HOSTS.contains(&name)
+        })
 }
 
 fn window_cloak(hwnd: HWND) -> Option<u32> {
@@ -1480,19 +1491,25 @@ mod tests {
     }
 
     #[test]
-    fn system_app_shell_surfaces_such_as_start_and_search_are_recognized() {
+    fn windows_own_surfaces_such_as_start_search_and_the_lock_screen_are_not_applications() {
         for shell in [
             r"C:\Windows\SystemApps\Microsoft.Windows.StartMenuExperienceHost_cw5n1h2txyewy\StartMenuExperienceHost.exe",
             r"C:\Windows\SystemApps\MicrosoftWindows.Client.CBS_cw5n1h2txyewy\SearchHost.exe",
+            r"C:\Windows\SystemApps\Microsoft.LockApp_cw5n1h2txyewy\LockApp.exe",
+            r"c:/windows/system32/ShellHost.exe",
+            r"C:\Windows\System32\OpenWith.exe",
         ] {
-            assert!(is_system_app(shell), "{shell}");
+            assert!(is_system_component(shell), "{shell}");
         }
-        // Ordinary packaged and system applications keep their core windows.
+        // Ordinary packaged and system applications are recorded.
         for application in [
             r"C:\Program Files\WindowsApps\Vendor.App_1.0.0.0_x64__abc\App.exe",
             r"C:\Windows\ImmersiveControlPanel\SystemSettings.exe",
+            r"C:\Windows\System32\notepad.exe",
+            r"C:\Windows\explorer.exe",
+            r"D:\Tools\System32\ShellHost.exe",
         ] {
-            assert!(!is_system_app(application), "{application}");
+            assert!(!is_system_component(application), "{application}");
         }
     }
 

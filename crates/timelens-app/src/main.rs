@@ -10,11 +10,13 @@ mod general_ui;
 mod history;
 mod i18n;
 mod icon_cache;
+mod live_input;
 mod local_config;
 mod pause;
 #[cfg(debug_assertions)]
 mod qa;
 mod recovery;
+mod short_apps;
 mod snapshot;
 mod snapshot_grid;
 mod startup;
@@ -46,9 +48,9 @@ use anyhow::{Context, Result, bail};
 use chrono::TimeZone;
 use slint::{Image, Model, ModelRc, SharedString, Timer, TimerMode, VecModel};
 use timelens_ipc::{
-    BatchRejection, COLLECTOR_RESET_PAUSED_FILE, COLLECTOR_RESET_REQUEST_FILE, PROTOCOL_VERSION,
-    SingleInstanceGuard, current_pipe_name, diagnostics, run_server_collector_message,
-    run_server_probe, trust_peer_directory,
+    BatchRejection, COLLECTOR_RESET_PAUSED_FILE, COLLECTOR_RESET_REQUEST_FILE, LiveAnswer,
+    PROTOCOL_VERSION, SingleInstanceGuard, current_pipe_name, diagnostics,
+    run_server_collector_message, run_server_probe, trust_peer_directory,
 };
 use timelens_storage::{
     CoverageGap, ExportFormat, RetentionPolicy, SnapshotDisplay, SnapshotMissingReason,
@@ -454,6 +456,9 @@ fn run_window(
         relabel.set(true)
     });
     let _pause_timer = pause::install(&window, control_directory.clone());
+    short_apps::load(&control_directory);
+    window.set_short_apps_hidden(short_apps::current().on);
+    window.set_short_apps_seconds(short_apps::current().seconds.to_string().into());
     window.set_storage_status(storage_status.into());
     window.set_collector_status(tr!("等待受信采集器事件…").into());
     window.set_build_version(env!("CARGO_PKG_VERSION").into());
@@ -461,12 +466,38 @@ fn run_window(
     let (status_sender, status_receiver) = mpsc::channel();
     let server_storage = Arc::clone(&storage);
     let server_data_directory = data_directory.clone();
+    let server_window = window.as_weak();
     thread::spawn(move || {
         loop {
-            let status = match run_server_collector_message(&pipe_name, COLLECTOR_NAMES, |batch| {
-                ingest_if_not_resetting(&server_storage, &server_data_directory, batch)
-                    .map_err(batch_rejection)
-            }) {
+            let mut live = false;
+            let result = run_server_collector_message(
+                &pipe_name,
+                COLLECTOR_NAMES,
+                |batch| {
+                    ingest_if_not_resetting(&server_storage, &server_data_directory, batch)
+                        .map_err(batch_rejection)
+                },
+                |input| {
+                    live = true;
+                    let wanted = live_input::wanted();
+                    if wanted {
+                        let input = input.clone();
+                        let _ = server_window.upgrade_in_event_loop(move |window| {
+                            live_input::receive(&window, input);
+                        });
+                    }
+                    LiveAnswer {
+                        more: wanted,
+                        keys: live_input::keys_wanted(),
+                    }
+                },
+            );
+            // Live input arrives several times a second while shown; it says
+            // nothing about the collector's health that batches do not.
+            if live && result.is_ok() {
+                continue;
+            }
+            let status = match result {
                 Ok(report) => match server_storage
                     .lock()
                     .map_err(|_| anyhow::anyhow!("storage lock poisoned"))
@@ -546,6 +577,46 @@ fn run_window(
             {
                 render_apps(&window, &ui_state, &snapshot, scope == AppsScope::All);
             }
+        });
+    }
+    {
+        let weak = window.as_weak();
+        let ui_state = Rc::clone(&ui_state);
+        let control = control_directory.clone();
+        window.on_short_apps_changed(move |on, seconds| {
+            let seconds = short_apps::seconds(&seconds).unwrap_or(short_apps::current().seconds);
+            short_apps::set(&control, short_apps::Rule { on, seconds });
+            let shown = ui_state.borrow().apps.shown.clone();
+            if let Some((scope, snapshot)) = shown
+                && let Some(window) = weak.upgrade()
+            {
+                render_apps(&window, &ui_state, &snapshot, scope == AppsScope::All);
+            }
+        });
+    }
+    {
+        let weak = window.as_weak();
+        let ui_state = Rc::clone(&ui_state);
+        let action_busy = Arc::clone(&action_busy);
+        window.on_app_identity_selected(move |identity| {
+            let mut state = ui_state.borrow_mut();
+            if action_busy.load(Ordering::Acquire)
+                || !state
+                    .application_identities
+                    .iter()
+                    .any(|i| i.as_str() == identity.as_str())
+            {
+                return false;
+            }
+            state.selected_identity = Some(identity.into());
+            let shown = state.apps.shown.clone();
+            drop(state);
+            if let Some((scope, snapshot)) = shown
+                && let Some(window) = weak.upgrade()
+            {
+                render_apps(&window, &ui_state, &snapshot, scope == AppsScope::All);
+            }
+            true
         });
     }
     {
@@ -661,6 +732,16 @@ fn run_window(
         collection.set_status("".into());
         window.set_action_busy(timer_busy.load(Ordering::Acquire));
         let ui_active = window.window().is_visible() && !window.window().is_minimized();
+        live_input::set_wanted(
+            ui_active && window.get_page() == 3,
+            window.get_stats_tab() == 1,
+        );
+        if live_input::wanted()
+            && window.get_stats_tab() == 1
+            && collection_ui::keys_due(Instant::now())
+        {
+            collection_ui::refresh_keys(&window);
+        }
         if ui_active {
             request_apps(&window, &timer_storage, &timer_state);
             if let Err(error) = poll_apps(&window, &timer_state) {
@@ -1124,20 +1205,25 @@ fn render_apps(
         .range_ended_utc_ms
         .saturating_sub(range_start)
         .max(1) as f64;
+    let rule = short_apps::current();
+    let applications = snapshot
+        .applications
+        .iter()
+        .filter(|application| !rule.hides(application.opened_ms))
+        .collect::<Vec<_>>();
+    let hidden = snapshot.applications.len() - applications.len();
     let mut state = ui_state.borrow_mut();
+    let follows_now = state.follow_now;
     if state.selected_identity.as_ref().is_none_or(|selected| {
-        !snapshot
-            .applications
+        !applications
             .iter()
             .any(|application| &application.identity == selected)
     }) {
-        state.selected_identity = snapshot
-            .applications
+        state.selected_identity = applications
             .first()
             .map(|application| application.identity.clone());
     }
-    state.application_identities = snapshot
-        .applications
+    state.application_identities = applications
         .iter()
         .map(|application| application.identity.clone())
         .collect();
@@ -1145,8 +1231,7 @@ fn render_apps(
         .selected_identity
         .as_ref()
         .and_then(|identity| {
-            snapshot
-                .applications
+            applications
                 .iter()
                 .position(|application| &application.identity == identity)
         })
@@ -1160,8 +1245,7 @@ fn render_apps(
         .map(|application| application.focused_ms)
         .fold(0_u64, u64::saturating_add)
         .max(1) as f64;
-    let app_rows = snapshot
-        .applications
+    let app_rows = applications
         .iter()
         .enumerate()
         .map(|(index, application)| AppRow {
@@ -1184,25 +1268,27 @@ fn render_apps(
             focus_ratio: ratio(application.focused_ms, focus_sum),
         })
         .collect::<Vec<_>>();
-    window.set_range_keyboard(grouped_count(snapshot.keyboard_count).into());
-    window.set_range_mouse(
-        grouped_count(
-            snapshot
-                .left_click_count
-                .saturating_add(snapshot.middle_click_count)
-                .saturating_add(snapshot.right_click_count),
-        )
-        .into(),
-    );
+    live_input::set_overview(window, snapshot, all || follows_now);
     window.set_focus_total(format_duration(timeline_view::total_focus_ms(snapshot)).into());
     window.set_apps_range(timeline_ui::apps_range_label(snapshot, range_start, all).into());
+    window.set_apps_hidden(if hidden > 0 {
+        trn!(
+            hidden,
+            "另有 {} 个打开不到 {} 秒的应用未显示",
+            hidden,
+            rule.seconds
+        )
+        .into()
+    } else {
+        Default::default()
+    });
     window.set_apps(ui_model::sync(window.get_apps(), app_rows, |a, b| {
         a.identity == b.identity
     }));
     timeline_ui::filter_apps(window);
     window.set_selected_index(selected_index);
 
-    let selected = (selected_index >= 0).then(|| &snapshot.applications[selected_index as usize]);
+    let selected = (selected_index >= 0).then(|| applications[selected_index as usize]);
     render_application(window, selected, snapshot, range_start);
 }
 

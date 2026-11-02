@@ -1159,7 +1159,7 @@ pub(crate) mod tests {
         for name in storage.snapshot_container_files().unwrap() {
             fs::remove_file(storage.snapshot_directory().join(name)).unwrap();
         }
-        storage.connection.execute_batch("DROP TABLE snapshot_slot_days; DROP TABLE snapshot_container_records; DROP TABLE snapshot_containers; PRAGMA user_version=12;").unwrap();
+        storage.connection.execute_batch("DROP TABLE snapshot_slot_days; DROP TABLE snapshot_container_records; DROP TABLE snapshot_containers; DROP TABLE deleted_application_stretches; PRAGMA user_version=12;").unwrap();
         // Schema 12 still held the AI tables and stored usage reports that later
         // migrations drop.
         storage

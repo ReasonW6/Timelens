@@ -13,7 +13,7 @@ use crate::{
 pub struct Envelope {
     #[prost(uint32, tag = "1")]
     pub protocol_version: u32,
-    #[prost(oneof = "envelope::Body", tags = "2, 3, 4, 5, 6, 7")]
+    #[prost(oneof = "envelope::Body", tags = "2, 3, 4, 5, 6, 7, 8")]
     pub body: Option<envelope::Body>,
 }
 
@@ -34,6 +34,8 @@ pub mod envelope {
         EventBatch(EventBatch),
         #[prost(message, tag = "7")]
         Ack(Ack),
+        #[prost(message, tag = "8")]
+        LiveInput(LiveInput),
     }
 }
 
@@ -132,6 +134,30 @@ pub struct InputMinute {
     #[prost(uint32, tag = "8")]
     pub right_click_count: u32,
     #[prost(message, repeated, tag = "9")]
+    pub key_counts: Vec<PhysicalKeyCount>,
+}
+
+/// The attributed input counted so far in the minute the collector has not
+/// sealed yet, for the core to show and never store: the minute arrives sealed
+/// later as an `InputMinute`. Only while the core shows which keys are pressed
+/// does it count them too, by position alone, so every `keyboard_layout` is
+/// zero. The core's acknowledgement says whether it wants more of them, and
+/// whether with keys. See ticket 20 for what previews may and may not be.
+#[derive(Clone, PartialEq, Message)]
+pub struct LiveInput {
+    #[prost(int64, tag = "1")]
+    pub minute_started_at_utc_ms: i64,
+    #[prost(string, tag = "2")]
+    pub local_date: String,
+    #[prost(uint32, tag = "3")]
+    pub keyboard_count: u32,
+    #[prost(uint32, tag = "4")]
+    pub left_click_count: u32,
+    #[prost(uint32, tag = "5")]
+    pub middle_click_count: u32,
+    #[prost(uint32, tag = "6")]
+    pub right_click_count: u32,
+    #[prost(message, repeated, tag = "7")]
     pub key_counts: Vec<PhysicalKeyCount>,
 }
 
@@ -257,6 +283,9 @@ pub struct Ack {
     /// Set with `accepted = false` when resending the same batch can never succeed.
     #[prost(bool, tag = "3")]
     pub permanent: bool,
+    /// Answering live input: whether the next previews should say which keys.
+    #[prost(bool, tag = "4")]
+    pub keys: bool,
 }
 
 impl Envelope {
@@ -289,6 +318,7 @@ impl Envelope {
                 validate_nonce(&message.server_nonce, "echoed server")
             }
             envelope::Body::EventBatch(batch) => validate_event_batch(batch),
+            envelope::Body::LiveInput(input) => validate_live_input(input),
             envelope::Body::Heartbeat(_) | envelope::Body::Ack(_) => Ok(()),
         }
     }
@@ -441,6 +471,40 @@ fn validate_input_minute(minute: &InputMinute, observed_at_utc_ms: i64) -> Resul
     {
         return Err(IpcError::InvalidMessage(
             "input minute totals are inconsistent".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_live_input(input: &LiveInput) -> Result<()> {
+    if input.minute_started_at_utc_ms <= 0
+        || input.minute_started_at_utc_ms % 60_000 != 0
+        || !valid_local_date(&input.local_date)
+        || input.key_counts.len() > MAX_INPUT_KEYS_PER_MINUTE
+    {
+        return Err(IpcError::InvalidMessage("live input is invalid".to_owned()));
+    }
+    if input.key_counts.is_empty() {
+        return Ok(());
+    }
+    let mut seen = std::collections::HashSet::with_capacity(input.key_counts.len());
+    let mut keyboard_total = 0_u64;
+    for key in &input.key_counts {
+        if key.scan_code > 0x1ff
+            || key.keyboard_layout != 0
+            || key.count == 0
+            || !seen.insert(key.scan_code)
+        {
+            return Err(IpcError::InvalidMessage(
+                "live input physical key counts are invalid".to_owned(),
+            ));
+        }
+        keyboard_total += u64::from(key.count);
+    }
+    // Keys, once counted, account for every key press.
+    if keyboard_total != u64::from(input.keyboard_count) {
+        return Err(IpcError::InvalidMessage(
+            "live input totals are inconsistent".to_owned(),
         ));
     }
     Ok(())
@@ -656,6 +720,98 @@ mod tests {
         let decoded = read_frame(&mut bytes.as_slice()).unwrap();
 
         assert_eq!(decoded, message);
+    }
+
+    #[test]
+    fn live_input_round_trips_with_or_without_keys_by_position_only() {
+        let input = LiveInput {
+            minute_started_at_utc_ms: 1_700_000_040_000,
+            local_date: "2023-11-15".into(),
+            keyboard_count: 3,
+            right_click_count: 1,
+            key_counts: vec![
+                PhysicalKeyCount {
+                    scan_code: 0x1e,
+                    keyboard_layout: 0,
+                    count: 2,
+                },
+                PhysicalKeyCount {
+                    scan_code: 0x11c,
+                    keyboard_layout: 0,
+                    count: 1,
+                },
+            ],
+            ..Default::default()
+        };
+        let message = Envelope::new(envelope::Body::LiveInput(input.clone()));
+        let mut bytes = Vec::new();
+        write_frame(&mut bytes, &message).unwrap();
+        assert_eq!(read_frame(&mut bytes.as_slice()).unwrap(), message);
+        // Totals alone, while the core does not show which keys.
+        write_frame(
+            &mut Vec::new(),
+            &Envelope::new(envelope::Body::LiveInput(LiveInput {
+                key_counts: Vec::new(),
+                ..input.clone()
+            })),
+        )
+        .unwrap();
+        // An empty minute says the previous one was sealed.
+        let empty = LiveInput {
+            keyboard_count: 0,
+            right_click_count: 0,
+            key_counts: Vec::new(),
+            ..input.clone()
+        };
+        write_frame(
+            &mut Vec::new(),
+            &Envelope::new(envelope::Body::LiveInput(empty)),
+        )
+        .unwrap();
+
+        for broken in [
+            // Keys that do not add up to the total.
+            LiveInput {
+                keyboard_count: 2,
+                ..input.clone()
+            },
+            LiveInput {
+                minute_started_at_utc_ms: 1_700_000_041_000,
+                ..input.clone()
+            },
+            LiveInput {
+                local_date: "2023-1-15".into(),
+                ..input.clone()
+            },
+            // A layout says more than the position.
+            LiveInput {
+                key_counts: vec![PhysicalKeyCount {
+                    scan_code: 0x1e,
+                    keyboard_layout: 0x0409_0409,
+                    count: 3,
+                }],
+                ..input.clone()
+            },
+            // The same key twice.
+            LiveInput {
+                key_counts: vec![
+                    PhysicalKeyCount {
+                        scan_code: 0x1e,
+                        keyboard_layout: 0,
+                        count: 2,
+                    },
+                    PhysicalKeyCount {
+                        scan_code: 0x1e,
+                        keyboard_layout: 0,
+                        count: 1,
+                    },
+                ],
+                ..input.clone()
+            },
+        ] {
+            let message = Envelope::new(envelope::Body::LiveInput(broken));
+            assert!(write_frame(&mut Vec::new(), &message).is_err());
+        }
     }
 
     #[test]
