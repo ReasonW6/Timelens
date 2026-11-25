@@ -71,17 +71,21 @@ struct Rules {
 }
 
 impl Rules {
-    fn decide(&self, identity: &str) -> ApplicationCategory {
-        let members = merge_group(identity, &self.edges);
-        // Merged applications share the choice made last.
-        let manual = members
+    /// The choice by hand a merge group shares: the one made last.
+    fn manual_choice(&self, members: &BTreeSet<String>) -> Option<Option<i64>> {
+        members
             .iter()
             .filter_map(|member| self.manual.get(member))
-            .max_by_key(|(_, at)| *at);
-        if let Some((category, _)) = manual {
+            .max_by_key(|(_, at)| *at)
+            .map(|(category, _)| *category)
+    }
+
+    fn decide(&self, identity: &str) -> ApplicationCategory {
+        let members = merge_group(identity, &self.edges);
+        if let Some(category) = self.manual_choice(&members) {
             return ApplicationCategory {
-                category: *category,
-                choice: CategoryChoice::Manual(*category),
+                category,
+                choice: CategoryChoice::Manual(category),
                 folder: None,
             };
         }
@@ -174,20 +178,40 @@ impl Storage {
             params![id, name],
         )?;
         if changed == 0 {
-            return Err(StorageError::Integrity(
-                "category cannot take that name".into(),
-            ));
+            return Err(StorageError::Integrity("这个分类不能使用这个名称".into()));
         }
         Ok(())
     }
 
     /// Delete a category. Its folder rules go with it, and applications put in
-    /// it by hand are decided by folder again.
+    /// it by hand are decided by folder again, with every application merged
+    /// with them, so no older choice of a member takes its place.
     pub fn delete_category(&self, id: i64) -> Result<()> {
-        self.connection.execute(
+        let rules = self.category_rules()?;
+        let mut cleared = BTreeSet::new();
+        for (identity, (category, _)) in &rules.manual {
+            if *category != Some(id) || cleared.contains(identity) {
+                continue;
+            }
+            let members = merge_group(identity, &rules.edges);
+            // Only a group showing this category changes; one whose newer
+            // choice is another keeps it.
+            if rules.manual_choice(&members) == Some(Some(id)) {
+                cleared.extend(members);
+            }
+        }
+        let tx = Transaction::new_unchecked(&self.connection, TransactionBehavior::Immediate)?;
+        for member in &cleared {
+            tx.execute(
+                "DELETE FROM application_category_assignments WHERE application_identity = ?1",
+                [member],
+            )?;
+        }
+        tx.execute(
             "DELETE FROM application_categories WHERE category_id = ?1",
             [id],
         )?;
+        tx.commit()?;
         Ok(())
     }
 
@@ -195,7 +219,7 @@ impl Storage {
     /// to one category only.
     pub fn add_category_folder(&self, id: i64, folder: &str) -> Result<()> {
         let folder = normalize_folder(folder)
-            .ok_or_else(|| StorageError::Integrity("folder is empty".into()))?;
+            .ok_or_else(|| StorageError::Integrity("目录不能为空".into()))?;
         self.connection.execute(
             "INSERT INTO application_category_folders(folder, category_id) VALUES (?1, ?2)",
             params![folder, id],
@@ -236,7 +260,11 @@ impl Storage {
 
     /// The category an application and those merged with it fall into.
     pub fn application_category(&self, identity: &str) -> Result<ApplicationCategory> {
-        Ok(self.category_rules()?.decide(identity))
+        let edges = self.merge_edges()?;
+        let members = merge_group(identity, &edges);
+        Ok(self
+            .category_rules_for(edges, Some(&members))?
+            .decide(identity))
     }
 
     /// The category of each application given, by its merge group's root as
@@ -253,33 +281,72 @@ impl Storage {
     }
 
     fn category_rules(&self) -> Result<Rules> {
-        let manual = self
-            .connection
-            .prepare(
-                "SELECT application_identity, category_id, assigned_utc_ms
-                 FROM application_category_assignments",
-            )?
-            .query_map([], |r| Ok((r.get(0)?, (r.get(1)?, r.get(2)?))))?
-            .collect::<rusqlite::Result<_>>()?;
+        self.category_rules_for(self.merge_edges()?, None)
+    }
+
+    /// The rules, with the choices by hand and the recorded executables of
+    /// `only` alone when given, which is all one merge group needs.
+    fn category_rules_for(
+        &self,
+        edges: Vec<(String, String)>,
+        only: Option<&BTreeSet<String>>,
+    ) -> Result<Rules> {
+        let mut manual = BTreeMap::new();
+        let mut paths = BTreeMap::<String, BTreeSet<String>>::new();
+        let mut add_path = |identity: String, path: String| {
+            if let Some(path) = normalize_folder(&path) {
+                paths.entry(identity).or_default().insert(path);
+            }
+        };
+        match only {
+            None => {
+                manual = self
+                    .connection
+                    .prepare(
+                        "SELECT application_identity, category_id, assigned_utc_ms
+                         FROM application_category_assignments",
+                    )?
+                    .query_map([], |r| Ok((r.get(0)?, (r.get(1)?, r.get(2)?))))?
+                    .collect::<rusqlite::Result<_>>()?;
+                let mut statement = self.connection.prepare(
+                    "SELECT DISTINCT application_identity, executable_path
+                     FROM application_metadata_revisions WHERE executable_path IS NOT NULL",
+                )?;
+                for row in statement.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))? {
+                    let (identity, path) = row?;
+                    add_path(identity, path);
+                }
+            }
+            Some(members) => {
+                let mut choice = self.connection.prepare(
+                    "SELECT category_id, assigned_utc_ms FROM application_category_assignments
+                     WHERE application_identity = ?1",
+                )?;
+                let mut recorded = self.connection.prepare(
+                    "SELECT DISTINCT executable_path FROM application_metadata_revisions
+                     WHERE application_identity = ?1 AND executable_path IS NOT NULL",
+                )?;
+                for member in members {
+                    if let Some(made) = choice
+                        .query_row([member], |r| Ok((r.get(0)?, r.get(1)?)))
+                        .optional()?
+                    {
+                        manual.insert(member.clone(), made);
+                    }
+                    for path in recorded.query_map([member], |r| r.get(0))? {
+                        add_path(member.clone(), path?);
+                    }
+                }
+            }
+        }
         let mut folders = self
             .connection
             .prepare("SELECT folder, category_id FROM application_category_folders")?
             .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get(1)?)))?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         folders.sort_by(|a, b| b.0.len().cmp(&a.0.len()).then_with(|| a.0.cmp(&b.0)));
-        let mut paths = BTreeMap::<String, BTreeSet<String>>::new();
-        let mut statement = self.connection.prepare(
-            "SELECT DISTINCT application_identity, executable_path
-             FROM application_metadata_revisions WHERE executable_path IS NOT NULL",
-        )?;
-        for row in statement.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get(1)?)))? {
-            let (identity, path): (String, String) = row?;
-            if let Some(path) = normalize_folder(&path) {
-                paths.entry(identity).or_default().insert(path);
-            }
-        }
         Ok(Rules {
-            edges: self.merge_edges()?,
+            edges,
             manual,
             folders,
             paths,
@@ -346,9 +413,7 @@ impl Storage {
 fn category_name(name: &str) -> Result<String> {
     let name = name.trim();
     if name.is_empty() || name.chars().count() > CATEGORY_NAME_LIMIT {
-        return Err(StorageError::Integrity(
-            "category name is empty or too long".into(),
-        ));
+        return Err(StorageError::Integrity("分类名称不能为空或过长".into()));
     }
     Ok(name.to_owned())
 }
@@ -506,6 +571,147 @@ mod tests {
             union_intervals(vec![(5, 9), (1, 3), (2, 4), (9, 10)]),
             [(1, 4), (5, 10)]
         );
+    }
+
+    #[test]
+    fn deleting_a_category_sends_its_whole_merged_group_back_to_folders() {
+        let (_dir, s) = fixtures::storage();
+        let [work, study, play, social, _] = ids(&s);
+        let other = "path:c:\\other\\editor.exe";
+        let chose = |identity: &str, category: i64, at: i64| {
+            s.connection
+                .execute(
+                    "INSERT OR REPLACE INTO application_category_assignments VALUES (?1, ?2, ?3)",
+                    params![identity, category, at],
+                )
+                .unwrap();
+        };
+        // Each chose apart before they were merged; the later choice shows.
+        chose(EDITOR, study, 1);
+        chose(other, work, 2);
+        s.set_application_merge(EDITOR, other, true).unwrap();
+        s.add_category_folder(play, "c:\\private").unwrap();
+        assert_eq!(s.application_category(EDITOR).unwrap().category, Some(work));
+        s.delete_category(work).unwrap();
+        let decided = s.application_category(EDITOR).unwrap();
+        assert_eq!(
+            (decided.category, decided.choice),
+            (Some(play), CategoryChoice::Auto)
+        );
+        // Split again, neither brings back its older choice.
+        s.set_application_merge(EDITOR, other, false).unwrap();
+        assert_eq!(
+            s.application_category(EDITOR).unwrap().choice,
+            CategoryChoice::Auto
+        );
+        assert_eq!(
+            s.application_category(other).unwrap().choice,
+            CategoryChoice::Auto
+        );
+        // A group whose newer choice is another category keeps it.
+        chose(EDITOR, study, 3);
+        chose(other, social, 4);
+        s.set_application_merge(EDITOR, other, true).unwrap();
+        s.delete_category(study).unwrap();
+        assert_eq!(
+            s.application_category(EDITOR).unwrap().category,
+            Some(social)
+        );
+    }
+
+    #[test]
+    fn categories_outlive_clearing_and_return_with_backups_and_recovery() {
+        let (source, s) = fixtures::storage();
+        let [work, study, play, ..] = ids(&s);
+        s.rename_category(work, "Job").unwrap();
+        s.add_category_folder(play, "c:\\private").unwrap();
+        s.set_application_category(EDITOR, CategoryChoice::Manual(Some(work)))
+            .unwrap();
+        // A deleted preset stays deleted.
+        s.delete_category(study).unwrap();
+        let categories = s.categories().unwrap();
+        let chosen = s.application_category(EDITOR).unwrap();
+
+        let folder = tempfile::tempdir().unwrap();
+        let archive = folder.path().join("portable.zip");
+        s.export_backup(
+            &archive,
+            BackupOptions {
+                include_snapshots: false,
+                password: None,
+            },
+        )
+        .unwrap();
+        let target = tempfile::tempdir().unwrap();
+        let target = Storage::open(target.path()).unwrap();
+        let prepared = Storage::prepare_restore(&archive, None, folder.path()).unwrap();
+        target.replace_from_backup(prepared, false).unwrap();
+        assert_eq!(target.categories().unwrap(), categories);
+        assert_eq!(target.application_category(EDITOR).unwrap(), chosen);
+
+        s.checkpoint().unwrap();
+        let parent = tempfile::tempdir().unwrap();
+        let destination = parent.path().join("recovered");
+        drop(s);
+        let (recovered, _) =
+            Storage::recover_to_new_directory(source.path(), &destination).unwrap();
+        assert_eq!(recovered.categories().unwrap(), categories);
+        assert_eq!(recovered.application_category(EDITOR).unwrap(), chosen);
+
+        recovered.clear_all().unwrap();
+        assert_eq!(recovered.categories().unwrap(), categories);
+        assert_eq!(recovered.application_category(EDITOR).unwrap(), chosen);
+    }
+
+    #[test]
+    fn focused_spans_join_merged_applications_and_leave_windows_own_out() {
+        let (_dir, s) = fixtures::storage();
+        let other = "path:c:\\other\\editor.exe";
+        let shell = "path:c:\\windows\\systemapps\\shell\\shellhost.exe";
+        window(&s, 3, 2, other, 7000, 8000);
+        window(&s, 5, 3, shell, 8000, 9000);
+        s.set_application_merge(EDITOR, other, true).unwrap();
+        // The group goes by the first of its identities.
+        assert_eq!(
+            s.focused_spans(0, 10_000).unwrap(),
+            FocusSpans::from([(other.into(), vec![(1000, 6000), (7000, 8000)])])
+        );
+    }
+
+    /// Record a focused window of `identity` open from `from` to `to`.
+    fn window(s: &Storage, sequence: u64, id: u64, identity: &str, from: i64, to: i64) {
+        use timelens_ipc::{WindowTransition, WindowTransitionKind};
+        let path = identity.strip_prefix("path:").unwrap().to_owned();
+        let event = |time: i64, kind: WindowTransitionKind| CollectorEvent {
+            observed_at_utc_ms: time,
+            monotonic_ms: time as u64,
+            body: Some(collector_event::Body::WindowTransition(WindowTransition {
+                kind: kind as i32,
+                window: Some(WindowObservation {
+                    window_id: id,
+                    process_id: id as u32 + 10,
+                    process_started_at_100ns: 3,
+                    application_identity: identity.into(),
+                    identity_source: IdentitySource::ExecutablePath as i32,
+                    executable_path: Some(path.clone()),
+                    app_user_model_id: None,
+                    package_identity: None,
+                    displayed: true,
+                    focused: true,
+                    on_current_virtual_desktop: Some(true),
+                    virtual_desktop_id: None,
+                }),
+            })),
+        };
+        s.ingest_event_batch(&EventBatch {
+            collector_run_id: vec![1; 16],
+            first_sequence: sequence,
+            events: vec![
+                event(from, WindowTransitionKind::Opened),
+                event(to, WindowTransitionKind::Closed),
+            ],
+        })
+        .unwrap();
     }
 
     /// The presets' ids, in order.

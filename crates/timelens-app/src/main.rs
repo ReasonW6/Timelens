@@ -808,6 +808,7 @@ fn run_window(
             window.set_snapshot_detail(tr!("数据已变更，请重新选择快照").into());
             history::reset(&timer_history);
             timer_state.borrow_mut().apps = AppsState::default();
+            trend_ui::invalidate();
             refresh_requested = true;
         }
         if relabel_pending.take() {
@@ -816,6 +817,8 @@ fn run_window(
             window.set_snapshot_detail("".into());
             history::reset(&timer_history);
             timer_state.borrow_mut().apps = AppsState::default();
+            // The trend's words and preset names follow the language.
+            trend_ui::invalidate();
             window.invoke_general_opened();
             if window.get_settings_open() && window.get_settings_tab() == 2 {
                 collection.invoke_opened();
@@ -829,6 +832,7 @@ fn run_window(
                 // Cleaning or clearing may have removed earlier days' records.
                 history::reset(&timer_history);
                 timer_state.borrow_mut().apps = AppsState::default();
+                trend_ui::invalidate();
             }
             refresh_requested |= status.refresh;
         }

@@ -1872,3 +1872,19 @@ msgstr "No focus recorded in this period."
 #: categories_ui.rs
 msgid "选择要归入分类的目录"
 msgstr "Choose a folder for the category"
+
+#: storage
+msgid "这个分类不能使用这个名称"
+msgstr "This category cannot take that name"
+
+#: storage
+msgid "目录不能为空"
+msgstr "The folder is empty"
+
+#: storage
+msgid "分类名称不能为空或过长"
+msgstr "The category name is empty or too long"
+
+#: categories_ui.rs
+msgid "{}，但重新读取分类失败：{}"
+msgstr "{}, but reading the categories again failed: {}"

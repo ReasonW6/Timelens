@@ -1843,3 +1843,19 @@ msgstr "この期間にフォーカスの記録はありません。"
 #: categories_ui.rs
 msgid "选择要归入分类的目录"
 msgstr "カテゴリに入れるフォルダーを選択"
+
+#: storage
+msgid "这个分类不能使用这个名称"
+msgstr "このカテゴリにはその名前を使えません"
+
+#: storage
+msgid "目录不能为空"
+msgstr "フォルダーが空です"
+
+#: storage
+msgid "分类名称不能为空或过长"
+msgstr "カテゴリ名が空か長すぎます"
+
+#: categories_ui.rs
+msgid "{}，但重新读取分类失败：{}"
+msgstr "{}。ただし、カテゴリの再読み込みに失敗しました: {}"

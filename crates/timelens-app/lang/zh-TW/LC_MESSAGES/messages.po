@@ -1843,3 +1843,19 @@ msgstr "這段時間沒有聚焦記錄。"
 #: categories_ui.rs
 msgid "选择要归入分类的目录"
 msgstr "選擇要歸入分類的目錄"
+
+#: storage
+msgid "这个分类不能使用这个名称"
+msgstr "這個分類不能使用這個名稱"
+
+#: storage
+msgid "目录不能为空"
+msgstr "目錄不能為空"
+
+#: storage
+msgid "分类名称不能为空或过长"
+msgstr "分類名稱不能為空或過長"
+
+#: categories_ui.rs
+msgid "{}，但重新读取分类失败：{}"
+msgstr "{}，但重新讀取分類失敗：{}"

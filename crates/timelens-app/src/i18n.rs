@@ -279,7 +279,7 @@ pub(crate) use trn;
 
 /// Failures storage describes in Simplified Chinese. They reach the interface
 /// inside its errors, and read in the current language there.
-const STORAGE_DETAILS: [&str; 46] = [
+const STORAGE_DETAILS: [&str; 49] = [
     "请选择两个不同应用",
     "恢复目录必须与原数据目录分开",
     "请选择一个新的空恢复目录",
@@ -326,6 +326,9 @@ const STORAGE_DETAILS: [&str; 46] = [
     "快照像素大小超出限制",
     "快照像素校验失败",
     "图片哈希无效",
+    "这个分类不能使用这个名称",
+    "目录不能为空",
+    "分类名称不能为空或过长",
 ];
 
 /// A storage error as it reads in the current language.

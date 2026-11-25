@@ -3,7 +3,7 @@
 use crate::i18n::{tr, trn};
 use crate::{AppWindow, CategoryItem, CategoryState};
 use anyhow::{Result, anyhow};
-use slint::{Color, ComponentHandle, ModelRc, VecModel};
+use slint::{Color, ComponentHandle, Model, ModelRc, VecModel};
 use std::{
     rc::Rc,
     sync::{Arc, Mutex},
@@ -72,64 +72,132 @@ fn checked_name(text: &str, categories: &[Category], renamed: Option<i64>) -> Re
     Ok(text.to_owned())
 }
 
-fn show(window: &AppWindow, storage: &Storage) -> Result<()> {
-    let items = storage
-        .categories()?
-        .iter()
-        .map(|category| CategoryItem {
-            id: category.id as i32,
-            name: name(category).into(),
-            tint: color(category),
-            folders: Rc::new(VecModel::from(
-                category
-                    .folders
-                    .iter()
-                    .map(|folder| folder.into())
-                    .collect::<Vec<slint::SharedString>>(),
-            ))
-            .into(),
-            summary: if category.folders.is_empty() {
-                tr!("没有目录规则").into()
-            } else {
-                trn!(
-                    category.folders.len(),
-                    "{} 个目录规则",
-                    category.folders.len()
-                )
-                .into()
-            },
-        })
-        .collect::<Vec<_>>();
-    window
-        .global::<CategoryState>()
-        .set_items(ModelRc::new(VecModel::from(items)));
+thread_local! {
+    /// The categories on the settings page. The list is updated in place, so
+    /// a row stays open while its folders and name change.
+    static ITEMS: Rc<VecModel<CategoryItem>> = Rc::new(VecModel::default());
+}
+
+fn item(category: &Category) -> CategoryItem {
+    CategoryItem {
+        id: category.id as i32,
+        name: name(category).into(),
+        tint: color(category),
+        folders: Rc::new(VecModel::from(
+            category
+                .folders
+                .iter()
+                .map(|folder| folder.into())
+                .collect::<Vec<slint::SharedString>>(),
+        ))
+        .into(),
+        summary: if category.folders.is_empty() {
+            tr!("没有目录规则").into()
+        } else {
+            trn!(
+                category.folders.len(),
+                "{} 个目录规则",
+                category.folders.len()
+            )
+            .into()
+        },
+    }
+}
+
+/// Bring the rows to `items`: rows of deleted categories go, the others are
+/// changed where they stand, and new ones are put in their place.
+fn update_rows(rows: &VecModel<CategoryItem>, items: Vec<CategoryItem>) {
+    for index in (0..rows.row_count()).rev() {
+        let id = rows.row_data(index).map(|row| row.id);
+        if !items.iter().any(|item| Some(item.id) == id) {
+            rows.remove(index);
+        }
+    }
+    for (index, item) in items.into_iter().enumerate() {
+        if rows.row_data(index).is_some_and(|row| row.id == item.id) {
+            rows.set_row_data(index, item);
+        } else {
+            rows.insert(index, item);
+        }
+    }
+}
+
+fn show(storage: &Storage) -> Result<()> {
+    let items = storage.categories()?.iter().map(item).collect();
+    ITEMS.with(|rows| update_rows(rows, items));
     Ok(())
 }
 
-/// Apply a change, then show the categories again and say how it went.
+/// Apply a change, then show the categories again and say how it went. A
+/// change that returns no message changed nothing.
 fn apply(
     window: &AppWindow,
     storage: &Arc<Mutex<Storage>>,
-    change: impl FnOnce(&Storage) -> Result<String>,
+    change: impl FnOnce(&Storage) -> Result<Option<String>>,
 ) {
     let state = window.global::<CategoryState>();
-    let result = lock(storage).and_then(|storage| {
-        let message = change(&storage)?;
-        show(window, &storage)?;
-        Ok(message)
-    });
-    match result {
-        Ok(message) => {
+    let storage = match lock(storage) {
+        Ok(storage) => storage,
+        Err(error) => {
+            state.set_status(tr!("保存失败：{}", error).into());
+            return;
+        }
+    };
+    match change(&storage) {
+        Ok(Some(message)) => {
             state.set_confirm_delete(-1);
             crate::trend_ui::invalidate();
-            state.set_status(message.into());
+            // The change is saved even when reading it back fails.
+            match show(&storage) {
+                Ok(()) => state.set_status(message.into()),
+                Err(error) => {
+                    state.set_status(tr!("{}，但重新读取分类失败：{}", message, error).into())
+                }
+            }
         }
+        Ok(None) => {}
         Err(error) => state.set_status(tr!("保存失败：{}", error).into()),
     }
 }
 
+/// What renaming `category` to `text` does: nothing when the name stays, its
+/// own name back for a preset given none or its own, or the new name.
+#[derive(Debug, PartialEq, Eq)]
+enum Rename {
+    Unchanged,
+    Default(String),
+    To(String),
+}
+
+fn rename(text: &str, category: &Category, categories: &[Category]) -> Result<Rename> {
+    let text = text.trim();
+    if text == name(category) {
+        return Ok(Rename::Unchanged);
+    }
+    if category.preset.is_some() {
+        let own = name(&Category {
+            name: None,
+            ..category.clone()
+        });
+        if text.is_empty() || text == own {
+            // Its own name must still be free.
+            return Ok(Rename::Default(checked_name(
+                &own,
+                categories,
+                Some(category.id),
+            )?));
+        }
+    }
+    Ok(Rename::To(checked_name(
+        text,
+        categories,
+        Some(category.id),
+    )?))
+}
+
 pub fn install(window: &AppWindow, storage: Arc<Mutex<Storage>>) {
     let state = window.global::<CategoryState>();
+    state.set_items(ModelRc::from(ITEMS.with(Rc::clone)));
     {
         let weak = window.as_weak();
         let storage = storage.clone();
@@ -139,7 +207,7 @@ pub fn install(window: &AppWindow, storage: Arc<Mutex<Storage>>) {
             };
             let state = window.global::<CategoryState>();
             state.set_confirm_delete(-1);
-            if let Err(error) = lock(&storage).and_then(|storage| show(&window, &storage)) {
+            if let Err(error) = lock(&storage).and_then(|storage| show(&storage)) {
                 state.set_status(tr!("读取分类失败：{}", error).into());
             }
         });
@@ -155,7 +223,7 @@ pub fn install(window: &AppWindow, storage: Arc<Mutex<Storage>>) {
                 let text = checked_name(&text, &storage.categories()?, None)?;
                 storage.add_category(&text)?;
                 window.global::<CategoryState>().set_new_name("".into());
-                Ok(tr!("已新建分类「{}」", text))
+                Ok(Some(tr!("已新建分类「{}」", text)))
             });
         });
     }
@@ -172,16 +240,17 @@ pub fn install(window: &AppWindow, storage: Arc<Mutex<Storage>>) {
                     .iter()
                     .find(|c| c.id == i64::from(id))
                     .ok_or_else(|| anyhow!(tr!("这个分类已不存在")))?;
-                // A preset given no name takes its own back.
-                if text.trim().is_empty() && category.preset.is_some() {
-                    storage.rename_category(category.id, "")?;
-                    let mut own = category.clone();
-                    own.name = None;
-                    return Ok(tr!("已恢复默认名称「{}」", name(&own)));
-                }
-                let text = checked_name(&text, &categories, Some(category.id))?;
-                storage.rename_category(category.id, &text)?;
-                Ok(tr!("已改名为「{}」", text))
+                Ok(match rename(&text, category, &categories)? {
+                    Rename::Unchanged => None,
+                    Rename::Default(own) => {
+                        storage.rename_category(category.id, "")?;
+                        Some(tr!("已恢复默认名称「{}」", own))
+                    }
+                    Rename::To(text) => {
+                        storage.rename_category(category.id, &text)?;
+                        Some(tr!("已改名为「{}」", text))
+                    }
+                })
             });
         });
     }
@@ -200,7 +269,7 @@ pub fn install(window: &AppWindow, storage: Arc<Mutex<Storage>>) {
                     .map(name)
                     .ok_or_else(|| anyhow!(tr!("这个分类已不存在")))?;
                 storage.delete_category(i64::from(id))?;
-                Ok(tr!("已删除分类「{}」", removed))
+                Ok(Some(tr!("已删除分类「{}」", removed)))
             });
         });
     }
@@ -213,7 +282,7 @@ pub fn install(window: &AppWindow, storage: Arc<Mutex<Storage>>) {
             };
             apply(&window, &storage, |storage| {
                 storage.remove_category_folder(&folder)?;
-                Ok(tr!("已移除目录 {}", folder))
+                Ok(Some(tr!("已移除目录 {}", folder)))
             });
         });
     }
@@ -260,11 +329,11 @@ pub fn install(window: &AppWindow, storage: Arc<Mutex<Storage>>) {
                         .find(|c| c.id == i64::from(id))
                         .ok_or_else(|| anyhow!(tr!("这个分类已不存在")))?;
                     storage.add_category_folder(target.id, &folder)?;
-                    Ok(tr!(
+                    Ok(Some(tr!(
                         "已添加目录 {}，其中的应用会自动归入「{}」",
                         folder,
                         name(target)
-                    ))
+                    )))
                 });
             });
         });
@@ -273,7 +342,8 @@ pub fn install(window: &AppWindow, storage: Arc<Mutex<Storage>>) {
 
 #[cfg(test)]
 mod tests {
-    use super::{checked_name, name};
+    use super::{CategoryItem, Rename, checked_name, name, rename, update_rows};
+    use slint::{Model, VecModel};
     use timelens_storage::Category;
 
     fn category(id: i64, preset: Option<&str>, own: Option<&str>) -> Category {
@@ -301,5 +371,60 @@ mod tests {
         assert!(checked_name("Reading", &categories, Some(2)).is_ok());
         assert!(checked_name(" ", &categories, None).is_err());
         assert!(checked_name(&"长".repeat(41), &categories, None).is_err());
+    }
+
+    #[test]
+    fn renaming_to_the_same_name_does_nothing_and_a_preset_takes_its_own_back() {
+        let categories = [
+            category(1, Some("work"), None),
+            category(2, Some("study"), Some("Reading")),
+            category(3, None, Some("工具")),
+        ];
+        // Enter on an untouched name, or with a space added, changes nothing.
+        assert_eq!(
+            rename("工作", &categories[0], &categories).unwrap(),
+            Rename::Unchanged
+        );
+        assert_eq!(
+            rename(" 工作 ", &categories[0], &categories).unwrap(),
+            Rename::Unchanged
+        );
+        // A preset given its own name, or none, follows the language again.
+        assert_eq!(
+            rename("学习", &categories[1], &categories).unwrap(),
+            Rename::Default("学习".into())
+        );
+        assert_eq!(
+            rename(" ", &categories[1], &categories).unwrap(),
+            Rename::Default("学习".into())
+        );
+        assert_eq!(
+            rename("Job", &categories[0], &categories).unwrap(),
+            Rename::To("Job".into())
+        );
+        // Its own name taken by another category, it cannot take it back.
+        let tools = category(4, Some("tools"), Some("Kit"));
+        let mut taken = categories.to_vec();
+        taken.push(tools.clone());
+        assert!(rename("", &tools, &taken).is_err());
+        assert!(rename("", &categories[2], &categories).is_err());
+    }
+
+    #[test]
+    fn rows_change_in_place_so_open_ones_stay_open() {
+        let row = |id: i32, name: &str| CategoryItem {
+            id,
+            name: name.into(),
+            ..Default::default()
+        };
+        let rows = VecModel::from(vec![row(1, "a"), row(2, "b"), row(3, "c")]);
+        update_rows(&rows, vec![row(1, "a"), row(3, "C"), row(4, "d")]);
+        let shown = (0..rows.row_count())
+            .map(|index| {
+                let item = rows.row_data(index).unwrap();
+                (item.id, item.name.to_string())
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(shown, [(1, "a".into()), (3, "C".into()), (4, "d".into())]);
     }
 }

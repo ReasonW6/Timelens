@@ -1843,3 +1843,19 @@ msgstr "이 기간에는 포커스 기록이 없습니다."
 #: categories_ui.rs
 msgid "选择要归入分类的目录"
 msgstr "카테고리에 넣을 폴더 선택"
+
+#: storage
+msgid "这个分类不能使用这个名称"
+msgstr "이 카테고리에는 그 이름을 쓸 수 없습니다"
+
+#: storage
+msgid "目录不能为空"
+msgstr "폴더가 비어 있습니다"
+
+#: storage
+msgid "分类名称不能为空或过长"
+msgstr "카테고리 이름이 비어 있거나 너무 깁니다"
+
+#: categories_ui.rs
+msgid "{}，但重新读取分类失败：{}"
+msgstr "{}. 하지만 카테고리를 다시 읽지 못했습니다: {}"

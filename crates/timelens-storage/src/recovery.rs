@@ -12,6 +12,11 @@ pub struct RecoveryReport {
     pub unavailable_images: u64,
 }
 
+/// Tables the migrations fill with rows the user may delete later. A
+/// recovery copies the original's rows over a freshly migrated database, so
+/// without clearing these first a deleted row would come back.
+const SEEDED_TABLES: &[&str] = &["application_categories"];
+
 fn invalid(text: impl Into<String>) -> StorageError {
     StorageError::Integrity(text.into())
 }
@@ -144,8 +149,17 @@ impl Storage {
                     vec!["?"; columns.len()].join(",")
                 );
                 let mut insert = tx.prepare(&insert)?;
+                // Rows the migrations seed, such as the preset categories, are
+                // the original's to keep or to have deleted: once its table
+                // reads, the seeded rows give way to what it holds.
+                let mut seeded = SEEDED_TABLES.contains(&name.as_str());
                 loop {
-                    let row = match rows.next() {
+                    let next = rows.next();
+                    if seeded && next.is_ok() {
+                        tx.execute(&format!("DELETE FROM {}", quoted(name)), [])?;
+                        seeded = false;
+                    }
+                    let row = match next {
                         Ok(Some(row)) => row,
                         Ok(None) => break,
                         Err(_) => {

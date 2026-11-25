@@ -2,9 +2,10 @@
 //! hour of day and by category. Everything is counted from focused spans, so
 //! the totals match the application totals of the same range.
 use crate::i18n::{tr, trn};
+use crate::timeline_view::{local_datetime_at, resolve_local_boundary};
 use crate::{AppWindow, AppsScope, TrendBar, TrendCategory, TrendPart, TrendState, UiState};
 use chrono::{Datelike, Days, Local, Months, NaiveDate, NaiveTime, TimeZone, Timelike};
-use slint::{ComponentHandle, ModelRc, VecModel};
+use slint::{Color, ComponentHandle, ModelRc, VecModel};
 use std::{
     cell::RefCell,
     collections::BTreeMap,
@@ -14,6 +15,7 @@ use std::{
 use timelens_storage::{Category, FocusSpans, Storage};
 
 const HOUR_MS: i64 = 3_600_000;
+const DAY_MS: i64 = 24 * HOUR_MS;
 
 /// How long one bar lasts.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -42,24 +44,66 @@ struct Read {
     previous: Option<((i64, i64), u64)>,
 }
 
+/// A bar as the trend draws it.
+struct BarView {
+    label: String,
+    tip: String,
+    value: String,
+    /// Where each part starts and how tall it is, as shares of the scale.
+    parts: Vec<(f32, f32, Color)>,
+}
+
+/// A category's row under the bars.
+struct CategoryView {
+    name: String,
+    tint: Color,
+    value: String,
+    share: String,
+    ratio: f32,
+    apps: String,
+}
+
+/// Everything the trend shows, worked out off the UI thread, which only
+/// hands it to the window.
+struct View {
+    total: String,
+    empty: String,
+    compare: String,
+    compare_note: String,
+    average: String,
+    step: String,
+    scope: String,
+    bars: Vec<BarView>,
+    bars_top: String,
+    hours: Vec<BarView>,
+    hours_top: String,
+    categories: Vec<CategoryView>,
+}
+
 #[derive(Default)]
 struct Reads {
     /// When the trend was last read and for which scope.
     requested: Option<(AppsScope, Instant)>,
+    /// The scope the tab shows now; a trend read for another is not drawn.
+    wanted: Option<AppsScope>,
     /// The scope on screen.
     shown: Option<AppsScope>,
     pending: bool,
-    /// Categories changed since, so it is read again.
+    /// Categories, records or the language changed since, so it is read
+    /// again and what was being read is not drawn.
     stale: bool,
     /// The merges it was read with.
     generation: u64,
+    /// The scope whose last read failed, so the failure is told once.
+    failed: Option<AppsScope>,
 }
 
 thread_local! {
     static READS: RefCell<Reads> = RefCell::new(Reads::default());
 }
 
-/// How often the trend on screen is read again.
+/// How often a settled trend on screen is read again; a range still running
+/// is read as often as the application totals beside it.
 const REFRESH: Duration = Duration::from_secs(30);
 
 /// Read the trend again as soon as it shows, as after categories changed.
@@ -74,27 +118,34 @@ pub fn request(window: &AppWindow, storage: &Arc<Mutex<Storage>>, state: &UiStat
         return;
     }
     let scope = crate::apps_scope(window, state);
+    let interval = if matches!(scope, AppsScope::Range(..)) && state.follow_now {
+        crate::LIVE_REFRESH
+    } else {
+        REFRESH
+    };
     let generation = crate::history::generation();
-    let due = READS.with(|reads| {
+    let (due, loading) = READS.with(|reads| {
         let reads = &mut *reads.borrow_mut();
+        reads.wanted = Some(scope);
         let due = !reads.pending
             && (reads.stale
                 || reads.generation != generation
                 || reads
                     .requested
-                    .is_none_or(|(was, at)| was != scope || at.elapsed() >= REFRESH));
+                    .is_none_or(|(was, at)| was != scope || at.elapsed() >= interval));
         if due {
             reads.stale = false;
             reads.generation = generation;
             reads.requested = Some((scope, Instant::now()));
             reads.pending = true;
         }
-        due
+        // Only a scope not shown yet, nor failed, reads as loading.
+        (
+            due,
+            reads.shown != Some(scope) && reads.failed != Some(scope),
+        )
     });
-    // Only a scope not shown yet reads as loading.
-    window
-        .global::<TrendState>()
-        .set_loading(READS.with(|reads| reads.borrow().shown != Some(scope)));
+    window.global::<TrendState>().set_loading(loading);
     if !due {
         return;
     }
@@ -102,19 +153,41 @@ pub fn request(window: &AppWindow, storage: &Arc<Mutex<Storage>>, state: &UiStat
     let weak = window.as_weak();
     std::thread::spawn(move || {
         let now = crate::unix_time_ms();
+        // The lock is held for reading only; the trend is worked out after.
         let result = storage
             .lock()
             .map_err(|_| anyhow::anyhow!(tr!("存储锁不可用")))
-            .and_then(|storage| read(&storage, scope, now));
+            .and_then(|storage| read(&storage, scope, now))
+            .map(|read| view(scope, &read));
         let _ = weak.upgrade_in_event_loop(move |window| {
-            READS.with(|reads| reads.borrow_mut().pending = false);
+            let (current, told) = READS.with(|reads| {
+                let reads = &mut *reads.borrow_mut();
+                reads.pending = false;
+                (
+                    reads.wanted == Some(scope) && !reads.stale,
+                    reads.failed == Some(scope),
+                )
+            });
             match result {
-                Ok(read) => {
-                    READS.with(|reads| reads.borrow_mut().shown = Some(scope));
+                Ok(view) if current => {
+                    READS.with(|reads| {
+                        let reads = &mut *reads.borrow_mut();
+                        reads.shown = Some(scope);
+                        reads.failed = None;
+                    });
                     window.global::<TrendState>().set_loading(false);
-                    render(&window, scope, &read);
+                    render(&window, view);
                 }
-                Err(error) => window.set_action_status(tr!("读取趋势失败：{}", error).into()),
+                // Read for a scope no longer shown, or before a change: the
+                // next tick reads again.
+                Ok(_) => {}
+                Err(error) => {
+                    READS.with(|reads| reads.borrow_mut().failed = Some(scope));
+                    window.global::<TrendState>().set_loading(false);
+                    if !told {
+                        window.set_action_status(tr!("读取趋势失败：{}", error).into());
+                    }
+                }
             }
         });
     });
@@ -159,7 +232,26 @@ fn read(storage: &Storage, scope: AppsScope, now: i64) -> anyhow::Result<Read> {
     })
 }
 
+/// Focus counted the way the application totals count it: once at any
+/// moment, however many applications had it then.
 fn total(spans: &FocusSpans) -> u64 {
+    let mut intervals = spans.values().flatten().copied().collect::<Vec<_>>();
+    intervals.sort_unstable();
+    let mut sum = 0;
+    let mut reached = i64::MIN;
+    for (start, end) in intervals {
+        let start = start.max(reached);
+        if end > start {
+            sum += (end - start) as u64;
+            reached = end;
+        }
+    }
+    sum
+}
+
+/// Focus summed application by application, as the bars and categories stack
+/// it; above [`total`] only while applications' focus overlaps.
+fn stacked(spans: &FocusSpans) -> u64 {
     spans
         .values()
         .flatten()
@@ -175,10 +267,13 @@ fn local_date(timestamp: i64) -> NaiveDate {
 }
 
 fn midnight(date: NaiveDate) -> Option<i64> {
-    Local
-        .from_local_datetime(&date.and_time(NaiveTime::MIN))
-        .earliest()
-        .map(|t| t.timestamp_millis())
+    midnight_in(&Local, date)
+}
+
+/// Where `date` starts: its midnight, or where a clock change that skips
+/// midnight ends, as calendar days count it.
+fn midnight_in<Tz: TimeZone>(zone: &Tz, date: NaiveDate) -> Option<i64> {
+    resolve_local_boundary(zone, date.and_time(NaiveTime::MIN))
 }
 
 /// The local hour of day `timestamp` falls in.
@@ -284,10 +379,15 @@ fn hours_of_day(spans: &FocusSpans) -> [u64; 24] {
     hours
 }
 
-/// How many local dates a stretch touches.
-fn days(stretch: Stretch) -> u64 {
+/// How many days the daily averages divide by: a recent stretch by its
+/// length, any other by the local dates it has run through so far, leaving
+/// out the days still to come.
+fn days(scope: AppsScope, stretch: Stretch) -> u64 {
+    if let AppsScope::Recent(length) = scope {
+        return ((length + DAY_MS / 2) / DAY_MS).max(1) as u64;
+    }
     let first = local_date(stretch.start);
-    let last = local_date(stretch.end.saturating_sub(1).max(stretch.start));
+    let last = local_date(stretch.until.saturating_sub(1).max(stretch.start));
     (last - first).num_days().max(0) as u64 + 1
 }
 
@@ -303,12 +403,14 @@ fn whole_days(start: i64, end: i64) -> Option<u64> {
 
 /// `timestamp` so many local days earlier, at the same time of day.
 fn days_before(timestamp: i64, days: u64) -> Option<i64> {
-    let local = Local.timestamp_millis_opt(timestamp).single()?;
-    let earlier = local.naive_local().checked_sub_days(Days::new(days))?;
-    Local
-        .from_local_datetime(&earlier)
-        .earliest()
-        .map(|t| t.timestamp_millis())
+    days_before_in(&Local, timestamp, days)
+}
+
+/// Like [`days_before`]; a time of day a clock change skipped on that day
+/// moves to where the change ends.
+fn days_before_in<Tz: TimeZone>(zone: &Tz, timestamp: i64, days: u64) -> Option<i64> {
+    let earlier = local_datetime_at(zone, timestamp)?.checked_sub_days(Days::new(days))?;
+    resolve_local_boundary(zone, earlier)
 }
 
 /// The period to compare a stretch with: as many whole days before it, or
@@ -317,13 +419,14 @@ fn previous(scope: AppsScope, stretch: Stretch) -> Option<(i64, i64)> {
     let period = match scope {
         AppsScope::All => None,
         AppsScope::Recent(length) => Some((stretch.start - length, stretch.until - length)),
-        AppsScope::Range(..) => match whole_days(stretch.start, stretch.end) {
-            Some(days) => days_before(stretch.start, days).zip(days_before(stretch.until, days)),
-            None => {
-                let length = stretch.end - stretch.start;
-                Some((stretch.start - length, stretch.until - length))
-            }
-        },
+        AppsScope::Range(..) => {
+            let length = stretch.end - stretch.start;
+            whole_days(stretch.start, stretch.end)
+                .and_then(|days| {
+                    days_before(stretch.start, days).zip(days_before(stretch.until, days))
+                })
+                .or(Some((stretch.start - length, stretch.until - length)))
+        }
     };
     period.filter(|(start, end)| *start > 0 && end > start)
 }
@@ -423,8 +526,8 @@ fn bar_labels(step: Step, bar: (i64, i64), index: usize, count: usize) -> (Strin
 fn bars(
     values: &[BTreeMap<Option<i64>, u64>],
     labels: impl Fn(usize) -> (String, String),
-    order: &[(Option<i64>, slint::Color)],
-) -> (Vec<TrendBar>, String) {
+    order: &[(Option<i64>, Color)],
+) -> (Vec<BarView>, String) {
     let most = values
         .iter()
         .map(|parts| parts.values().sum::<u64>())
@@ -441,78 +544,62 @@ fn bars(
                 .filter_map(|(category, tint)| {
                     let ms = *parts.get(category)?;
                     let size = ms as f32 / top as f32;
-                    let part = TrendPart {
-                        start,
-                        size,
-                        tint: *tint,
-                    };
+                    let part = (start, size, *tint);
                     start += size;
                     Some(part)
                 })
-                .collect::<Vec<_>>();
+                .collect();
             let (label, tip) = labels(index);
-            TrendBar {
-                label: label.into(),
-                tip: tip.into(),
-                value: crate::format_duration(parts.values().sum()).into(),
-                parts: ModelRc::new(VecModel::from(shares)),
+            BarView {
+                label,
+                tip,
+                value: crate::format_duration(parts.values().sum()),
+                parts: shares,
             }
         })
         .collect();
     (bars, crate::format_duration(top))
 }
 
-fn render(window: &AppWindow, scope: AppsScope, read: &Read) {
-    let trend = window.global::<TrendState>();
+/// Work out what the trend shows from what was read.
+fn view(scope: AppsScope, read: &Read) -> View {
     let step = step_of(read.stretch);
     let focus = total(&read.spans);
-    trend.set_total(crate::format_duration(focus).into());
-    trend.set_empty(if focus > 0 {
-        "".into()
+    let empty = if focus > 0 {
+        String::new()
     } else if scope == AppsScope::All {
-        tr!("还没有聚焦记录。").into()
+        tr!("还没有聚焦记录。").to_owned()
     } else {
-        tr!("这段时间没有聚焦记录。").into()
-    });
-    match read.previous {
-        Some(((start, end), before)) => {
-            trend.set_compare(comparison(focus, before).into());
-            trend.set_compare_note(
-                tr!(
-                    "上一周期 {} · {}",
-                    period_label(start, end),
-                    crate::format_duration(before)
-                )
-                .into(),
-            );
-        }
-        None => {
-            trend.set_compare("".into());
-            trend.set_compare_note("".into());
-        }
+        tr!("这段时间没有聚焦记录。").to_owned()
+    };
+    let (compare, compare_note) = match read.previous {
+        Some(((start, end), before)) => (
+            comparison(focus, before),
+            tr!(
+                "上一周期 {} · {}",
+                period_label(start, end),
+                crate::format_duration(before)
+            ),
+        ),
+        None => (String::new(), String::new()),
+    };
+    let days = days(scope, read.stretch);
+    let average = if step == Step::Hour {
+        String::new()
+    } else {
+        crate::format_duration(focus / days)
+    };
+    let step_name = match step {
+        Step::Hour => tr!("按小时"),
+        Step::Day => tr!("按天"),
+        Step::Month => tr!("按月"),
     }
-    let days = days(read.stretch);
-    trend.set_average(if step == Step::Hour {
-        "".into()
+    .to_owned();
+    let scope_label = if scope == AppsScope::All {
+        tr!("全部记录").to_owned()
     } else {
-        crate::format_duration(focus / days.max(1)).into()
-    });
-    trend.set_step(
-        match step {
-            Step::Hour => tr!("按小时"),
-            Step::Day => tr!("按天"),
-            Step::Month => tr!("按月"),
-        }
-        .into(),
-    );
-    trend.set_scope(
-        if scope == AppsScope::All {
-            tr!("全部记录").to_owned()
-        } else {
-            period_label(read.stretch.start, read.stretch.end)
-        }
-        .into(),
-    );
+        period_label(read.stretch.start, read.stretch.end)
+    };
     // Categories in their own order, then the applications in none.
     let mut order = read
         .categories
@@ -522,18 +609,16 @@ fn render(window: &AppWindow, scope: AppsScope, read: &Read) {
     order.push((None, crate::categories_ui::uncategorized_color()));
     let slots = buckets(read.stretch, step);
     let values = tally(&read.spans, &read.chosen, &slots);
-    let (shown, top) = bars(
+    let (bars_shown, bars_top) = bars(
         &values,
         |index| bar_labels(step, slots[index], index, slots.len()),
         &order,
     );
-    trend.set_bars(ModelRc::new(VecModel::from(shown)));
-    trend.set_bars_top(top.into());
-    if step == Step::Hour {
-        trend.set_hours(ModelRc::new(VecModel::from(Vec::<TrendBar>::new())));
+    let (hours, hours_top) = if step == Step::Hour {
+        (Vec::new(), String::new())
     } else {
-        let hours = hours_of_day(&read.spans).map(|ms| BTreeMap::from([(None, ms / days.max(1))]));
-        let (shown, top) = bars(
+        let hours = hours_of_day(&read.spans).map(|ms| BTreeMap::from([(None, ms / days)]));
+        bars(
             &hours,
             |hour| {
                 (
@@ -546,11 +631,11 @@ fn render(window: &AppWindow, scope: AppsScope, read: &Read) {
                 )
             },
             &[(None, crate::categories_ui::uncategorized_color())],
-        );
-        trend.set_hours(ModelRc::new(VecModel::from(shown)));
-        trend.set_hours_top(top.into());
-    }
-    // Each category's share, largest first, with the applications in none last.
+        )
+    };
+    // Each category's share, largest first, with the applications in none
+    // last. Shares are of the stacked focus, so they add up to the whole.
+    let whole = stacked(&read.spans).max(1);
     let mut totals = BTreeMap::<Option<i64>, (u64, usize)>::new();
     for (application, list) in &read.spans {
         let category = read.chosen.get(application).copied().flatten();
@@ -567,30 +652,89 @@ fn render(window: &AppWindow, scope: AppsScope, read: &Read) {
                 .iter()
                 .find(|c| Some(c.id) == *category)
                 .map_or_else(|| tr!("未分类").to_owned(), crate::categories_ui::name);
-            let ratio = ms as f64 / focus.max(1) as f64;
+            let ratio = ms as f64 / whole as f64;
             Some((
                 category.is_none(),
                 ms,
-                TrendCategory {
-                    name: name.into(),
+                CategoryView {
+                    name,
                     tint: *tint,
-                    value: crate::format_duration(ms).into(),
-                    share: format!("{:.0}%", ratio * 100.0).into(),
+                    value: crate::format_duration(ms),
+                    share: format!("{:.0}%", ratio * 100.0),
                     ratio: ratio as f32,
-                    apps: trn!(apps, "{} 个应用", apps).into(),
+                    apps: trn!(apps, "{} 个应用", apps),
                 },
             ))
         })
         .collect::<Vec<_>>();
     rows.sort_by(|a, b| a.0.cmp(&b.0).then(b.1.cmp(&a.1)));
+    View {
+        total: crate::format_duration(focus),
+        empty,
+        compare,
+        compare_note,
+        average,
+        step: step_name,
+        scope: scope_label,
+        bars: bars_shown,
+        bars_top,
+        hours,
+        hours_top,
+        categories: rows.into_iter().map(|(_, _, row)| row).collect(),
+    }
+}
+
+fn bar_model(bars: Vec<BarView>) -> ModelRc<TrendBar> {
+    ModelRc::new(VecModel::from(
+        bars.into_iter()
+            .map(|bar| TrendBar {
+                label: bar.label.into(),
+                tip: bar.tip.into(),
+                value: bar.value.into(),
+                parts: ModelRc::new(VecModel::from(
+                    bar.parts
+                        .into_iter()
+                        .map(|(start, size, tint)| TrendPart { start, size, tint })
+                        .collect::<Vec<_>>(),
+                )),
+            })
+            .collect::<Vec<_>>(),
+    ))
+}
+
+/// Hand a worked-out trend to the window.
+fn render(window: &AppWindow, view: View) {
+    let trend = window.global::<TrendState>();
+    trend.set_total(view.total.into());
+    trend.set_empty(view.empty.into());
+    trend.set_compare(view.compare.into());
+    trend.set_compare_note(view.compare_note.into());
+    trend.set_average(view.average.into());
+    trend.set_step(view.step.into());
+    trend.set_scope(view.scope.into());
+    trend.set_bars(bar_model(view.bars));
+    trend.set_bars_top(view.bars_top.into());
+    trend.set_hours(bar_model(view.hours));
+    trend.set_hours_top(view.hours_top.into());
     trend.set_categories(ModelRc::new(VecModel::from(
-        rows.into_iter().map(|(_, _, row)| row).collect::<Vec<_>>(),
+        view.categories
+            .into_iter()
+            .map(|row| TrendCategory {
+                name: row.name.into(),
+                tint: row.tint,
+                value: row.value.into(),
+                share: row.share.into(),
+                ratio: row.ratio,
+                apps: row.apps.into(),
+            })
+            .collect::<Vec<_>>(),
     )));
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::timeline_view::seasonal_zone::SeasonalZone;
 
     fn at(day: u32, hour: u32, minute: u32) -> i64 {
         Local
@@ -652,7 +796,11 @@ mod tests {
         assert_eq!(values[11], BTreeMap::from([(Some(7), minutes(15))]));
         let hours = hours_of_day(&spans);
         assert_eq!(hours[9..12], [minutes(30), minutes(90), minutes(15)]);
-        assert_eq!(hours.iter().sum::<u64>(), total(&spans));
+        assert_eq!(hours.iter().sum::<u64>(), stacked(&spans));
+        // The total counts the half hour both had once, as the application
+        // totals do.
+        assert_eq!(stacked(&spans), minutes(135));
+        assert_eq!(total(&spans), minutes(105));
     }
 
     #[test]
@@ -681,8 +829,60 @@ mod tests {
             Some((at(5, 9, 0), at(5, 12, 0)))
         );
         assert_eq!(previous(AppsScope::All, recent), None);
-        assert_eq!(days(week), 7);
-        assert_eq!(days(running), 1);
+    }
+
+    #[test]
+    fn daily_averages_divide_by_the_days_run_so_far() {
+        let week = stretch(at(8, 0, 0), at(15, 0, 0));
+        assert_eq!(days(AppsScope::Range(week.start, week.end), week), 7);
+        // A week still running counts only the days it has reached.
+        let running = Stretch {
+            until: at(10, 15, 7),
+            ..week
+        };
+        assert_eq!(days(AppsScope::Range(week.start, week.end), running), 3);
+        let today = Stretch {
+            until: at(5, 15, 7),
+            ..stretch(at(5, 0, 0), at(6, 0, 0))
+        };
+        assert_eq!(days(AppsScope::Range(today.start, today.end), today), 1);
+        // The last 7 days start mid-day and touch 8 dates, but are 7 days.
+        let recent = stretch(at(8, 15, 7), at(15, 15, 7));
+        assert_eq!(days(AppsScope::Recent(7 * DAY_MS), recent), 7);
+        assert_eq!(days(AppsScope::Recent(30 * DAY_MS), recent), 30);
+        assert_eq!(days(AppsScope::Recent(3 * HOUR_MS), recent), 1);
+    }
+
+    #[test]
+    fn a_skipped_midnight_or_time_of_day_moves_to_where_the_change_ends() {
+        let utc = |day: u32, hour: u32| {
+            NaiveDate::from_ymd_opt(2026, 3, day)
+                .unwrap()
+                .and_hms_opt(hour, 0, 0)
+                .unwrap()
+        };
+        // Clocks go from 00:00 to 01:00 on March 29, so it has no midnight.
+        let zone = SeasonalZone {
+            forward_utc: utc(28, 23),
+            backward_utc: NaiveDate::from_ymd_opt(2026, 10, 25)
+                .unwrap()
+                .and_hms_opt(1, 0, 0)
+                .unwrap(),
+        };
+        let change = utc(28, 23).and_utc().timestamp_millis();
+        let march = |day| NaiveDate::from_ymd_opt(2026, 3, day).unwrap();
+        assert_eq!(midnight_in(&zone, march(29)), Some(change));
+        assert_eq!(
+            midnight_in(&zone, march(30)),
+            Some(utc(29, 22).and_utc().timestamp_millis())
+        );
+        // 00:30 on March 30, a day back, is in the hour that was skipped.
+        let half_past = utc(29, 22).and_utc().timestamp_millis() + 30 * 60_000;
+        assert_eq!(days_before_in(&zone, half_past, 1), Some(change));
+        assert_eq!(
+            days_before_in(&zone, half_past, 2),
+            Some(utc(27, 23).and_utc().timestamp_millis() + 30 * 60_000)
+        );
     }
 
     #[test]

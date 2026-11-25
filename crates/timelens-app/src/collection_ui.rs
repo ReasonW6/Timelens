@@ -177,6 +177,17 @@ fn select(w: &AppWindow, d: &mut Data, s: &Storage, index: i32) -> Result<()> {
     g.set_merge_preview("".into());
     Ok(())
 }
+/// The choice an entry of the category list makes: by folder, none, then the
+/// categories in the order offered.
+fn category_choice(index: i32, categories: &[i64]) -> Option<CategoryChoice> {
+    match index {
+        0 => Some(CategoryChoice::Auto),
+        1 => Some(CategoryChoice::Manual(None)),
+        _ => categories
+            .get(usize::try_from(index).ok()?.checked_sub(2)?)
+            .map(|id| CategoryChoice::Manual(Some(*id))),
+    }
+}
 /// Offer the categories for the application chosen, with how its own was chosen.
 fn show_category(w: &AppWindow, d: &mut Data, s: &Storage, identity: &str) -> Result<()> {
     let categories = s.categories()?;
@@ -380,18 +391,16 @@ pub fn install(
                         .get(g.get_app_index() as usize)
                         .map(|(id, _)| id.clone())
                         .context(tr!("请选择应用"))?;
-                    let choice = match index {
-                        0 => CategoryChoice::Auto,
-                        1 => CategoryChoice::Manual(None),
-                        _ => CategoryChoice::Manual(Some(
-                            *d.categories
-                                .get(index as usize - 2)
-                                .context(tr!("这个分类已不存在"))?,
-                        )),
-                    };
-                    s.set_application_category(&id, choice)?;
-                    crate::trend_ui::invalidate();
-                    show_category(&w, &mut d, &s, &id)
+                    let saved = category_choice(index, &d.categories)
+                        .context(tr!("这个分类已不存在"))
+                        .and_then(|choice| Ok(s.set_application_category(&id, choice)?));
+                    if saved.is_ok() {
+                        crate::trend_ui::invalidate();
+                    }
+                    // Unsaved, the list goes back to what is in effect.
+                    let shown = show_category(&w, &mut d, &s, &id);
+                    saved?;
+                    shown
                 })();
                 if let Err(e) = result {
                     w.global::<CollectionState>()
@@ -1140,9 +1149,30 @@ const KEYBOARD: &[(u32, &str, f32, f32, f32, f32)] = &[
 
 #[cfg(test)]
 mod tests {
-    use super::{KEYBOARD, range_dates, rule_change};
+    use super::{KEYBOARD, category_choice, range_dates, rule_change};
     use crate::UiState;
     use chrono::TimeZone;
+    use timelens_storage::CategoryChoice;
+
+    #[test]
+    fn the_category_list_offers_by_folder_none_then_each_category() {
+        let categories = [7, 3];
+        assert_eq!(category_choice(0, &categories), Some(CategoryChoice::Auto));
+        assert_eq!(
+            category_choice(1, &categories),
+            Some(CategoryChoice::Manual(None))
+        );
+        assert_eq!(
+            category_choice(2, &categories),
+            Some(CategoryChoice::Manual(Some(7)))
+        );
+        assert_eq!(
+            category_choice(3, &categories),
+            Some(CategoryChoice::Manual(Some(3)))
+        );
+        assert_eq!(category_choice(4, &categories), None);
+        assert_eq!(category_choice(-1, &categories), None);
+    }
 
     #[test]
     fn saving_a_group_rule_never_lifts_an_exclusion_not_shown() {
