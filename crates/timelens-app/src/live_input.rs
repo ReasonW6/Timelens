@@ -2,10 +2,12 @@
 //! collector previews the input of the minute it has not sealed yet. The page
 //! adds each minute's newest preview to the stored totals until those include
 //! the minute, so the counts move as the user types and clicks. While the keys
-//! are on screen, previews also count which keys, and each key lights as its
-//! count goes up from one preview to the next; only the latest of those counts
-//! is kept (ticket 20). Previews are never stored, and leave out what the
-//! statistics leave out: paused collection and input the rules keep anonymous.
+//! are on screen, previews also count which keys: those counts are added to
+//! the stored key counts the same way, and each key lights as its count goes
+//! up from one preview to the next (tickets 20 and 21). Which keys a minute
+//! counted is let go once the minute is stored or the keys leave the screen.
+//! Previews are never stored, and leave out what the statistics leave out:
+//! paused collection and input the rules keep anonymous.
 
 use std::{
     cell::RefCell,
@@ -41,9 +43,9 @@ struct Pressed {
     keys: BTreeMap<u32, u32>,
 }
 
-/// The newest preview of each recent minute, oldest first, as totals alone,
-/// with when each arrived and the dataset they were counted against; and the
-/// keys of the latest one.
+/// The newest preview of each recent minute, oldest first, with when each
+/// arrived and the dataset they were counted against; and the keys of the
+/// latest one, which the next is told apart from.
 #[derive(Default)]
 struct Previews {
     minutes: Vec<(LiveInput, Instant)>,
@@ -67,9 +69,8 @@ impl Previews {
 
     /// Keep a preview, replacing the one before of its minute, and return
     /// the keys pressed since the preview before.
-    fn keep(&mut self, mut input: LiveInput, now: Instant) -> Vec<u32> {
+    fn keep(&mut self, input: LiveInput, now: Instant) -> Vec<u32> {
         let pressed = self.press(&input);
-        input.key_counts = Vec::new();
         self.current(now);
         self.minutes
             .retain(|(kept, _)| kept.minute_started_at_utc_ms != input.minute_started_at_utc_ms);
@@ -132,6 +133,37 @@ impl Previews {
         }
         total
     }
+
+    /// What the previews `keep` takes add to key counts that include the
+    /// `stored` minutes, by scan code. Which keys a stored minute counted is
+    /// let go.
+    fn unstored_keys(
+        &mut self,
+        stored: &BTreeSet<i64>,
+        keep: impl Fn(&LiveInput) -> bool,
+        now: Instant,
+    ) -> BTreeMap<u32, u64> {
+        self.current(now);
+        let mut keys = BTreeMap::<u32, u64>::new();
+        for (input, _) in &mut self.minutes {
+            if stored.contains(&input.minute_started_at_utc_ms) {
+                input.key_counts = Vec::new();
+            } else if keep(input) {
+                for key in &input.key_counts {
+                    *keys.entry(key.scan_code).or_default() += u64::from(key.count);
+                }
+            }
+        }
+        keys
+    }
+
+    /// The keys left the screen: keep the totals alone.
+    fn forget_keys(&mut self) {
+        self.pressed = None;
+        for (input, _) in &mut self.minutes {
+            input.key_counts = Vec::new();
+        }
+    }
 }
 
 thread_local! {
@@ -152,13 +184,13 @@ pub fn keys_wanted() -> bool {
 /// Previews are wanted while the statistics page is on screen, with `keys`
 /// while its keys are. Those kept stay meanwhile: told apart by minute, they
 /// still add only what the stored totals lack, so the counts do not drop back
-/// when the page shows again. The keys of the last one go as the keys leave
+/// when the page shows again. Which keys they counted goes as the keys leave
 /// the screen.
 pub fn set_wanted(wanted: bool, keys: bool) {
     WANTED.store(wanted, Ordering::Relaxed);
     let keys = wanted && keys;
     if KEYS_WANTED.swap(keys, Ordering::Relaxed) && !keys {
-        PREVIEWS.with(|previews| previews.borrow_mut().pressed = None);
+        PREVIEWS.with(|previews| previews.borrow_mut().forget_keys());
     }
 }
 
@@ -176,6 +208,19 @@ pub fn receive(window: &AppWindow, input: LiveInput) {
 /// minutes: keyboard, left, middle and right.
 pub fn unstored(stored: &BTreeSet<i64>, keep: impl Fn(&LiveInput) -> bool) -> [u64; 4] {
     PREVIEWS.with(|previews| previews.borrow_mut().unstored(stored, keep, Instant::now()))
+}
+
+/// What the previews `keep` takes add to key counts that include the
+/// `stored` minutes, by scan code.
+pub fn unstored_keys(
+    stored: &BTreeSet<i64>,
+    keep: impl Fn(&LiveInput) -> bool,
+) -> BTreeMap<u32, u64> {
+    PREVIEWS.with(|previews| {
+        previews
+            .borrow_mut()
+            .unstored_keys(stored, keep, Instant::now())
+    })
 }
 
 /// Show the overview's keyboard and click totals for `snapshot`, with the
@@ -270,13 +315,7 @@ mod tests {
         );
         // The next minute counts afresh.
         assert_eq!(previews.keep(with_keys(120_000, &[(0x1f, 1)]), now), [0x1f]);
-        // Only the latest keys stay; earlier minutes keep their totals alone.
-        assert!(
-            previews
-                .minutes
-                .iter()
-                .all(|(input, _)| input.key_counts.is_empty())
-        );
+        // The latest keys are what the next preview is told apart from.
         assert_eq!(
             previews
                 .pressed
@@ -302,6 +341,54 @@ mod tests {
                 .keep(with_keys(240_000, &[(0x1e, 1)]), now)
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn key_counts_go_up_live_until_their_minute_is_stored() {
+        let now = Instant::now();
+        let mut previews = Previews {
+            generation: crate::data_ui::data_generation(),
+            ..Previews::default()
+        };
+        let all = |_: &LiveInput| true;
+        previews.keep(with_keys(60_000, &[(0x1e, 2)]), now);
+        previews.keep(with_keys(60_000, &[(0x1e, 3), (0x1f, 1)]), now);
+        // A newer preview of a minute replaces the one before.
+        assert_eq!(
+            previews.unstored_keys(&BTreeSet::new(), all, now),
+            BTreeMap::from([(0x1e, 3), (0x1f, 1)])
+        );
+        // The next minute adds to the one before until that one is stored.
+        previews.keep(with_keys(120_000, &[(0x1e, 1)]), now);
+        assert_eq!(
+            previews.unstored_keys(&BTreeSet::new(), all, now),
+            BTreeMap::from([(0x1e, 4), (0x1f, 1)])
+        );
+        assert_eq!(
+            previews.unstored_keys(&BTreeSet::from([60_000]), all, now),
+            BTreeMap::from([(0x1e, 1)])
+        );
+        // Stored, a minute's keys are let go; its totals wait as before.
+        assert!(previews.minutes[0].0.key_counts.is_empty());
+        assert_eq!(
+            previews.unstored_keys(&BTreeSet::new(), all, now),
+            BTreeMap::from([(0x1e, 1)])
+        );
+        // Only the dates shown count.
+        assert!(
+            previews
+                .unstored_keys(&BTreeSet::new(), |_| false, now)
+                .is_empty()
+        );
+        // As the keys leave the screen, which keys any minute counted goes.
+        previews.forget_keys();
+        assert!(previews.pressed.is_none());
+        assert!(
+            previews
+                .unstored_keys(&BTreeSet::new(), all, now)
+                .is_empty()
+        );
+        assert_eq!(previews.unstored(&BTreeSet::new(), all, now), [5, 2, 0, 0]);
     }
 
     #[test]
