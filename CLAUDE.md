@@ -24,7 +24,8 @@ cargo test --workspace --release -- --test-threads=2
 - 测试大多是各源文件内的 `#[cfg(test)]` 模块。DPAPI 相关测试需要当前 Windows 用户的凭据上下文。
 - `coordinated_clear_removes_offline_collector_artifacts` 需要拿到采集器单实例锁，已安装的 Timelens 采集器在运行时会失败。
 - 安装器回归：`Invoke-Pester -Script .\installer\tests\startup.Tests.ps1`（Pester 3.4.0）。
-- 安装包：`& '.\.tools\innosetup-7.0.2-x64\ISCC.exe' 'installer\Timelens.iss'`，产物在 `dist/`。
+- 安装包：先 `cargo build --release -p timelens-app -p timelens-collector`，再 `& '.\.tools\innosetup-7.0.2-x64\ISCC.exe' 'installer\Timelens.iss'`，产物在 `dist/`（安装器版本取自 release 构建，即 `Cargo.toml`）。
+- 其他工作流：`audit.yml` 在 `Cargo.lock` 变动时和每周跑 `cargo audit`；`release.yml` 由 `v<版本>` 标签触发（先改 `Cargo.toml` 的 `version`，标签不匹配会失败），构建安装包并创建草稿 Release，需人工发布。
 
 本地运行与调试：
 
@@ -45,22 +46,25 @@ cargo test --workspace --release -- --test-threads=2
 进程模型（见 `docs/adr/0001`、`0002`、`0004`）：
 
 - **`timelens-app`（`Timelens.exe`，普通权限）**：托盘 + Slint UI + 唯一的 SQLite 写入者。`main.rs` 中 `Storage` 被包在 `Arc<Mutex<_>>` 里，由 UI 线程、命名管道服务线程（接收采集器批次并 `ingest_event_batch`）、快照调度线程和每分钟一次的维护线程（完整性检查 + 保留期清理）共享。耗时查询放到后台线程，经 `mpsc` 回到 UI 线程；窗口隐藏时通过 `ui_refresh.rs` 推迟刷新。
-- **`timelens-collector`（`Timelens.Collector.exe`，提权登录任务）**：窄职责，**不得链接数据库、UI 或网络**。通过 `timelens-observer` 观察窗口与输入，把未确认的数据存在 32 MiB 带校验的环形 spool（`spool.rs`），溢出时保留最新数据并生成显式 Monitoring gap。
+- **`timelens-collector`（`Timelens.Collector.exe`，提权登录任务）**：窄职责，**不得链接数据库、UI 或网络**。通过 `timelens-observer` 观察窗口与输入，把未确认的数据存在 32 MiB 带校验的环形 spool（`spool.rs`），溢出时保留最新数据并生成显式 Monitoring gap。`live.rs` 发送统计页的实时输入预览（票据 20），直接发给核心、不进 spool。
+- **控制目录 `%LOCALAPPDATA%\Timelens`**（`local_config.rs`）：放在加密数据集之外，存数据位置指针 `data-location.txt`，以及界面语言、界面缩放、暂停截止时间、主题等需要在恢复窗口或数据集不可用时也能读到的设置；诊断日志 `timelens.log`、`collector.log`（各 ≤1 MiB，只记错误信息）也在这里。新增此类设置时沿用这个模式，不要写进数据库。
 
 共享库：
 
-- `timelens-ipc`：版本化、限长的 Protobuf 协议（`prost` 手写 `#[derive(Message)]`，无 .proto/build 脚本）和命名管道互认证。握手校验同用户、同会话、真实 PID、固定可执行文件名和对端目录。协议版本 `PROTOCOL_VERSION` 在 `lib.rs`，改线格式时需同步升级。
+- `timelens-ipc`：版本化、限长的 Protobuf 协议（`prost` 手写 `#[derive(Message)]`，无 .proto/build 脚本）和命名管道互认证。握手校验同用户、同会话、真实 PID、固定可执行文件名和对端目录。协议版本 `PROTOCOL_VERSION` 在 `lib.rs`，改线格式时需同步升级（两份 README 末尾也写着当前协议版本和 schema 版本，一并更新）。
 - `timelens-observer`：不读取窗口标题的窗口分类、应用身份解析、虚拟桌面查询和输入计数。
 - `timelens-storage`：DPAPI 封装数据密钥 + SQLCipher + WAL。迁移是 `lib.rs` 中按版本递增的 `MIGRATIONS` 数组（部分 SQL 通过 `include_str!` 引入 `*-schema.sql`），`LATEST_SCHEMA_VERSION` 需随之更新；迁移失败会从加密备份恢复。`timeline_cache.rs` 是纯内存的视图缓存（Projection，可丢弃重建）。其余：`collection.rs` 采集数据写入、`milestone3.rs` 快照与数据覆盖、`snapshot_container.rs` 加密快照容器、`portable.rs` 便携备份、`recovery.rs` 损坏恢复、`relocation.rs` 数据迁移位置。
 
-UI：`crates/timelens-app/ui/*.slint` 通过 `main.rs` 里的 `slint::slint!` 引入；各页面的 Rust 绑定分散在 `*_ui.rs`（`timeline_ui`、`collection_ui`、`data_ui`、`general_ui`）。
+UI：`build.rs` 用 `slint-build` 编译入口 `ui/app.slint`（导出 `AppWindow` 与恢复窗口 `RecoveryWindow`，主体在 `main-window.slint`），`main.rs` 通过 `slint::include_modules!()` 引入生成代码。各页面的 Rust 绑定分散在 `*_ui.rs`（`timeline_ui`、`collection_ui`、`data_ui`、`general_ui`）；首页连续时间线在 `history.rs`/`history_cache.rs`，统计页实时输入在 `live_input.rs`。
+
+国际化（`i18n.rs`）：源文本是简体中文，另有 zh-TW、en、ja、ko 四种翻译，放在 `crates/timelens-app/lang/<语言>/LC_MESSAGES/`。`.slint` 中的 `@tr(...)` 对应 `timelens-app.po`（由 `slint-build` 打包），Rust 中的 `tr!`/`trn!` 对应 `messages.po`（由 `build.rs` 生成查找表）。新增或改动任何界面文案都要在四种语言的对应 `.po` 中补齐，占位符保持一致，否则测试 `every_shown_text_is_translated_with_the_same_arguments` 会失败。安装器文案在 `installer/Timelens.iss` 的 `[CustomMessages]` 中，同样覆盖五种语言。
 
 安装器（`installer/`）：Inno Setup 7 脚本 + 注册 Limited/Highest 两个登录任务的 PowerShell 脚本。提权组件安装在 `C:\Program Files\Timelens` 并收紧 ACL；因为没有代码签名，这个目录权限与握手中的对端路径校验是防止提权替换的安全边界，修改安装路径或握手逻辑时要一并考虑。
 
 ## 必须遵守的产品约束
 
 - 只记录用户可切换的顶层窗口；同一应用的多个窗口重叠时间不重复累计。
-- 不采集窗口标题、网址、文档内容、剪贴板或原始按键序列；输入只保留聚合计数（Minute input bucket、Daily key frequency）。统计页的实时输入预览（含逐键闪烁）是允许的例外，边界见票据 20：只在对应页面显示时发送，不落盘、不进日志，界面只留最新一帧累计数。
+- 不采集窗口标题、网址、文档内容、剪贴板或原始按键序列；输入只保留聚合计数（Minute input bucket、Daily key frequency）。统计页的实时输入预览（含逐键闪烁和键位数字实时增加）是允许的例外，边界见票据 20、21：只在对应页面显示时发送，不落盘、不进日志；界面只为尚未入库的分钟保留逐键累计数，入库或离开逐键页即丢弃，不攒按键序列。
 - UI 保持普通权限；不要给采集器增加新的能力面。AI 总结已移除（票据 18），应用不发起网络请求。
 - 未知/缺失数据要显式记录（Monitoring gap、Snapshot omission、Data availability record），不要推测或补齐。
 - 低 CPU、低内存、小安装体积是硬性约束（常驻进程组 100 MiB 门槛）。
