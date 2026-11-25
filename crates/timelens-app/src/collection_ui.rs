@@ -834,9 +834,8 @@ thread_local! {
     static KEYS: RefCell<KeyView> = RefCell::new(KeyView::default());
 }
 
-/// Stored counts are read again this often while shown live: a key's count
-/// goes up only once its minute is stored, and previews never wait long for
-/// the minutes they stand in for.
+/// Stored counts are read again this often while shown live, so previews
+/// never wait long for the minutes they stand in for.
 const KEYS_REFRESH: std::time::Duration = std::time::Duration::from_secs(30);
 
 pub fn keys_due(now: std::time::Instant) -> bool {
@@ -864,8 +863,8 @@ pub fn flash_keys(date: &str, codes: &[u32]) {
 }
 
 /// Show the key and mouse statistics: the stored counts and, for the dates
-/// shown, live clicks not stored yet. Keys light as they are pressed live
-/// (see [`flash_keys`]); their counts go up once their minute is stored.
+/// shown, live keys and clicks not stored yet. Keys light as they are pressed
+/// live (see [`flash_keys`]).
 pub fn show_keys(w: &AppWindow) {
     KEYS.with(|view| {
         let view = &mut *view.borrow_mut();
@@ -873,10 +872,14 @@ pub fn show_keys(w: &AppWindow) {
             return;
         };
         let (first, last) = &view.dates;
-        let live = crate::live_input::unstored(&stored.stored_minutes, |input| {
+        let shown = |input: &timelens_ipc::LiveInput| {
             (first.as_str()..=last.as_str()).contains(&input.local_date.as_str())
-        });
-        let frequencies = &stored.keys;
+        };
+        let live = crate::live_input::unstored(&stored.stored_minutes, shown);
+        let mut frequencies = stored.keys.clone();
+        for (code, count) in crate::live_input::unstored_keys(&stored.stored_minutes, shown) {
+            *frequencies.entry(code).or_default() += count;
+        }
         // What shows first lights nothing.
         let first_show = !std::mem::replace(&mut view.showing, true);
         let max = KEYBOARD
