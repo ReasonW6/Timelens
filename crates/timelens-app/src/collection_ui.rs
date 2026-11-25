@@ -8,7 +8,7 @@ use std::{
     rc::Rc,
     sync::{Arc, Mutex, mpsc},
 };
-use timelens_storage::Storage;
+use timelens_storage::{CategoryChoice, Storage};
 #[derive(Default)]
 struct Data {
     apps: Vec<(String, String)>,
@@ -18,6 +18,8 @@ struct Data {
     /// The rule switches of the application chosen as they were shown:
     /// activity, input and snapshots.
     shown: (bool, bool, bool),
+    /// The categories its category list offers after by folder and none.
+    categories: Vec<i64>,
 }
 thread_local! {
     /// The stretch an activity's menu asks to delete next; the statistics
@@ -38,7 +40,7 @@ fn statistics_stretch(w: &AppWindow, state: &UiState) -> Option<(i64, i64)> {
     }
 }
 /// A stretch in words, with its date and times of day.
-fn stretch_label(start: i64, end: i64) -> String {
+pub(crate) fn stretch_label(start: i64, end: i64) -> String {
     let local = |t: i64| chrono::Local.timestamp_millis_opt(t).single();
     let (Some(from), Some(to)) = (local(start), local(end)) else {
         return String::new();
@@ -167,10 +169,61 @@ fn select(w: &AppWindow, d: &mut Data, s: &Storage, index: i32) -> Result<()> {
     g.set_snapshots(d.shown.2);
     let windows = s.application_deletion_impact(id)?;
     g.set_impact(trn!(windows, "将删除「{}」的 {} 个窗口实例。", name, windows).into());
+    let identity = id.clone();
+    show_category(w, d, s, &identity)?;
     g.set_delete_confirmed(false);
     g.set_merge_confirmed(false);
     g.set_merge_index(-1);
     g.set_merge_preview("".into());
+    Ok(())
+}
+/// The choice an entry of the category list makes: by folder, none, then the
+/// categories in the order offered.
+fn category_choice(index: i32, categories: &[i64]) -> Option<CategoryChoice> {
+    match index {
+        0 => Some(CategoryChoice::Auto),
+        1 => Some(CategoryChoice::Manual(None)),
+        _ => categories
+            .get(usize::try_from(index).ok()?.checked_sub(2)?)
+            .map(|id| CategoryChoice::Manual(Some(*id))),
+    }
+}
+/// Offer the categories for the application chosen, with how its own was chosen.
+fn show_category(w: &AppWindow, d: &mut Data, s: &Storage, identity: &str) -> Result<()> {
+    let categories = s.categories()?;
+    let decided = s.application_category(identity)?;
+    let named = |id: Option<i64>| {
+        categories
+            .iter()
+            .find(|c| Some(c.id) == id)
+            .map_or_else(|| tr!("未分类").to_owned(), crate::categories_ui::name)
+    };
+    let (index, note) = match decided.choice {
+        CategoryChoice::Auto => (
+            0,
+            match &decided.folder {
+                Some(folder) => tr!("按目录 {} 归入「{}」", folder, named(decided.category)),
+                None => tr!("没有匹配的目录规则，归为未分类").to_owned(),
+            },
+        ),
+        CategoryChoice::Manual(None) => (1, tr!("手动指定为未分类，不按目录归类").to_owned()),
+        CategoryChoice::Manual(Some(id)) => (
+            categories
+                .iter()
+                .position(|c| c.id == id)
+                .map_or(0, |position| position as i32 + 2),
+            tr!("手动指定，优先于目录规则").to_owned(),
+        ),
+    };
+    d.categories = categories.iter().map(|c| c.id).collect();
+    let g = w.global::<CollectionState>();
+    g.set_category_options(strings(
+        [tr!("按目录自动").to_owned(), tr!("未分类").to_owned()]
+            .into_iter()
+            .chain(categories.iter().map(crate::categories_ui::name)),
+    ));
+    g.set_category_index(index);
+    g.set_category_note(note.into());
     Ok(())
 }
 /// How saving the switch of a rule changes the lists of the applications
@@ -319,6 +372,41 @@ pub fn install(
                 }
             }
         });
+    }
+    {
+        let weak = w.as_weak();
+        let data = data.clone();
+        let storage = storage.clone();
+        w.global::<CollectionState>()
+            .on_category_chosen(move |index| {
+                let Some(w) = weak.upgrade() else {
+                    return;
+                };
+                let result = (|| {
+                    let s = lock(&storage)?;
+                    let mut d = data.borrow_mut();
+                    let g = w.global::<CollectionState>();
+                    let id = d
+                        .apps
+                        .get(g.get_app_index() as usize)
+                        .map(|(id, _)| id.clone())
+                        .context(tr!("请选择应用"))?;
+                    let saved = category_choice(index, &d.categories)
+                        .context(tr!("这个分类已不存在"))
+                        .and_then(|choice| Ok(s.set_application_category(&id, choice)?));
+                    if saved.is_ok() {
+                        crate::trend_ui::invalidate();
+                    }
+                    // Unsaved, the list goes back to what is in effect.
+                    let shown = show_category(&w, &mut d, &s, &id);
+                    saved?;
+                    shown
+                })();
+                if let Err(e) = result {
+                    w.global::<CollectionState>()
+                        .set_status(tr!("保存失败：{}", e).into());
+                }
+            });
     }
     {
         let weak = w.as_weak();
@@ -1061,9 +1149,30 @@ const KEYBOARD: &[(u32, &str, f32, f32, f32, f32)] = &[
 
 #[cfg(test)]
 mod tests {
-    use super::{KEYBOARD, range_dates, rule_change};
+    use super::{KEYBOARD, category_choice, range_dates, rule_change};
     use crate::UiState;
     use chrono::TimeZone;
+    use timelens_storage::CategoryChoice;
+
+    #[test]
+    fn the_category_list_offers_by_folder_none_then_each_category() {
+        let categories = [7, 3];
+        assert_eq!(category_choice(0, &categories), Some(CategoryChoice::Auto));
+        assert_eq!(
+            category_choice(1, &categories),
+            Some(CategoryChoice::Manual(None))
+        );
+        assert_eq!(
+            category_choice(2, &categories),
+            Some(CategoryChoice::Manual(Some(7)))
+        );
+        assert_eq!(
+            category_choice(3, &categories),
+            Some(CategoryChoice::Manual(Some(3)))
+        );
+        assert_eq!(category_choice(4, &categories), None);
+        assert_eq!(category_choice(-1, &categories), None);
+    }
 
     #[test]
     fn saving_a_group_rule_never_lifts_an_exclusion_not_shown() {

@@ -3,6 +3,7 @@
 
 mod app_icon;
 mod appearance;
+mod categories_ui;
 mod collection_ui;
 mod collector_task;
 mod data_ui;
@@ -23,6 +24,7 @@ mod startup;
 mod timeline_ui;
 mod timeline_view;
 mod tray;
+mod trend_ui;
 mod ui_model;
 mod ui_refresh;
 mod ui_scale;
@@ -694,6 +696,7 @@ fn run_window(
     }
     general_ui::install(&window, collector_task);
     collection_ui::install(&window, Arc::clone(&storage), Rc::clone(&ui_state))?;
+    categories_ui::install(&window, Arc::clone(&storage));
 
     let weak = window.as_weak();
     let timer_storage = Arc::clone(&storage);
@@ -723,13 +726,19 @@ fn run_window(
         // Taking the message lets the same one show again next time.
         let data = window.global::<DataState>();
         let collection = window.global::<CollectionState>();
-        for status in [data.get_status(), collection.get_status()] {
+        let categories = window.global::<CategoryState>();
+        for status in [
+            data.get_status(),
+            collection.get_status(),
+            categories.get_status(),
+        ] {
             if !status.is_empty() {
                 window.set_action_status(status);
             }
         }
         data.set_status("".into());
         collection.set_status("".into());
+        categories.set_status("".into());
         window.set_action_busy(timer_busy.load(Ordering::Acquire));
         let ui_active = window.window().is_visible() && !window.window().is_minimized();
         live_input::set_wanted(
@@ -744,6 +753,7 @@ fn run_window(
         }
         if ui_active {
             request_apps(&window, &timer_storage, &timer_state);
+            trend_ui::request(&window, &timer_storage, &timer_state.borrow());
             if let Err(error) = poll_apps(&window, &timer_state) {
                 window.set_action_status(tr!("读取应用统计失败：{}", error).into());
             }
@@ -798,6 +808,7 @@ fn run_window(
             window.set_snapshot_detail(tr!("数据已变更，请重新选择快照").into());
             history::reset(&timer_history);
             timer_state.borrow_mut().apps = AppsState::default();
+            trend_ui::invalidate();
             refresh_requested = true;
         }
         if relabel_pending.take() {
@@ -806,6 +817,8 @@ fn run_window(
             window.set_snapshot_detail("".into());
             history::reset(&timer_history);
             timer_state.borrow_mut().apps = AppsState::default();
+            // The trend's words and preset names follow the language.
+            trend_ui::invalidate();
             window.invoke_general_opened();
             if window.get_settings_open() && window.get_settings_tab() == 2 {
                 collection.invoke_opened();
@@ -819,6 +832,7 @@ fn run_window(
                 // Cleaning or clearing may have removed earlier days' records.
                 history::reset(&timer_history);
                 timer_state.borrow_mut().apps = AppsState::default();
+                trend_ui::invalidate();
             }
             refresh_requested |= status.refresh;
         }

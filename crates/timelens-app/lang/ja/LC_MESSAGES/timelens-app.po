@@ -262,10 +262,6 @@ msgstr "2 つを 1 つにまとめて表示します。元の記録は書き換�
 msgid "中键（滚轮按下）"
 msgstr "中ボタン（ホイール押下）"
 
-#: main-window.slint
-msgid "为单个应用设置排除、合并显示或删除历史。"
-msgstr "アプリごとに除外、まとめ表示、履歴の削除を設定します。"
-
 #: timeline.slint
 msgid "主应用"
 msgstr "メインのアプリ"
@@ -1767,3 +1763,112 @@ msgstr "開いていた時間が設定した秒数に満たないアプリを統
 #: main-window.slint
 msgid "秒"
 msgstr "秒"
+
+#: trend-panel.slint
+msgid "{} · 按分类堆叠，指向柱子查看时长"
+msgstr "{} · カテゴリ別に積み上げ。棒にポインターを合わせると時間を表示"
+
+#: trend-panel.slint
+msgid "一天中的分布"
+msgstr "1日の時間帯別"
+
+#: main-window.slint
+msgid "为单个应用设置分类、排除、合并显示或删除历史。"
+msgstr "アプリごとにカテゴリ、除外、まとめ表示、履歴の削除を設定します。"
+
+#: category-panel.slint
+msgid "例如 设计"
+msgstr "例: デザイン"
+
+#: category-panel.slint main-window.slint trend-panel.slint
+msgid "分类"
+msgstr "カテゴリ"
+
+#: collection-panel.slint
+msgctxt "app"
+msgid "分类"
+msgstr "カテゴリ"
+
+#: category-panel.slint
+msgid "分类只依据应用和它的安装位置，不看窗口标题或内容。单个应用的分类在「应用规则」中指定，手动指定优先于目录规则。"
+msgstr "カテゴリはアプリとそのインストール場所だけで決まり、ウィンドウ タイトルや内容は見ません。アプリごとのカテゴリは「アプリのルール」で指定でき、手動の指定はフォルダー ルールより優先されます。"
+
+#: trend-panel.slint
+msgid "分类只按应用和它的安装位置划分。在「应用规则」里给单个应用指定分类，或在「管理分类」里给分类添加目录。"
+msgstr "カテゴリはアプリとそのインストール場所だけで分けます。アプリごとのカテゴリは「アプリのルール」で、カテゴリへのフォルダーの追加は「カテゴリを管理」で行います。"
+
+#: category-panel.slint
+msgid "分类名称"
+msgstr "カテゴリ名"
+
+#: category-panel.slint
+msgid "删除分类"
+msgstr "カテゴリを削除"
+
+#: category-panel.slint
+msgid "删除后，它的目录规则一并删除，手动归入它的应用改回按目录自动归类。已有记录不受影响。"
+msgstr "削除すると、そのフォルダー ルールも削除され、手動で入れたアプリはフォルダーによる自動分類に戻ります。既存の記録には影響しません。"
+
+#: trend-panel.slint
+msgid "各个钟点的日均聚焦时长"
+msgstr "時間帯ごとの1日平均フォーカス時間"
+
+#: category-panel.slint
+msgid "改名"
+msgstr "名前を変更"
+
+#: category-panel.slint
+msgid "新分类排在最后，颜色自动选取。"
+msgstr "新しいカテゴリは最後に並び、色は自動で選ばれます。"
+
+#: category-panel.slint
+msgid "新建"
+msgstr "作成"
+
+#: category-panel.slint
+msgid "新建分类"
+msgstr "新しいカテゴリ"
+
+#: trend-panel.slint
+msgid "日均"
+msgstr "1日平均"
+
+#: category-panel.slint
+msgid "添加目录…"
+msgstr "フォルダーを追加…"
+
+#: category-panel.slint
+msgid "目录规则"
+msgstr "フォルダー ルール"
+
+#: category-panel.slint
+msgid "确认删除"
+msgstr "削除を確定"
+
+#: category-panel.slint
+msgid "移除"
+msgstr "外す"
+
+#: category-panel.slint
+msgid "移除目录 {}"
+msgstr "フォルダー {} を外す"
+
+#: main-window.slint trend-panel.slint
+msgid "管理分类"
+msgstr "カテゴリを管理"
+
+#: main-window.slint
+msgid "给应用分组，在统计的「趋势」里按分类查看。"
+msgstr "アプリをグループに分け、統計の「推移」でカテゴリ別に確認します。"
+
+#: trend-panel.slint
+msgid "聚焦时长"
+msgstr "フォーカス時間"
+
+#: main-window.slint
+msgid "趋势"
+msgstr "推移"
+
+#: category-panel.slint
+msgid "还没有目录。添加后，这个目录里已有和以后出现的应用会自动归入这个分类，手动指定的除外。"
+msgstr "まだフォルダーはありません。追加すると、そのフォルダー内の既存のアプリと今後のアプリが自動的にこのカテゴリに入ります。手動で指定したものは除きます。"

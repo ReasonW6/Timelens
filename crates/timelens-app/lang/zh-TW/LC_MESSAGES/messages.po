@@ -1670,3 +1670,196 @@ msgstr "這段時間沒有可刪除的記錄"
 msgid "另有 {} 个打开不到 {} 秒的应用未显示"
 msgid_plural "另有 {} 个打开不到 {} 秒的应用未显示"
 msgstr[0] "另有 {} 個開啟不到 {} 秒的應用程式未顯示"
+
+#: trend_ui.rs
+msgid "%Y年%-m月"
+msgstr "%Y年%-m月"
+
+#: categories_ui.rs
+msgid "{} 个目录规则"
+msgid_plural "{} 个目录规则"
+msgstr[0] "{} 個目錄規則"
+
+#: trend_ui.rs
+msgid "{}:00–{}:00 日均"
+msgstr "{}:00–{}:00 日均"
+
+#: trend_ui.rs
+msgid "上一周期 {} · {}"
+msgstr "上一週期 {} · {}"
+
+#: trend_ui.rs
+msgid "上一周期没有聚焦记录"
+msgstr "上一週期沒有聚焦記錄"
+
+#: trend_ui.rs
+msgid "与上一周期持平"
+msgstr "與上一週期持平"
+
+#: categories_ui.rs collection_ui.rs
+msgid "保存失败：{}"
+msgstr "儲存失敗：{}"
+
+#: categories_ui.rs
+msgid "分类名称最多 {} 个字"
+msgstr "分類名稱最多 {} 個字"
+
+#: categories_ui.rs
+msgid "娱乐"
+msgstr "娛樂"
+
+#: categories_ui.rs
+msgid "学习"
+msgstr "學習"
+
+#: categories_ui.rs
+msgid "工作"
+msgstr "工作"
+
+#: categories_ui.rs
+msgid "工具"
+msgstr "工具"
+
+#: categories_ui.rs
+msgid "已删除分类「{}」"
+msgstr "已刪除分類「{}」"
+
+#: categories_ui.rs
+msgid "已恢复默认名称「{}」"
+msgstr "已恢復預設名稱「{}」"
+
+#: categories_ui.rs
+msgid "已改名为「{}」"
+msgstr "已改名為「{}」"
+
+#: categories_ui.rs
+msgid "已新建分类「{}」"
+msgstr "已新增分類「{}」"
+
+#: categories_ui.rs
+msgid "已有名为「{}」的分类"
+msgstr "已有名為「{}」的分類"
+
+#: categories_ui.rs
+msgid "已添加目录 {}，其中的应用会自动归入「{}」"
+msgstr "已新增目錄 {}，其中的應用程式會自動歸入「{}」"
+
+#: categories_ui.rs
+msgid "已移除目录 {}"
+msgstr "已移除目錄 {}"
+
+#: collection_ui.rs
+msgid "手动指定为未分类，不按目录归类"
+msgstr "手動指定為未分類，不依目錄歸類"
+
+#: collection_ui.rs
+msgid "手动指定，优先于目录规则"
+msgstr "手動指定，優先於目錄規則"
+
+#: trend_ui.rs
+msgid "按天"
+msgstr "按天"
+
+#: trend_ui.rs
+msgid "按小时"
+msgstr "按小時"
+
+#: trend_ui.rs
+msgid "按月"
+msgstr "按月"
+
+#: collection_ui.rs
+msgid "按目录 {} 归入「{}」"
+msgstr "依目錄 {} 歸入「{}」"
+
+#: collection_ui.rs
+msgid "按目录自动"
+msgstr "依目錄自動"
+
+#: categories_ui.rs collection_ui.rs trend_ui.rs
+msgid "未分类"
+msgstr "未分類"
+
+#: categories_ui.rs
+msgid "未命名"
+msgstr "未命名"
+
+#: trend_ui.rs
+msgid "比上一周期多 {}%"
+msgstr "比上一週期多 {}%"
+
+#: trend_ui.rs
+msgid "比上一周期少 {}%"
+msgstr "比上一週期少 {}%"
+
+#: collection_ui.rs
+msgid "没有匹配的目录规则，归为未分类"
+msgstr "沒有符合的目錄規則，歸為未分類"
+
+#: categories_ui.rs
+msgid "没有目录规则"
+msgstr "沒有目錄規則"
+
+#: categories_ui.rs
+msgid "社交"
+msgstr "社交"
+
+#: categories_ui.rs
+msgid "请输入分类名称"
+msgstr "請輸入分類名稱"
+
+#: categories_ui.rs
+msgid "请选择一个目录"
+msgstr "請選擇一個目錄"
+
+#: categories_ui.rs
+msgid "读取分类失败：{}"
+msgstr "讀取分類失敗：{}"
+
+#: trend_ui.rs
+msgid "读取趋势失败：{}"
+msgstr "讀取趨勢失敗：{}"
+
+#: trend_ui.rs
+msgid "还没有聚焦记录。"
+msgstr "還沒有聚焦記錄。"
+
+#: categories_ui.rs collection_ui.rs
+msgid "这个分类已不存在"
+msgstr "這個分類已不存在"
+
+#: categories_ui.rs
+msgid "这个目录已归入「{}」，请先从那里移除"
+msgstr "這個目錄已歸入「{}」，請先從那裡移除"
+
+#: categories_ui.rs
+msgid "这个目录已经在「{}」里"
+msgstr "這個目錄已經在「{}」裡"
+
+#: trend_ui.rs
+msgid "这段时间没有聚焦记录。"
+msgstr "這段時間沒有聚焦記錄。"
+
+#: categories_ui.rs
+msgid "选择要归入分类的目录"
+msgstr "選擇要歸入分類的目錄"
+
+#: storage
+msgid "这个分类不能使用这个名称"
+msgstr "這個分類不能使用這個名稱"
+
+#: storage
+msgid "目录不能为空"
+msgstr "目錄不能為空"
+
+#: storage
+msgid "分类名称不能为空或过长"
+msgstr "分類名稱不能為空或過長"
+
+#: categories_ui.rs
+msgid "{}，但重新读取分类失败：{}"
+msgstr "{}，但重新讀取分類失敗：{}"
+
+#: trend_ui.rs
+msgid "未能读取这段时间的趋势。"
+msgstr "未能讀取這段時間的趨勢。"

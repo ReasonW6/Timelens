@@ -579,14 +579,20 @@ fn grouped_intervals<Tz: TimeZone>(
     groups
 }
 
-fn local_datetime_at<Tz: TimeZone>(timezone: &Tz, timestamp: i64) -> Option<NaiveDateTime> {
+pub(crate) fn local_datetime_at<Tz: TimeZone>(
+    timezone: &Tz,
+    timestamp: i64,
+) -> Option<NaiveDateTime> {
     let datetime = timezone.timestamp_millis_opt(timestamp).single()?;
     datetime
         .naive_utc()
         .checked_add_offset(datetime.offset().fix())
 }
 
-fn resolve_local_boundary<Tz: TimeZone>(timezone: &Tz, local: NaiveDateTime) -> Option<i64> {
+pub(crate) fn resolve_local_boundary<Tz: TimeZone>(
+    timezone: &Tz,
+    local: NaiveDateTime,
+) -> Option<i64> {
     if let Some(datetime) = timezone.from_local_datetime(&local).earliest() {
         return Some(datetime.timestamp_millis());
     }
@@ -691,10 +697,81 @@ pub(crate) fn range_text<Tz: TimeZone>(
     }
 }
 
+/// A time zone with one change forward and one back, for tests.
+#[cfg(test)]
+pub(crate) mod seasonal_zone {
+    use chrono::{FixedOffset, LocalResult, NaiveDate, NaiveDateTime, Offset, TimeZone};
+
+    // A deterministic two-transition timezone avoids changing the process-wide
+    // TZ variable or adding a timezone database dependency just for these tests.
+    #[derive(Clone, Copy, Debug)]
+    pub(crate) struct SeasonalZone {
+        pub(crate) forward_utc: NaiveDateTime,
+        pub(crate) backward_utc: NaiveDateTime,
+    }
+
+    #[derive(Clone, Copy, Debug)]
+    pub(crate) struct SeasonalOffset {
+        zone: SeasonalZone,
+        seconds: i32,
+    }
+
+    impl Offset for SeasonalOffset {
+        fn fix(&self) -> FixedOffset {
+            FixedOffset::east_opt(self.seconds).unwrap()
+        }
+    }
+
+    impl TimeZone for SeasonalZone {
+        type Offset = SeasonalOffset;
+
+        fn from_offset(offset: &Self::Offset) -> Self {
+            offset.zone
+        }
+
+        fn offset_from_local_date(&self, local: &NaiveDate) -> LocalResult<Self::Offset> {
+            self.offset_from_local_datetime(&local.and_hms_opt(0, 0, 0).unwrap())
+        }
+
+        fn offset_from_local_datetime(&self, local: &NaiveDateTime) -> LocalResult<Self::Offset> {
+            let candidates = [7_200, 3_600]
+                .into_iter()
+                .filter_map(|seconds| {
+                    let utc = local.checked_sub_offset(FixedOffset::east_opt(seconds).unwrap())?;
+                    let offset = self.offset_from_utc_datetime(&utc);
+                    (offset.seconds == seconds).then_some(offset)
+                })
+                .collect::<Vec<_>>();
+            match candidates.as_slice() {
+                [] => LocalResult::None,
+                [offset] => LocalResult::Single(*offset),
+                [earlier, later] => LocalResult::Ambiguous(*earlier, *later),
+                _ => unreachable!(),
+            }
+        }
+
+        fn offset_from_utc_date(&self, utc: &NaiveDate) -> Self::Offset {
+            self.offset_from_utc_datetime(&utc.and_hms_opt(0, 0, 0).unwrap())
+        }
+
+        fn offset_from_utc_datetime(&self, utc: &NaiveDateTime) -> Self::Offset {
+            SeasonalOffset {
+                zone: *self,
+                seconds: if *utc >= self.forward_utc && *utc < self.backward_utc {
+                    7_200
+                } else {
+                    3_600
+                },
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use super::seasonal_zone::SeasonalZone;
     use super::*;
-    use chrono::{FixedOffset, LocalResult, NaiveDate};
+    use chrono::{FixedOffset, NaiveDate};
     use timelens_storage::{TimelineApplication, TimelineGap, TimelineSegment};
 
     const MINUTE: i64 = 60_000;
@@ -1230,70 +1307,6 @@ mod tests {
         }
         assert!(selected_day_bounds(anchor, i32::MAX).is_none());
         assert!(selected_day_bounds(anchor, i32::MIN).is_none());
-    }
-
-    // A deterministic two-transition timezone avoids changing the process-wide
-    // TZ variable or adding a timezone database dependency just for these tests.
-    #[derive(Clone, Copy, Debug)]
-    struct SeasonalZone {
-        forward_utc: NaiveDateTime,
-        backward_utc: NaiveDateTime,
-    }
-
-    #[derive(Clone, Copy, Debug)]
-    struct SeasonalOffset {
-        zone: SeasonalZone,
-        seconds: i32,
-    }
-
-    impl Offset for SeasonalOffset {
-        fn fix(&self) -> FixedOffset {
-            FixedOffset::east_opt(self.seconds).unwrap()
-        }
-    }
-
-    impl TimeZone for SeasonalZone {
-        type Offset = SeasonalOffset;
-
-        fn from_offset(offset: &Self::Offset) -> Self {
-            offset.zone
-        }
-
-        fn offset_from_local_date(&self, local: &NaiveDate) -> LocalResult<Self::Offset> {
-            self.offset_from_local_datetime(&local.and_hms_opt(0, 0, 0).unwrap())
-        }
-
-        fn offset_from_local_datetime(&self, local: &NaiveDateTime) -> LocalResult<Self::Offset> {
-            let candidates = [7_200, 3_600]
-                .into_iter()
-                .filter_map(|seconds| {
-                    let utc = local.checked_sub_offset(FixedOffset::east_opt(seconds).unwrap())?;
-                    let offset = self.offset_from_utc_datetime(&utc);
-                    (offset.seconds == seconds).then_some(offset)
-                })
-                .collect::<Vec<_>>();
-            match candidates.as_slice() {
-                [] => LocalResult::None,
-                [offset] => LocalResult::Single(*offset),
-                [earlier, later] => LocalResult::Ambiguous(*earlier, *later),
-                _ => unreachable!(),
-            }
-        }
-
-        fn offset_from_utc_date(&self, utc: &NaiveDate) -> Self::Offset {
-            self.offset_from_utc_datetime(&utc.and_hms_opt(0, 0, 0).unwrap())
-        }
-
-        fn offset_from_utc_datetime(&self, utc: &NaiveDateTime) -> Self::Offset {
-            SeasonalOffset {
-                zone: *self,
-                seconds: if *utc >= self.forward_utc && *utc < self.backward_utc {
-                    7_200
-                } else {
-                    3_600
-                },
-            }
-        }
     }
 
     #[test]

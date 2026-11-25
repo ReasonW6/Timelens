@@ -1,0 +1,194 @@
+import { ScrollView } from "std-widgets.slint";
+import { Theme, Action, Card, Note, SectionTitle, Badge } from "theme.slint";
+
+// A share of a bar, from `start` to `start + size` of the chart's height.
+export struct TrendPart { start: float, size: float, tint: color }
+// One bar: the label under it (empty to leave room), what hovering it tells,
+// and its stacked parts.
+export struct TrendBar { label: string, tip: string, value: string, parts: [TrendPart] }
+// A category's share of the focus in the range.
+export struct TrendCategory { name: string, tint: color, value: string, share: string, ratio: float, apps: string }
+
+export global TrendState {
+    in-out property <bool> loading: false;
+    // No focus in the range; says so instead of the charts.
+    in-out property <string> empty;
+    in-out property <string> total;
+    // The change from the period before, and what the period before was.
+    in-out property <string> compare;
+    in-out property <string> compare-note;
+    in-out property <string> average;
+    in-out property <string> step;
+    in-out property <string> scope;
+    in-out property <[TrendBar]> bars;
+    in-out property <string> bars-top;
+    // By hour of day over several days; empty for a single day.
+    in-out property <[TrendBar]> hours;
+    in-out property <string> hours-top;
+    in-out property <[TrendCategory]> categories;
+}
+
+// Bars over a shared scale, with the hovered one told above them.
+component BarChart inherits VerticalLayout {
+    in property <[TrendBar]> bars;
+    in property <string> top;
+    in property <string> idle-text;
+    // Every bar in the brand color instead of its parts' own.
+    in property <bool> mono: false;
+    in property <length> plot-height: 160px;
+    private property <length> axis: 56px;
+    private property <length> slot: root.bars.length == 0 ? 0px : (plot.width - root.axis) / root.bars.length;
+    // Set by each bar as the pointer enters and leaves it, which keeps the
+    // text above out of the layout's own bindings.
+    private property <int> hovered: -1;
+    private property <bool> pointing: root.hovered >= 0 && root.hovered < root.bars.length;
+    spacing: 8px;
+    Text {
+        text: root.pointing ? root.bars[root.hovered].tip + " · " + root.bars[root.hovered].value : root.idle-text;
+        color: root.pointing ? Theme.ink : Theme.ink-3;
+        font-size: 12px;
+        overflow: elide;
+    }
+    plot := Rectangle {
+        height: root.plot-height + 20px;
+        // The scale: its top and middle, and the base line.
+        Text { x: 0px; y: -6px; width: root.axis - 8px; text: root.top; color: Theme.ink-3; font-size: 11px; horizontal-alignment: right; }
+        Rectangle { x: root.axis; y: 0px; width: parent.width - root.axis; height: 1px; background: Theme.line; }
+        Rectangle { x: root.axis; y: root.plot-height / 2; width: parent.width - root.axis; height: 1px; background: Theme.line; }
+        Rectangle { x: root.axis; y: root.plot-height; width: parent.width - root.axis; height: 1px; background: Theme.line-strong; }
+        for bar[index] in root.bars : Rectangle {
+            x: root.axis + index * root.slot;
+            y: 0px;
+            width: root.slot;
+            height: root.plot-height;
+            background: index == root.hovered ? Theme.hover-tint : transparent;
+            border-radius: 3px;
+            // A bar leaves a gap to its neighbors and stays narrow when few.
+            Rectangle {
+                width: min(48px, parent.width - 2 * max(1px, min(4px, root.slot * 0.15)));
+                x: (parent.width - self.width) / 2;
+                for part in bar.parts : Rectangle {
+                    y: root.plot-height * (1 - part.start - part.size);
+                    height: max(0px, root.plot-height * part.size);
+                    background: root.mono ? Theme.brand : part.tint;
+                }
+            }
+            if bar.label != "" : Text {
+                x: (parent.width - 80px) / 2; y: root.plot-height + 5px;
+                width: 80px;
+                text: bar.label;
+                color: Theme.ink-3;
+                font-size: 11px;
+                horizontal-alignment: center;
+            }
+            TouchArea {
+                changed has-hover => {
+                    if self.has-hover {
+                        root.hovered = index;
+                    } else if root.hovered == index {
+                        root.hovered = -1;
+                    }
+                }
+            }
+        }
+    }
+}
+
+export component TrendPanel inherits Rectangle {
+    callback manage-categories;
+    opacity: TrendState.loading ? 0.5 : 1;
+    ScrollView {
+        horizontal-scrollbar-policy: always-off;
+        VerticalLayout {
+            alignment: start;
+            padding-right: 16px;
+            padding-bottom: 16px;
+            spacing: 12px;
+
+            // The total, against the period before.
+            Card {
+                height: summary.preferred-height;
+                summary := HorizontalLayout {
+                    padding: 18px; spacing: 24px;
+                    VerticalLayout {
+                        spacing: 4px;
+                        Text { text: @tr("聚焦总计"); color: Theme.ink-3; font-size: 12px; }
+                        Text { text: TrendState.total; color: Theme.ink; font-size: 24px; font-weight: 600; font-family: Theme.font-display; }
+                    }
+                    VerticalLayout {
+                        alignment: center; spacing: 4px; horizontal-stretch: 1;
+                        if TrendState.compare != "" : HorizontalLayout {
+                            alignment: start; spacing: 6px;
+                            Badge { text: TrendState.compare; tone: Theme.brand-ink; fill: Theme.brand-soft; }
+                        }
+                        if TrendState.compare-note != "" : Text { text: TrendState.compare-note; color: Theme.ink-3; font-size: 12px; overflow: elide; }
+                    }
+                    if TrendState.average != "" : VerticalLayout {
+                        alignment: center; spacing: 4px;
+                        Text { text: @tr("日均"); color: Theme.ink-3; font-size: 12px; horizontal-alignment: right; }
+                        Text { text: TrendState.average; color: Theme.ink; font-size: 16px; font-weight: 600; font-family: Theme.font-display; horizontal-alignment: right; }
+                    }
+                }
+            }
+
+            if TrendState.empty != "" : Rectangle {
+                height: 120px;
+                Note { text: TrendState.empty; horizontal-alignment: center; }
+            }
+
+            if TrendState.empty == "" : Card {
+                height: over-time.preferred-height;
+                over-time := VerticalLayout {
+                    padding: 18px; spacing: 10px;
+                    HorizontalLayout {
+                        spacing: 10px;
+                        SectionTitle { text: @tr("聚焦时长"); vertical-alignment: center; }
+                        VerticalLayout { alignment: center; Badge { text: TrendState.step; tone: Theme.brand-ink; fill: Theme.brand-soft; } }
+                        Rectangle { horizontal-stretch: 1; }
+                    }
+                    BarChart { bars: TrendState.bars; top: TrendState.bars-top; idle-text: @tr("{} · 按分类堆叠，指向柱子查看时长", TrendState.scope); }
+                }
+            }
+
+            if TrendState.empty == "" && TrendState.hours.length > 0 : Card {
+                height: by-hour.preferred-height;
+                by-hour := VerticalLayout {
+                    padding: 18px; spacing: 10px;
+                    SectionTitle { text: @tr("一天中的分布"); }
+                    BarChart { bars: TrendState.hours; top: TrendState.hours-top; mono: true; plot-height: 110px; idle-text: @tr("各个钟点的日均聚焦时长"); }
+                }
+            }
+
+            if TrendState.empty == "" : Card {
+                height: by-category.preferred-height;
+                by-category := VerticalLayout {
+                    padding: 18px; spacing: 12px;
+                    HorizontalLayout {
+                        SectionTitle { text: @tr("分类"); vertical-alignment: center; }
+                        Rectangle { horizontal-stretch: 1; }
+                        Action { quiet: true; text: @tr("管理分类"); icon: @image-url("icons/tag.svg"); clicked => { root.manage-categories(); } }
+                    }
+                    for row in TrendState.categories : HorizontalLayout {
+                        spacing: 12px;
+                        VerticalLayout { alignment: center; Rectangle { width: 10px; height: 10px; border-radius: 5px; background: row.tint; } }
+                        VerticalLayout {
+                            alignment: center; spacing: 2px; width: 150px;
+                            Text { text: row.name; color: Theme.ink; font-size: 13px; font-weight: 600; overflow: elide; }
+                            Text { text: row.apps; color: Theme.ink-3; font-size: 11px; overflow: elide; }
+                        }
+                        VerticalLayout {
+                            alignment: center; horizontal-stretch: 1;
+                            Rectangle {
+                                height: 6px; border-radius: 3px; background: Theme.track;
+                                Rectangle { x: 0px; width: max(2px, parent.width * row.ratio); border-radius: 3px; background: row.tint; }
+                            }
+                        }
+                        Text { width: 96px; text: row.value; color: Theme.ink; font-size: 13px; font-weight: 600; horizontal-alignment: right; vertical-alignment: center; }
+                        Text { width: 48px; text: row.share; color: Theme.ink-3; font-size: 12px; horizontal-alignment: right; vertical-alignment: center; }
+                    }
+                    Note { text: @tr("分类只按应用和它的安装位置划分。在「应用规则」里给单个应用指定分类，或在「管理分类」里给分类添加目录。"); font-size: 12px; }
+                }
+            }
+        }
+    }
+}

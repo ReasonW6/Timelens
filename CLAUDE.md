@@ -53,9 +53,9 @@ cargo test --workspace --release -- --test-threads=2
 
 - `timelens-ipc`：版本化、限长的 Protobuf 协议（`prost` 手写 `#[derive(Message)]`，无 .proto/build 脚本）和命名管道互认证。握手校验同用户、同会话、真实 PID、固定可执行文件名和对端目录。协议版本 `PROTOCOL_VERSION` 在 `lib.rs`，改线格式时需同步升级（两份 README 末尾也写着当前协议版本和 schema 版本，一并更新）。
 - `timelens-observer`：不读取窗口标题的窗口分类、应用身份解析、虚拟桌面查询和输入计数。
-- `timelens-storage`：DPAPI 封装数据密钥 + SQLCipher + WAL。迁移是 `lib.rs` 中按版本递增的 `MIGRATIONS` 数组（部分 SQL 通过 `include_str!` 引入 `*-schema.sql`），`LATEST_SCHEMA_VERSION` 需随之更新；迁移失败会从加密备份恢复。`timeline_cache.rs` 是纯内存的视图缓存（Projection，可丢弃重建）。其余：`collection.rs` 采集数据写入、`milestone3.rs` 快照与数据覆盖、`snapshot_container.rs` 加密快照容器、`portable.rs` 便携备份、`recovery.rs` 损坏恢复、`relocation.rs` 数据迁移位置。
+- `timelens-storage`：DPAPI 封装数据密钥 + SQLCipher + WAL。迁移是 `lib.rs` 中按版本递增的 `MIGRATIONS` 数组（部分 SQL 通过 `include_str!` 引入 `*-schema.sql`），`LATEST_SCHEMA_VERSION` 需随之更新；迁移失败会从加密备份恢复。`timeline_cache.rs` 是纯内存的视图缓存（Projection，可丢弃重建）。其余：`collection.rs` 采集数据写入、`categories.rs` 应用分类与趋势用的聚焦区间、`milestone3.rs` 快照与数据覆盖、`snapshot_container.rs` 加密快照容器、`portable.rs` 便携备份、`recovery.rs` 损坏恢复、`relocation.rs` 数据迁移位置。
 
-UI：`build.rs` 用 `slint-build` 编译入口 `ui/app.slint`（导出 `AppWindow` 与恢复窗口 `RecoveryWindow`，主体在 `main-window.slint`），`main.rs` 通过 `slint::include_modules!()` 引入生成代码。各页面的 Rust 绑定分散在 `*_ui.rs`（`timeline_ui`、`collection_ui`、`data_ui`、`general_ui`）；首页连续时间线在 `history.rs`/`history_cache.rs`，统计页实时输入在 `live_input.rs`。
+UI：`build.rs` 用 `slint-build` 编译入口 `ui/app.slint`（导出 `AppWindow` 与恢复窗口 `RecoveryWindow`，主体在 `main-window.slint`），`main.rs` 通过 `slint::include_modules!()` 引入生成代码。各页面的 Rust 绑定分散在 `*_ui.rs`（`timeline_ui`、`collection_ui`、`data_ui`、`general_ui`，统计页趋势 `trend_ui`、分类设置 `categories_ui`）；首页连续时间线在 `history.rs`/`history_cache.rs`，统计页实时输入在 `live_input.rs`。
 
 国际化（`i18n.rs`）：源文本是简体中文，另有 zh-TW、en、ja、ko 四种翻译，放在 `crates/timelens-app/lang/<语言>/LC_MESSAGES/`。`.slint` 中的 `@tr(...)` 对应 `timelens-app.po`（由 `slint-build` 打包），Rust 中的 `tr!`/`trn!` 对应 `messages.po`（由 `build.rs` 生成查找表）。新增或改动任何界面文案都要在四种语言的对应 `.po` 中补齐，占位符保持一致，否则测试 `every_shown_text_is_translated_with_the_same_arguments` 会失败。安装器文案在 `installer/Timelens.iss` 的 `[CustomMessages]` 中，同样覆盖五种语言。
 

@@ -136,8 +136,8 @@ pub fn choose_named(save: bool, extension: &str, name: Option<&str>) -> Result<O
     }
     Ok(Some(chosen))
 }
-/// Ask for a folder with the system folder picker.
-fn choose_folder() -> Result<Option<PathBuf>> {
+/// Ask for a folder with the system folder picker, titled `title`.
+pub(crate) fn choose_folder(title: &str) -> Result<Option<PathBuf>> {
     use windows::{
         Win32::{
             Foundation::ERROR_CANCELLED,
@@ -160,7 +160,7 @@ fn choose_folder() -> Result<Option<PathBuf>> {
         dialog.SetOptions(
             dialog.GetOptions()? | FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM | FOS_PATHMUSTEXIST,
         )?;
-        dialog.SetTitle(&HSTRING::from(tr!("选择数据的新位置")))?;
+        dialog.SetTitle(&HSTRING::from(title))?;
     }
     if let Err(error) = unsafe { dialog.Show(None) } {
         if error.code() == HRESULT::from_win32(ERROR_CANCELLED.0) {
@@ -349,7 +349,8 @@ pub fn install(
                     return Ok(choose_file(false, "zip")?.map_or(Update::Canceled, Update::Path));
                 }
                 if action == 11 {
-                    return Ok(choose_folder()?.map_or(Update::Canceled, Update::Folder));
+                    return Ok(choose_folder(tr!("选择数据的新位置"))?
+                        .map_or(Update::Canceled, Update::Folder));
                 }
                 let password = if password.is_empty() {
                     None

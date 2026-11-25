@@ -11,7 +11,9 @@ use timelens_ipc::{
     PhysicalKeyCount, SystemInterval, WindowObservation, WindowTransition, WindowTransitionKind,
     collector_event,
 };
-use timelens_storage::{SnapshotDisplay, SnapshotStoreRequest, SnapshotTrigger, Storage};
+use timelens_storage::{
+    CategoryChoice, SnapshotDisplay, SnapshotStoreRequest, SnapshotTrigger, Storage,
+};
 
 type FixtureResult<T> = Result<T, Box<dyn Error>>;
 const MINUTE_MS: i64 = 60_000;
@@ -261,6 +263,16 @@ fn main() -> FixtureResult<()> {
         first_sequence: 1,
         events,
     })?;
+    // Categories as a user might set them, with the browser left in none.
+    let presets = storage.categories()?;
+    for (app, preset) in apps.iter().zip(["work", "study", "", "tools"]) {
+        if let Some(category) = presets.iter().find(|c| c.preset.as_deref() == Some(preset)) {
+            storage.set_application_category(
+                &app.identity,
+                CategoryChoice::Manual(Some(category.id)),
+            )?;
+        }
+    }
 
     let captured_at = local_timestamp(day, 14, 30, 0)?;
     let snapshot_id = storage.store_snapshot(&SnapshotStoreRequest {

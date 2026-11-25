@@ -61,6 +61,8 @@ Time that was not recorded — because the collector was not running, or because
 - Total focus time, number of applications, keystrokes and mouse clicks; for each application its share of focus, open time, on-screen time and window count.
 - **Data coverage** shows how much of the period was actually observed. Expand it to see every gap and its reason, e.g. the collector was not running, you paused recording, or data was purged after the retention period.
 - One-click **JSON / CSV export**. Exports contain only aggregate numbers, never application paths.
+- **Trends**: focus time hour by hour for a day, or day by day and month by month for longer periods, stacked by category, against the period before and spread over the hours of the day.
+- **Categories**: put applications into categories such as Work or Entertainment, by hand or by the folder they are installed in. Five presets can be renamed, removed or added to; categories never look at window titles or content.
 
 ### ⌨️ Keys & system: how your input is distributed
 
@@ -207,6 +209,7 @@ The documents below are written in Simplified Chinese.
 
 ## Changelog
 
+- **2026-11-25 · Trends and categories**: Statistics has a new Trends tab with focus time by hour, day or month, stacked by category, compared with the period before and spread over the hours of the day. Applications go into categories by hand in App rules or by folder in Settings › Categories; five presets start every dataset. See [ticket 22](docs/wayfinder/timelens-v1/issues/22-add-trends-and-application-categories.md).
 - **2026-10-22 · Interface scale**: Settings › General has a new Interface scale option (80%–150%) that enlarges or shrinks the interface on top of the Windows display scale. It takes effect at once and is kept when moving between monitors; enlarging eases off when the screen cannot fit the window at its minimum size.
 - **2026-10-22 · 0.1.1**: Setup is available in the same five languages as the app; the program files carry version information; errors and crashes are written to local diagnostic logs; installers are built by a Release workflow, and dependencies are checked against the RustSec advisory database.
 - **2026-10-21 · Interface languages**: Settings › General has a new Language option with System default, Simplified Chinese, Traditional Chinese, English, Japanese and Korean. System default follows the Windows display language and falls back to English for other languages; the switch takes effect at once, including the tray menu.
@@ -216,7 +219,7 @@ The documents below are written in Simplified Chinese.
 - **2026-09-06 · Paper-native UI**: the six main pages and the recovery window were rebuilt to the chosen design; see [UI acceptance](design-qa.md) for the review process.
 - **2026-09-05 · Milestones 1–5**: window and input collection, timeline, snapshots, portable backup and restore, data relocation, and installation maintenance are all implemented.
 
-Current protocol version is v6 and the database schema is v16.
+Current protocol version is v6 and the database schema is v17.
 
 ## License
 

@@ -1670,3 +1670,196 @@ msgstr "이 시간대에는 삭제할 기록이 없습니다"
 msgid "另有 {} 个打开不到 {} 秒的应用未显示"
 msgid_plural "另有 {} 个打开不到 {} 秒的应用未显示"
 msgstr[0] "그 밖에 앱 {}개(열린 시간 {}초 미만)는 표시하지 않습니다"
+
+#: trend_ui.rs
+msgid "%Y年%-m月"
+msgstr "%Y년 %-m월"
+
+#: categories_ui.rs
+msgid "{} 个目录规则"
+msgid_plural "{} 个目录规则"
+msgstr[0] "폴더 규칙 {}개"
+
+#: trend_ui.rs
+msgid "{}:00–{}:00 日均"
+msgstr "{}:00–{}:00 일 평균"
+
+#: trend_ui.rs
+msgid "上一周期 {} · {}"
+msgstr "이전 기간 {} · {}"
+
+#: trend_ui.rs
+msgid "上一周期没有聚焦记录"
+msgstr "이전 기간에는 포커스 기록이 없습니다"
+
+#: trend_ui.rs
+msgid "与上一周期持平"
+msgstr "이전 기간과 같음"
+
+#: categories_ui.rs collection_ui.rs
+msgid "保存失败：{}"
+msgstr "저장 실패: {}"
+
+#: categories_ui.rs
+msgid "分类名称最多 {} 个字"
+msgstr "카테고리 이름은 최대 {}자입니다"
+
+#: categories_ui.rs
+msgid "娱乐"
+msgstr "엔터테인먼트"
+
+#: categories_ui.rs
+msgid "学习"
+msgstr "학습"
+
+#: categories_ui.rs
+msgid "工作"
+msgstr "업무"
+
+#: categories_ui.rs
+msgid "工具"
+msgstr "도구"
+
+#: categories_ui.rs
+msgid "已删除分类「{}」"
+msgstr "'{}' 카테고리를 삭제했습니다"
+
+#: categories_ui.rs
+msgid "已恢复默认名称「{}」"
+msgstr "기본 이름 '{}'(으)로 되돌렸습니다"
+
+#: categories_ui.rs
+msgid "已改名为「{}」"
+msgstr "'{}'(으)로 이름을 바꿨습니다"
+
+#: categories_ui.rs
+msgid "已新建分类「{}」"
+msgstr "'{}' 카테고리를 만들었습니다"
+
+#: categories_ui.rs
+msgid "已有名为「{}」的分类"
+msgstr "'{}' 이름의 카테고리가 이미 있습니다"
+
+#: categories_ui.rs
+msgid "已添加目录 {}，其中的应用会自动归入「{}」"
+msgstr "폴더 {}를 추가했습니다. 그 안의 앱은 자동으로 '{}'에 들어갑니다"
+
+#: categories_ui.rs
+msgid "已移除目录 {}"
+msgstr "폴더 {}를 제거했습니다"
+
+#: collection_ui.rs
+msgid "手动指定为未分类，不按目录归类"
+msgstr "수동으로 미분류로 지정했습니다. 폴더로 분류하지 않습니다"
+
+#: collection_ui.rs
+msgid "手动指定，优先于目录规则"
+msgstr "수동으로 지정했습니다. 폴더 규칙보다 우선합니다"
+
+#: trend_ui.rs
+msgid "按天"
+msgstr "일별"
+
+#: trend_ui.rs
+msgid "按小时"
+msgstr "시간별"
+
+#: trend_ui.rs
+msgid "按月"
+msgstr "월별"
+
+#: collection_ui.rs
+msgid "按目录 {} 归入「{}」"
+msgstr "폴더 {}에 따라 '{}'에 분류"
+
+#: collection_ui.rs
+msgid "按目录自动"
+msgstr "폴더로 자동"
+
+#: categories_ui.rs collection_ui.rs trend_ui.rs
+msgid "未分类"
+msgstr "미분류"
+
+#: categories_ui.rs
+msgid "未命名"
+msgstr "이름 없음"
+
+#: trend_ui.rs
+msgid "比上一周期多 {}%"
+msgstr "이전 기간보다 {}% 많음"
+
+#: trend_ui.rs
+msgid "比上一周期少 {}%"
+msgstr "이전 기간보다 {}% 적음"
+
+#: collection_ui.rs
+msgid "没有匹配的目录规则，归为未分类"
+msgstr "일치하는 폴더 규칙이 없어 미분류입니다"
+
+#: categories_ui.rs
+msgid "没有目录规则"
+msgstr "폴더 규칙 없음"
+
+#: categories_ui.rs
+msgid "社交"
+msgstr "소셜"
+
+#: categories_ui.rs
+msgid "请输入分类名称"
+msgstr "카테고리 이름을 입력하세요"
+
+#: categories_ui.rs
+msgid "请选择一个目录"
+msgstr "폴더를 선택하세요"
+
+#: categories_ui.rs
+msgid "读取分类失败：{}"
+msgstr "카테고리 읽기 실패: {}"
+
+#: trend_ui.rs
+msgid "读取趋势失败：{}"
+msgstr "추세 읽기 실패: {}"
+
+#: trend_ui.rs
+msgid "还没有聚焦记录。"
+msgstr "아직 포커스 기록이 없습니다."
+
+#: categories_ui.rs collection_ui.rs
+msgid "这个分类已不存在"
+msgstr "이 카테고리는 더 이상 없습니다"
+
+#: categories_ui.rs
+msgid "这个目录已归入「{}」，请先从那里移除"
+msgstr "이 폴더는 이미 '{}'에 속해 있습니다. 먼저 거기서 제거하세요"
+
+#: categories_ui.rs
+msgid "这个目录已经在「{}」里"
+msgstr "이 폴더는 이미 '{}'에 있습니다"
+
+#: trend_ui.rs
+msgid "这段时间没有聚焦记录。"
+msgstr "이 기간에는 포커스 기록이 없습니다."
+
+#: categories_ui.rs
+msgid "选择要归入分类的目录"
+msgstr "카테고리에 넣을 폴더 선택"
+
+#: storage
+msgid "这个分类不能使用这个名称"
+msgstr "이 카테고리에는 그 이름을 쓸 수 없습니다"
+
+#: storage
+msgid "目录不能为空"
+msgstr "폴더가 비어 있습니다"
+
+#: storage
+msgid "分类名称不能为空或过长"
+msgstr "카테고리 이름이 비어 있거나 너무 깁니다"
+
+#: categories_ui.rs
+msgid "{}，但重新读取分类失败：{}"
+msgstr "{}. 하지만 카테고리를 다시 읽지 못했습니다: {}"
+
+#: trend_ui.rs
+msgid "未能读取这段时间的趋势。"
+msgstr "이 기간의 추세를 읽을 수 없습니다."

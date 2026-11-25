@@ -1,0 +1,169 @@
+import { LineEdit, ScrollView } from "std-widgets.slint";
+import { Theme, Action, Note, Rule, StatusLine, SettingRow, SettingsHeader, SettingsGroup } from "theme.slint";
+
+// A category as the settings list it: its folders and how many there are.
+export struct CategoryItem { id: int, name: string, tint: color, folders: [string], summary: string }
+
+export global CategoryState {
+    in-out property <[CategoryItem]> items;
+    in-out property <bool> busy: false;
+    // A finished action's result, shown as a toast.
+    in-out property <string> status;
+    // The name being typed for a new category.
+    in-out property <string> new-name;
+    // The category whose deletion waits for a second click; -1 for none.
+    in-out property <int> confirm-delete: -1;
+    callback opened;
+    callback add(string);
+    callback rename(int, string);
+    callback remove(int);
+    // Asks for a folder to add to the category.
+    callback add-folder(int);
+    callback remove-folder(string);
+}
+
+// One category, folded until its name or folders are edited.
+component CategoryRow inherits Rectangle {
+    in property <CategoryItem> item;
+    in-out property <bool> expanded: false;
+    vertical-stretch: 0;
+    height: header.height + (root.expanded ? body.preferred-height + 1px : 0px);
+    clip: true;
+    animate height { duration: 160ms; easing: ease-out; }
+    header := Rectangle {
+        y: 0px; height: max(54px, header-layout.preferred-height);
+        background: header-touch.has-hover ? Theme.hover-tint : transparent;
+        border-radius: 8px;
+        border-width: header-key.has-focus ? 2px : 0px;
+        border-color: Theme.focus;
+        forward-focus: header-key;
+        accessible-role: button;
+        accessible-label: root.item.name;
+        accessible-expandable: true;
+        accessible-expanded: root.expanded;
+        accessible-action-default => { root.expanded = !root.expanded; }
+        header-layout := HorizontalLayout {
+            padding-left: 16px; padding-right: 16px; padding-top: 10px; padding-bottom: 10px;
+            spacing: 14px;
+            Rectangle {
+                width: 30px;
+                Rectangle { width: 14px; height: 14px; border-radius: 7px; background: root.item.tint; }
+            }
+            VerticalLayout {
+                alignment: center; spacing: 2px; horizontal-stretch: 1;
+                Text { text: root.item.name; color: Theme.ink; font-size: 14px; font-weight: 500; overflow: elide; }
+                Text { text: root.item.summary; color: Theme.ink-3; font-size: 12px; overflow: elide; }
+            }
+            Rectangle {
+                width: 16px;
+                Image {
+                    width: 16px; height: 16px;
+                    source: @image-url("icons/chevron-right.svg");
+                    colorize: Theme.ink-3;
+                    transform-rotation: root.expanded ? 90deg : 0deg;
+                    animate transform-rotation { duration: 160ms; }
+                }
+            }
+        }
+        header-touch := TouchArea { mouse-cursor: pointer; clicked => { header-key.focus(); root.expanded = !root.expanded; } }
+        header-key := FocusScope { width: 0px; key-pressed(event) => { if event.text == " " || event.text == "\n" { root.expanded = !root.expanded; return accept; } return reject; } }
+    }
+    Rectangle { y: header.height; height: 1px; background: Theme.line; }
+    // Folded, its fields stay out of the Tab order; while folding they stay
+    // in sight until the row has shrunk past them.
+    body := VerticalLayout {
+        visible: root.expanded || root.height > header.height + 0.5px;
+        y: header.height + 1px;
+        height: self.preferred-height;
+        padding-left: 60px; padding-right: 16px; padding-top: 12px; padding-bottom: 14px;
+        spacing: 10px;
+        HorizontalLayout {
+            spacing: 8px; height: 34px;
+            name-edit := LineEdit {
+                horizontal-stretch: 1;
+                text: root.item.name;
+                enabled: !CategoryState.busy;
+                accepted(text) => { CategoryState.rename(root.item.id, text); }
+            }
+            Action { text: @tr("改名"); enabled: !CategoryState.busy && name-edit.text != root.item.name; clicked => { CategoryState.rename(root.item.id, name-edit.text); } }
+        }
+        Text { text: @tr("目录规则"); color: Theme.ink-2; font-size: 13px; font-weight: 600; }
+        if root.item.folders.length == 0 : Note { text: @tr("还没有目录。添加后，这个目录里已有和以后出现的应用会自动归入这个分类，手动指定的除外。"); font-size: 12px; }
+        for folder in root.item.folders : HorizontalLayout {
+            spacing: 8px;
+            Image { width: 16px; height: 16px; y: (parent.height - self.height) / 2; source: @image-url("icons/folder.svg"); colorize: Theme.ink-3; }
+            Text { text: folder; color: Theme.ink; font-size: 13px; vertical-alignment: center; horizontal-stretch: 1; overflow: elide; }
+            Action {
+                quiet: true;
+                text: @tr("移除");
+                accessible-label: @tr("移除目录 {}", folder);
+                enabled: !CategoryState.busy;
+                clicked => { CategoryState.remove-folder(folder); }
+            }
+        }
+        HorizontalLayout {
+            spacing: 8px;
+            Action { text: @tr("添加目录…"); icon: @image-url("icons/folder.svg"); enabled: !CategoryState.busy; clicked => { CategoryState.add-folder(root.item.id); } }
+            Rectangle { horizontal-stretch: 1; }
+            if CategoryState.confirm-delete == root.item.id : Action { quiet: true; text: @tr("取消"); clicked => { CategoryState.confirm-delete = -1; } }
+            Action {
+                danger: true;
+                text: CategoryState.confirm-delete == root.item.id ? @tr("确认删除") : @tr("删除分类");
+                icon: @image-url("icons/trash.svg");
+                enabled: !CategoryState.busy;
+                clicked => {
+                    if CategoryState.confirm-delete == root.item.id {
+                        CategoryState.remove(root.item.id);
+                    } else {
+                        CategoryState.confirm-delete = root.item.id;
+                    }
+                }
+            }
+        }
+        if CategoryState.confirm-delete == root.item.id : Note { text: @tr("删除后，它的目录规则一并删除，手动归入它的应用改回按目录自动归类。已有记录不受影响。"); font-size: 12px; color: Theme.danger; }
+    }
+}
+
+export component CategoryPanel inherits Rectangle {
+    background: Theme.paper;
+    VerticalLayout {
+        spacing: 10px;
+        ScrollView {
+            horizontal-scrollbar-policy: always-off;
+            VerticalLayout {
+                alignment: start;
+                padding-right: 18px;
+                padding-bottom: 16px;
+                spacing: 10px;
+                Note { text: @tr("分类只依据应用和它的安装位置，不看窗口标题或内容。单个应用的分类在「应用规则」中指定，手动指定优先于目录规则。"); }
+                SettingsGroup {
+                    for item[index] in CategoryState.items : VerticalLayout {
+                        if index > 0 : Rule { }
+                        CategoryRow { item: item; }
+                    }
+                }
+                Rectangle { height: 8px; }
+                SettingsHeader { text: @tr("新建分类"); }
+                SettingsGroup {
+                    SettingRow {
+                        title: @tr("分类名称");
+                        description: @tr("新分类排在最后，颜色自动选取。");
+                        icon: @image-url("icons/tag.svg");
+                        HorizontalLayout {
+                            spacing: 8px;
+                            LineEdit {
+                                width: 200px; height: 34px;
+                                text <=> CategoryState.new-name;
+                                placeholder-text: @tr("例如 设计");
+                                enabled: !CategoryState.busy;
+                                accepted(text) => { CategoryState.add(text); }
+                            }
+                            Action { text: @tr("新建"); enabled: !CategoryState.busy && CategoryState.new-name != ""; clicked => { CategoryState.add(CategoryState.new-name); } }
+                        }
+                    }
+                }
+            }
+        }
+        if CategoryState.busy : StatusLine { busy: true; text: @tr("正在处理，请稍候…"); }
+    }
+}
