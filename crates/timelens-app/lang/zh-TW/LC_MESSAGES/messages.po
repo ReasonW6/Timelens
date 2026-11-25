@@ -1859,3 +1859,7 @@ msgstr "分類名稱不能為空或過長"
 #: categories_ui.rs
 msgid "{}，但重新读取分类失败：{}"
 msgstr "{}，但重新讀取分類失敗：{}"
+
+#: trend_ui.rs
+msgid "未能读取这段时间的趋势。"
+msgstr "未能讀取這段時間的趨勢。"

@@ -80,6 +80,26 @@ struct View {
     categories: Vec<CategoryView>,
 }
 
+impl View {
+    /// What the trend shows when it could not be read.
+    fn failed() -> Self {
+        View {
+            total: String::new(),
+            empty: tr!("未能读取这段时间的趋势。").to_owned(),
+            compare: String::new(),
+            compare_note: String::new(),
+            average: String::new(),
+            step: String::new(),
+            scope: String::new(),
+            bars: Vec::new(),
+            bars_top: String::new(),
+            hours: Vec::new(),
+            hours_top: String::new(),
+            categories: Vec::new(),
+        }
+    }
+}
+
 #[derive(Default)]
 struct Reads {
     /// When the trend was last read and for which scope.
@@ -102,9 +122,29 @@ thread_local! {
     static READS: RefCell<Reads> = RefCell::new(Reads::default());
 }
 
-/// How often a settled trend on screen is read again; a range still running
-/// is read as often as the application totals beside it.
+/// How often a settled trend on screen is read again.
 const REFRESH: Duration = Duration::from_secs(30);
+
+/// How often a running range longer than a day is read again: its bars are
+/// days or months, and reading it every two seconds costs more than it shows.
+const LONG_LIVE_REFRESH: Duration = Duration::from_secs(10);
+
+/// How often the trend of `scope` is read again while it shows. A running
+/// range of a day or less is read as often as the application totals beside
+/// it; all records are read as seldom as a settled range.
+fn refresh_interval(scope: AppsScope, follow_now: bool) -> Duration {
+    let length = match scope {
+        AppsScope::All => return REFRESH,
+        _ if !follow_now => return REFRESH,
+        AppsScope::Range(start, end) => end.saturating_sub(start),
+        AppsScope::Recent(length) => length,
+    };
+    if length <= 26 * HOUR_MS {
+        crate::LIVE_REFRESH
+    } else {
+        LONG_LIVE_REFRESH
+    }
+}
 
 /// Read the trend again as soon as it shows, as after categories changed.
 pub fn invalidate() {
@@ -118,11 +158,7 @@ pub fn request(window: &AppWindow, storage: &Arc<Mutex<Storage>>, state: &UiStat
         return;
     }
     let scope = crate::apps_scope(window, state);
-    let interval = if matches!(scope, AppsScope::Range(..)) && state.follow_now {
-        crate::LIVE_REFRESH
-    } else {
-        REFRESH
-    };
+    let interval = refresh_interval(scope, state.follow_now);
     let generation = crate::history::generation();
     let (due, loading) = READS.with(|reads| {
         let reads = &mut *reads.borrow_mut();
@@ -181,13 +217,21 @@ pub fn request(window: &AppWindow, storage: &Arc<Mutex<Storage>>, state: &UiStat
                 // Read for a scope no longer shown, or before a change: the
                 // next tick reads again.
                 Ok(_) => {}
-                Err(error) => {
-                    READS.with(|reads| reads.borrow_mut().failed = Some(scope));
+                // A failed read clears what an earlier scope left on screen,
+                // so its numbers are not taken for this one's.
+                Err(error) if current => {
+                    READS.with(|reads| {
+                        let reads = &mut *reads.borrow_mut();
+                        reads.failed = Some(scope);
+                        reads.shown = None;
+                    });
                     window.global::<TrendState>().set_loading(false);
+                    render(&window, View::failed());
                     if !told {
                         window.set_action_status(tr!("读取趋势失败：{}", error).into());
                     }
                 }
+                Err(_) => {}
             }
         });
     });
@@ -735,6 +779,30 @@ fn render(window: &AppWindow, view: View) {
 mod tests {
     use super::*;
     use crate::timeline_view::seasonal_zone::SeasonalZone;
+
+    #[test]
+    fn only_running_ranges_of_a_day_or_less_follow_the_application_totals() {
+        let day = 24 * HOUR_MS;
+        assert_eq!(
+            refresh_interval(AppsScope::Range(0, day), true),
+            crate::LIVE_REFRESH
+        );
+        assert_eq!(
+            refresh_interval(AppsScope::Recent(4 * HOUR_MS), true),
+            crate::LIVE_REFRESH
+        );
+        assert_eq!(
+            refresh_interval(AppsScope::Recent(7 * day), true),
+            LONG_LIVE_REFRESH
+        );
+        assert_eq!(
+            refresh_interval(AppsScope::Range(0, 31 * day), true),
+            LONG_LIVE_REFRESH
+        );
+        assert_eq!(refresh_interval(AppsScope::Range(0, day), false), REFRESH);
+        assert_eq!(refresh_interval(AppsScope::Recent(day), false), REFRESH);
+        assert_eq!(refresh_interval(AppsScope::All, true), REFRESH);
+    }
 
     fn at(day: u32, hour: u32, minute: u32) -> i64 {
         Local

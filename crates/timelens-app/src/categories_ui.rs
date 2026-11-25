@@ -105,7 +105,8 @@ fn item(category: &Category) -> CategoryItem {
 }
 
 /// Bring the rows to `items`: rows of deleted categories go, the others are
-/// changed where they stand, and new ones are put in their place.
+/// changed where they stand or moved to their new place, and new ones are put
+/// in their place.
 fn update_rows(rows: &VecModel<CategoryItem>, items: Vec<CategoryItem>) {
     for index in (0..rows.row_count()).rev() {
         let id = rows.row_data(index).map(|row| row.id);
@@ -113,12 +114,22 @@ fn update_rows(rows: &VecModel<CategoryItem>, items: Vec<CategoryItem>) {
             rows.remove(index);
         }
     }
+    let wanted = items.len();
     for (index, item) in items.into_iter().enumerate() {
         if rows.row_data(index).is_some_and(|row| row.id == item.id) {
             rows.set_row_data(index, item);
-        } else {
-            rows.insert(index, item);
+            continue;
         }
+        // A category moved: take its row from further down.
+        if let Some(from) = (index + 1..rows.row_count())
+            .find(|&from| rows.row_data(from).is_some_and(|row| row.id == item.id))
+        {
+            rows.remove(from);
+        }
+        rows.insert(index, item);
+    }
+    while rows.row_count() > wanted {
+        rows.remove(wanted);
     }
 }
 
@@ -426,5 +437,18 @@ mod tests {
             })
             .collect::<Vec<_>>();
         assert_eq!(shown, [(1, "a".into()), (3, "C".into()), (4, "d".into())]);
+
+        // Categories that swap places come out once each, in the new order.
+        let rows = VecModel::from(vec![row(1, "a"), row(2, "b"), row(3, "c")]);
+        update_rows(&rows, vec![row(2, "b"), row(1, "a"), row(3, "c")]);
+        let ids = (0..rows.row_count())
+            .map(|index| rows.row_data(index).unwrap().id)
+            .collect::<Vec<_>>();
+        assert_eq!(ids, [2, 1, 3]);
+        update_rows(&rows, vec![row(3, "c"), row(2, "b")]);
+        let ids = (0..rows.row_count())
+            .map(|index| rows.row_data(index).unwrap().id)
+            .collect::<Vec<_>>();
+        assert_eq!(ids, [3, 2]);
     }
 }

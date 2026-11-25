@@ -1888,3 +1888,7 @@ msgstr "The category name is empty or too long"
 #: categories_ui.rs
 msgid "{}，但重新读取分类失败：{}"
 msgstr "{}, but reading the categories again failed: {}"
+
+#: trend_ui.rs
+msgid "未能读取这段时间的趋势。"
+msgstr "Could not read the trend for this period."
