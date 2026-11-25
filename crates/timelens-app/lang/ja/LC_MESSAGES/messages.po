@@ -1670,3 +1670,176 @@ msgstr "この時間帯に削除できる記録はありません"
 msgid "另有 {} 个打开不到 {} 秒的应用未显示"
 msgid_plural "另有 {} 个打开不到 {} 秒的应用未显示"
 msgstr[0] "ほかに {} 個のアプリ（開いていた時間 {} 秒未満）は表示していません"
+
+#: trend_ui.rs
+msgid "%Y年%-m月"
+msgstr "%Y年%-m月"
+
+#: categories_ui.rs
+msgid "{} 个目录规则"
+msgid_plural "{} 个目录规则"
+msgstr[0] "フォルダー ルール {} 件"
+
+#: trend_ui.rs
+msgid "{}:00–{}:00 日均"
+msgstr "{}:00–{}:00 の1日平均"
+
+#: trend_ui.rs
+msgid "上一周期 {} · {}"
+msgstr "前の期間 {} · {}"
+
+#: trend_ui.rs
+msgid "上一周期没有聚焦记录"
+msgstr "前の期間にフォーカスの記録はありません"
+
+#: trend_ui.rs
+msgid "与上一周期持平"
+msgstr "前の期間と同じ"
+
+#: categories_ui.rs collection_ui.rs
+msgid "保存失败：{}"
+msgstr "保存に失敗しました: {}"
+
+#: categories_ui.rs
+msgid "分类名称最多 {} 个字"
+msgstr "カテゴリ名は {} 文字までです"
+
+#: categories_ui.rs
+msgid "娱乐"
+msgstr "エンタメ"
+
+#: categories_ui.rs
+msgid "学习"
+msgstr "学習"
+
+#: categories_ui.rs
+msgid "工作"
+msgstr "仕事"
+
+#: categories_ui.rs
+msgid "工具"
+msgstr "ツール"
+
+#: categories_ui.rs
+msgid "已删除分类「{}」"
+msgstr "カテゴリ「{}」を削除しました"
+
+#: categories_ui.rs
+msgid "已恢复默认名称「{}」"
+msgstr "既定の名前「{}」に戻しました"
+
+#: categories_ui.rs
+msgid "已改名为「{}」"
+msgstr "「{}」に名前を変更しました"
+
+#: categories_ui.rs
+msgid "已新建分类「{}」"
+msgstr "カテゴリ「{}」を作成しました"
+
+#: categories_ui.rs
+msgid "已有名为「{}」的分类"
+msgstr "「{}」という名前のカテゴリはすでにあります"
+
+#: categories_ui.rs
+msgid "已添加目录 {}，其中的应用会自动归入「{}」"
+msgstr "フォルダー {} を追加しました。中のアプリは自動的に「{}」に入ります"
+
+#: categories_ui.rs
+msgid "已移除目录 {}"
+msgstr "フォルダー {} を外しました"
+
+#: collection_ui.rs
+msgid "手动指定为未分类，不按目录归类"
+msgstr "手動で未分類に指定しています。フォルダーでは分類しません"
+
+#: collection_ui.rs
+msgid "手动指定，优先于目录规则"
+msgstr "手動で指定しています。フォルダー ルールより優先されます"
+
+#: trend_ui.rs
+msgid "按天"
+msgstr "日ごと"
+
+#: trend_ui.rs
+msgid "按小时"
+msgstr "時間ごと"
+
+#: trend_ui.rs
+msgid "按月"
+msgstr "月ごと"
+
+#: collection_ui.rs
+msgid "按目录 {} 归入「{}」"
+msgstr "フォルダー {} により「{}」に分類"
+
+#: collection_ui.rs
+msgid "按目录自动"
+msgstr "フォルダーで自動"
+
+#: categories_ui.rs collection_ui.rs trend_ui.rs
+msgid "未分类"
+msgstr "未分類"
+
+#: categories_ui.rs
+msgid "未命名"
+msgstr "名前なし"
+
+#: trend_ui.rs
+msgid "比上一周期多 {}%"
+msgstr "前の期間より {}% 多い"
+
+#: trend_ui.rs
+msgid "比上一周期少 {}%"
+msgstr "前の期間より {}% 少ない"
+
+#: collection_ui.rs
+msgid "没有匹配的目录规则，归为未分类"
+msgstr "一致するフォルダー ルールがないため未分類です"
+
+#: categories_ui.rs
+msgid "没有目录规则"
+msgstr "フォルダー ルールなし"
+
+#: categories_ui.rs
+msgid "社交"
+msgstr "ソーシャル"
+
+#: categories_ui.rs
+msgid "请输入分类名称"
+msgstr "カテゴリ名を入力してください"
+
+#: categories_ui.rs
+msgid "请选择一个目录"
+msgstr "フォルダーを選んでください"
+
+#: categories_ui.rs
+msgid "读取分类失败：{}"
+msgstr "カテゴリの読み込みに失敗しました: {}"
+
+#: trend_ui.rs
+msgid "读取趋势失败：{}"
+msgstr "推移の読み込みに失敗しました: {}"
+
+#: trend_ui.rs
+msgid "还没有聚焦记录。"
+msgstr "まだフォーカスの記録はありません。"
+
+#: categories_ui.rs collection_ui.rs
+msgid "这个分类已不存在"
+msgstr "このカテゴリはもうありません"
+
+#: categories_ui.rs
+msgid "这个目录已归入「{}」，请先从那里移除"
+msgstr "このフォルダーはすでに「{}」に入っています。先にそちらから外してください"
+
+#: categories_ui.rs
+msgid "这个目录已经在「{}」里"
+msgstr "このフォルダーはすでに「{}」にあります"
+
+#: trend_ui.rs
+msgid "这段时间没有聚焦记录。"
+msgstr "この期間にフォーカスの記録はありません。"
+
+#: categories_ui.rs
+msgid "选择要归入分类的目录"
+msgstr "カテゴリに入れるフォルダーを選択"

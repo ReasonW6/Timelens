@@ -262,10 +262,6 @@ msgstr "兩者合併成一項顯示，原始記錄不改寫，之後可以在「
 msgid "中键（滚轮按下）"
 msgstr "中鍵（按下滾輪）"
 
-#: main-window.slint
-msgid "为单个应用设置排除、合并显示或删除历史。"
-msgstr "為單一應用程式設定排除、合併顯示或刪除歷史。"
-
 #: timeline.slint
 msgid "主应用"
 msgstr "主應用程式"
@@ -1767,3 +1763,112 @@ msgstr "統計中不顯示開啟時間不到設定秒數的應用程式。它們
 #: main-window.slint
 msgid "秒"
 msgstr "秒"
+
+#: trend-panel.slint
+msgid "{} · 按分类堆叠，指向柱子查看时长"
+msgstr "{} · 依分類堆疊，指向長條查看時長"
+
+#: trend-panel.slint
+msgid "一天中的分布"
+msgstr "一天中的分佈"
+
+#: main-window.slint
+msgid "为单个应用设置分类、排除、合并显示或删除历史。"
+msgstr "為單一應用程式設定分類、排除、合併顯示或刪除歷史。"
+
+#: category-panel.slint
+msgid "例如 设计"
+msgstr "例如 設計"
+
+#: category-panel.slint main-window.slint trend-panel.slint
+msgid "分类"
+msgstr "分類"
+
+#: collection-panel.slint
+msgctxt "app"
+msgid "分类"
+msgstr "分類"
+
+#: category-panel.slint
+msgid "分类只依据应用和它的安装位置，不看窗口标题或内容。单个应用的分类在「应用规则」中指定，手动指定优先于目录规则。"
+msgstr "分類只依據應用程式和它的安裝位置，不看視窗標題或內容。單一應用程式的分類在「應用程式規則」中指定，手動指定優先於目錄規則。"
+
+#: trend-panel.slint
+msgid "分类只按应用和它的安装位置划分。在「应用规则」里给单个应用指定分类，或在「管理分类」里给分类添加目录。"
+msgstr "分類只依應用程式和它的安裝位置劃分。在「應用程式規則」裡替單一應用程式指定分類，或在「管理分類」裡替分類新增目錄。"
+
+#: category-panel.slint
+msgid "分类名称"
+msgstr "分類名稱"
+
+#: category-panel.slint
+msgid "删除分类"
+msgstr "刪除分類"
+
+#: category-panel.slint
+msgid "删除后，它的目录规则一并删除，手动归入它的应用改回按目录自动归类。已有记录不受影响。"
+msgstr "刪除後，它的目錄規則一併刪除，手動歸入它的應用程式改回依目錄自動歸類。已有記錄不受影響。"
+
+#: trend-panel.slint
+msgid "各个钟点的日均聚焦时长"
+msgstr "各個鐘點的日均聚焦時長"
+
+#: category-panel.slint
+msgid "改名"
+msgstr "改名"
+
+#: category-panel.slint
+msgid "新分类排在最后，颜色自动选取。"
+msgstr "新分類排在最後，顏色自動選取。"
+
+#: category-panel.slint
+msgid "新建"
+msgstr "新增"
+
+#: category-panel.slint
+msgid "新建分类"
+msgstr "新增分類"
+
+#: trend-panel.slint
+msgid "日均"
+msgstr "日均"
+
+#: category-panel.slint
+msgid "添加目录…"
+msgstr "新增目錄…"
+
+#: category-panel.slint
+msgid "目录规则"
+msgstr "目錄規則"
+
+#: category-panel.slint
+msgid "确认删除"
+msgstr "確認刪除"
+
+#: category-panel.slint
+msgid "移除"
+msgstr "移除"
+
+#: category-panel.slint
+msgid "移除目录 {}"
+msgstr "移除目錄 {}"
+
+#: main-window.slint trend-panel.slint
+msgid "管理分类"
+msgstr "管理分類"
+
+#: main-window.slint
+msgid "给应用分组，在统计的「趋势」里按分类查看。"
+msgstr "替應用程式分組，在統計的「趨勢」裡依分類查看。"
+
+#: trend-panel.slint
+msgid "聚焦时长"
+msgstr "聚焦時長"
+
+#: main-window.slint
+msgid "趋势"
+msgstr "趨勢"
+
+#: category-panel.slint
+msgid "还没有目录。添加后，这个目录里已有和以后出现的应用会自动归入这个分类，手动指定的除外。"
+msgstr "還沒有目錄。新增後，這個目錄裡已有和以後出現的應用程式會自動歸入這個分類，手動指定的除外。"

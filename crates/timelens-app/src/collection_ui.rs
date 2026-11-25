@@ -8,7 +8,7 @@ use std::{
     rc::Rc,
     sync::{Arc, Mutex, mpsc},
 };
-use timelens_storage::Storage;
+use timelens_storage::{CategoryChoice, Storage};
 #[derive(Default)]
 struct Data {
     apps: Vec<(String, String)>,
@@ -18,6 +18,8 @@ struct Data {
     /// The rule switches of the application chosen as they were shown:
     /// activity, input and snapshots.
     shown: (bool, bool, bool),
+    /// The categories its category list offers after by folder and none.
+    categories: Vec<i64>,
 }
 thread_local! {
     /// The stretch an activity's menu asks to delete next; the statistics
@@ -38,7 +40,7 @@ fn statistics_stretch(w: &AppWindow, state: &UiState) -> Option<(i64, i64)> {
     }
 }
 /// A stretch in words, with its date and times of day.
-fn stretch_label(start: i64, end: i64) -> String {
+pub(crate) fn stretch_label(start: i64, end: i64) -> String {
     let local = |t: i64| chrono::Local.timestamp_millis_opt(t).single();
     let (Some(from), Some(to)) = (local(start), local(end)) else {
         return String::new();
@@ -167,10 +169,50 @@ fn select(w: &AppWindow, d: &mut Data, s: &Storage, index: i32) -> Result<()> {
     g.set_snapshots(d.shown.2);
     let windows = s.application_deletion_impact(id)?;
     g.set_impact(trn!(windows, "将删除「{}」的 {} 个窗口实例。", name, windows).into());
+    let identity = id.clone();
+    show_category(w, d, s, &identity)?;
     g.set_delete_confirmed(false);
     g.set_merge_confirmed(false);
     g.set_merge_index(-1);
     g.set_merge_preview("".into());
+    Ok(())
+}
+/// Offer the categories for the application chosen, with how its own was chosen.
+fn show_category(w: &AppWindow, d: &mut Data, s: &Storage, identity: &str) -> Result<()> {
+    let categories = s.categories()?;
+    let decided = s.application_category(identity)?;
+    let named = |id: Option<i64>| {
+        categories
+            .iter()
+            .find(|c| Some(c.id) == id)
+            .map_or_else(|| tr!("未分类").to_owned(), crate::categories_ui::name)
+    };
+    let (index, note) = match decided.choice {
+        CategoryChoice::Auto => (
+            0,
+            match &decided.folder {
+                Some(folder) => tr!("按目录 {} 归入「{}」", folder, named(decided.category)),
+                None => tr!("没有匹配的目录规则，归为未分类").to_owned(),
+            },
+        ),
+        CategoryChoice::Manual(None) => (1, tr!("手动指定为未分类，不按目录归类").to_owned()),
+        CategoryChoice::Manual(Some(id)) => (
+            categories
+                .iter()
+                .position(|c| c.id == id)
+                .map_or(0, |position| position as i32 + 2),
+            tr!("手动指定，优先于目录规则").to_owned(),
+        ),
+    };
+    d.categories = categories.iter().map(|c| c.id).collect();
+    let g = w.global::<CollectionState>();
+    g.set_category_options(strings(
+        [tr!("按目录自动").to_owned(), tr!("未分类").to_owned()]
+            .into_iter()
+            .chain(categories.iter().map(crate::categories_ui::name)),
+    ));
+    g.set_category_index(index);
+    g.set_category_note(note.into());
     Ok(())
 }
 /// How saving the switch of a rule changes the lists of the applications
@@ -319,6 +361,43 @@ pub fn install(
                 }
             }
         });
+    }
+    {
+        let weak = w.as_weak();
+        let data = data.clone();
+        let storage = storage.clone();
+        w.global::<CollectionState>()
+            .on_category_chosen(move |index| {
+                let Some(w) = weak.upgrade() else {
+                    return;
+                };
+                let result = (|| {
+                    let s = lock(&storage)?;
+                    let mut d = data.borrow_mut();
+                    let g = w.global::<CollectionState>();
+                    let id = d
+                        .apps
+                        .get(g.get_app_index() as usize)
+                        .map(|(id, _)| id.clone())
+                        .context(tr!("请选择应用"))?;
+                    let choice = match index {
+                        0 => CategoryChoice::Auto,
+                        1 => CategoryChoice::Manual(None),
+                        _ => CategoryChoice::Manual(Some(
+                            *d.categories
+                                .get(index as usize - 2)
+                                .context(tr!("这个分类已不存在"))?,
+                        )),
+                    };
+                    s.set_application_category(&id, choice)?;
+                    crate::trend_ui::invalidate();
+                    show_category(&w, &mut d, &s, &id)
+                })();
+                if let Err(e) = result {
+                    w.global::<CollectionState>()
+                        .set_status(tr!("保存失败：{}", e).into());
+                }
+            });
     }
     {
         let weak = w.as_weak();

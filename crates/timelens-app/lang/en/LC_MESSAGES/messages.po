@@ -1698,3 +1698,177 @@ msgid "另有 {} 个打开不到 {} 秒的应用未显示"
 msgid_plural "另有 {} 个打开不到 {} 秒的应用未显示"
 msgstr[0] "{} more application open under {} seconds is not shown"
 msgstr[1] "{} more applications open under {} seconds are not shown"
+
+#: trend_ui.rs
+msgid "%Y年%-m月"
+msgstr "%b %Y"
+
+#: categories_ui.rs
+msgid "{} 个目录规则"
+msgid_plural "{} 个目录规则"
+msgstr[0] "{} folder rule"
+msgstr[1] "{} folder rules"
+
+#: trend_ui.rs
+msgid "{}:00–{}:00 日均"
+msgstr "{}:00–{}:00 daily average"
+
+#: trend_ui.rs
+msgid "上一周期 {} · {}"
+msgstr "Previous period {} · {}"
+
+#: trend_ui.rs
+msgid "上一周期没有聚焦记录"
+msgstr "No focus recorded in the previous period"
+
+#: trend_ui.rs
+msgid "与上一周期持平"
+msgstr "Same as the previous period"
+
+#: categories_ui.rs collection_ui.rs
+msgid "保存失败：{}"
+msgstr "Save failed: {}"
+
+#: categories_ui.rs
+msgid "分类名称最多 {} 个字"
+msgstr "Category names can have at most {} characters"
+
+#: categories_ui.rs
+msgid "娱乐"
+msgstr "Entertainment"
+
+#: categories_ui.rs
+msgid "学习"
+msgstr "Study"
+
+#: categories_ui.rs
+msgid "工作"
+msgstr "Work"
+
+#: categories_ui.rs
+msgid "工具"
+msgstr "Tools"
+
+#: categories_ui.rs
+msgid "已删除分类「{}」"
+msgstr "Deleted the category \"{}\""
+
+#: categories_ui.rs
+msgid "已恢复默认名称「{}」"
+msgstr "Restored the default name \"{}\""
+
+#: categories_ui.rs
+msgid "已改名为「{}」"
+msgstr "Renamed to \"{}\""
+
+#: categories_ui.rs
+msgid "已新建分类「{}」"
+msgstr "Created the category \"{}\""
+
+#: categories_ui.rs
+msgid "已有名为「{}」的分类"
+msgstr "A category named \"{}\" already exists"
+
+#: categories_ui.rs
+msgid "已添加目录 {}，其中的应用会自动归入「{}」"
+msgstr "Added the folder {}; apps in it now fall into \"{}\""
+
+#: categories_ui.rs
+msgid "已移除目录 {}"
+msgstr "Removed the folder {}"
+
+#: collection_ui.rs
+msgid "手动指定为未分类，不按目录归类"
+msgstr "Set to uncategorized by hand; folder rules do not apply"
+
+#: collection_ui.rs
+msgid "手动指定，优先于目录规则"
+msgstr "Chosen by hand; overrides folder rules"
+
+#: trend_ui.rs
+msgid "按天"
+msgstr "Daily"
+
+#: trend_ui.rs
+msgid "按小时"
+msgstr "Hourly"
+
+#: trend_ui.rs
+msgid "按月"
+msgstr "Monthly"
+
+#: collection_ui.rs
+msgid "按目录 {} 归入「{}」"
+msgstr "In \"{1}\" by the folder {0}"
+
+#: collection_ui.rs
+msgid "按目录自动"
+msgstr "By folder"
+
+#: categories_ui.rs collection_ui.rs trend_ui.rs
+msgid "未分类"
+msgstr "Uncategorized"
+
+#: categories_ui.rs
+msgid "未命名"
+msgstr "Unnamed"
+
+#: trend_ui.rs
+msgid "比上一周期多 {}%"
+msgstr "{}% more than the previous period"
+
+#: trend_ui.rs
+msgid "比上一周期少 {}%"
+msgstr "{}% less than the previous period"
+
+#: collection_ui.rs
+msgid "没有匹配的目录规则，归为未分类"
+msgstr "No folder rule matches, so it is uncategorized"
+
+#: categories_ui.rs
+msgid "没有目录规则"
+msgstr "No folder rules"
+
+#: categories_ui.rs
+msgid "社交"
+msgstr "Social"
+
+#: categories_ui.rs
+msgid "请输入分类名称"
+msgstr "Enter a valid category name"
+
+#: categories_ui.rs
+msgid "请选择一个目录"
+msgstr "Choose a folder"
+
+#: categories_ui.rs
+msgid "读取分类失败：{}"
+msgstr "Failed to read categories: {}"
+
+#: trend_ui.rs
+msgid "读取趋势失败：{}"
+msgstr "Failed to read trends: {}"
+
+#: trend_ui.rs
+msgid "还没有聚焦记录。"
+msgstr "No focus recorded yet."
+
+#: categories_ui.rs collection_ui.rs
+msgid "这个分类已不存在"
+msgstr "This category no longer exists"
+
+#: categories_ui.rs
+msgid "这个目录已归入「{}」，请先从那里移除"
+msgstr "This folder already belongs to \"{}\"; remove it there first"
+
+#: categories_ui.rs
+msgid "这个目录已经在「{}」里"
+msgstr "This folder is already in \"{}\""
+
+#: trend_ui.rs
+msgid "这段时间没有聚焦记录。"
+msgstr "No focus recorded in this period."
+
+#: categories_ui.rs
+msgid "选择要归入分类的目录"
+msgstr "Choose a folder for the category"

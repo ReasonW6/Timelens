@@ -248,8 +248,9 @@ fn build_day(
     }
 }
 
-fn day_title(day: &Day) -> (String, String) {
-    let weekdays = [
+/// The day of the week of `date`, in words.
+pub(crate) fn weekday(date: NaiveDate) -> &'static str {
+    [
         tr!("星期一"),
         tr!("星期二"),
         tr!("星期三"),
@@ -257,8 +258,11 @@ fn day_title(day: &Day) -> (String, String) {
         tr!("星期五"),
         tr!("星期六"),
         tr!("星期日"),
-    ];
-    let weekday = weekdays[day.date.weekday().num_days_from_monday() as usize];
+    ][date.weekday().num_days_from_monday() as usize]
+}
+
+fn day_title(day: &Day) -> (String, String) {
+    let weekday = weekday(day.date);
     let date = day.date.format(tr!("%-m月%-d日")).to_string();
     let this_year = Local::now().year() == day.date.year();
     let long_date = if this_year {

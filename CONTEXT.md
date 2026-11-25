@@ -24,6 +24,14 @@ _Avoid_: Application identity, window title, application merge
 A user-confirmed rule that treats two previously separate application identities as one application and one history.
 _Avoid_: Automatic fuzzy match, rename
 
+**Application category**:
+A user-defined label, such as Work or Entertainment, that groups applications for statistics. An application belongs to at most one category, chosen by hand or by a category folder rule, and merged applications share one. It never depends on window titles or content.
+_Avoid_: Tag, project, productivity score
+
+**Category folder rule**:
+A folder attached to one application category so that applications whose recorded executable lies under it, now or later, fall into that category unless chosen by hand. When several folders match, the longest wins.
+_Avoid_: Automatic fuzzy match, application merge
+
 **Window instance**:
 One independently switchable, user-facing top-level window with a taskbar button, belonging to an application. It ends when the window leaves the taskbar, for example by hiding to the notification area. Dialogs, menus, tooltips, tabs, shell surfaces such as Start and Search, and processes without such a window are not window instances.
 _Avoid_: Process, application, dialog, tab

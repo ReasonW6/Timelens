@@ -5,7 +5,9 @@ import { HistoryRow, StickyDay, ParticipantItem, AppTimes } from "timeline.slint
 import { DataPanel, DataState, MoveDialog } from "data-panel.slint";
 import { CollectionPanel, CollectionState, KeyCell, ButtonHeat, SystemRow } from "collection-panel.slint";
 import { AboutPage } from "about.slint";
-export { Theme, AppIcons, DataState, CollectionState, KeyCell, ButtonHeat, SystemRow, AppRow, WindowRow, SegmentRow, SnapshotRow, HistoryItem, DayAnchor, Participant, ShareSlice, StackApp }
+import { TrendPanel, TrendState, TrendBar, TrendPart, TrendCategory } from "trend-panel.slint";
+import { CategoryPanel, CategoryState, CategoryItem } from "category-panel.slint";
+export { Theme, AppIcons, DataState, CollectionState, KeyCell, ButtonHeat, SystemRow, TrendState, TrendBar, TrendPart, TrendCategory, CategoryState, CategoryItem, AppRow, WindowRow, SegmentRow, SnapshotRow, HistoryItem, DayAnchor, Participant, ShareSlice, StackApp }
 
 component WindowItem inherits Rectangle {
     in property <WindowRow> item;
@@ -1084,6 +1086,7 @@ export component AppWindow inherits Window {
         root.snapshot-open = tab == 1;
         if tab == 1 { root.snapshot-opened(); }
         if tab == 2 { CollectionState.page = 0; CollectionState.opened(); }
+        if tab == 4 { CategoryState.opened(); }
         if tab == 6 { root.general-opened(); }
     }
     // Resuming is one click; pausing asks for how long.
@@ -1690,12 +1693,14 @@ export component AppWindow inherits Window {
                                         height: 34px; spacing: 8px;
                                         Segmented {
                                             Segment { text: @tr("应用"); icon: @image-url("icons/layout-grid.svg"); selected: root.stats-tab == 0; clicked => { root.stats-tab = 0; } }
+                                            Segment { text: @tr("趋势"); icon: @image-url("icons/chart-bar.svg"); selected: root.stats-tab == 2; clicked => { root.app-detail-open = false; root.stats-tab = 2; } }
                                             Segment { text: @tr("键位与系统"); icon: @image-url("icons/keyboard.svg"); selected: root.stats-tab == 1; clicked => { root.app-detail-open = false; root.stats-tab = 1; CollectionState.page = 1; CollectionState.action(7); } }
                                         }
                                         Rectangle { horizontal-stretch: 1; }
                                         if root.stats-tab == 0 && root.apps-coverage != "" : Action { quiet: true; text: @tr("导出 JSON"); icon: @image-url("icons/download.svg"); enabled: !root.action-busy; clicked => { root.stats-export(0); } }
                                         if root.stats-tab == 0 && root.apps-coverage != "" : Action { quiet: true; text: @tr("导出 CSV"); icon: @image-url("icons/download.svg"); enabled: !root.action-busy; clicked => { root.stats-export(1); } }
                                         if root.stats-tab == 0 : Action { text: @tr("应用规则"); icon: @image-url("icons/adjustments-horizontal.svg"); clicked => { root.open-settings(2); } }
+                                        if root.stats-tab == 2 : Action { text: @tr("管理分类"); icon: @image-url("icons/tag.svg"); clicked => { root.open-settings(4); } }
                                     }
                                     // Applications: totals for all records or the chosen range.
                                     if root.page == 3 && root.stats-tab == 0 : Card {
@@ -1819,6 +1824,7 @@ export component AppWindow inherits Window {
                                     }
 
                                     if root.page == 3 && root.stats-tab == 1 : CollectionPanel { vertical-stretch: 1; }
+                                    if root.page == 3 && root.stats-tab == 2 : TrendPanel { vertical-stretch: 1; manage-categories => { root.open-settings(4); } }
 
                                 }
                             }
@@ -2025,6 +2031,7 @@ export component AppWindow inherits Window {
                         NavItem { text: @tr("记录与隐私"); icon: @image-url("icons/shield.svg"); selected: root.settings-tab == 0; clicked => { root.pick-settings(0); } }
                         NavItem { text: @tr("快照"); icon: @image-url("icons/camera.svg"); selected: root.settings-tab == 1; clicked => { root.pick-settings(1); } }
                         NavItem { text: @tr("应用规则"); icon: @image-url("icons/ban.svg"); selected: root.settings-tab == 2; clicked => { root.pick-settings(2); } }
+                        NavItem { text: @tr("分类"); icon: @image-url("icons/tag.svg"); selected: root.settings-tab == 4; clicked => { root.pick-settings(4); } }
                         NavItem { text: @tr("数据与存储"); icon: @image-url("icons/database.svg"); selected: root.settings-tab == 3; clicked => { root.pick-settings(3); } }
                         NavItem { text: @tr("关于"); icon: @image-url("icons/info-circle.svg"); selected: root.settings-tab == 5; clicked => { root.pick-settings(5); } }
                     }
@@ -2035,14 +2042,15 @@ export component AppWindow inherits Window {
                         VerticalLayout {
                             spacing: 4px;
                             Text {
-                                text: root.settings-tab == 6 ? @tr("常规") : root.settings-tab == 0 ? @tr("记录与隐私") : root.settings-tab == 1 ? @tr("快照") : root.settings-tab == 2 ? @tr("应用规则") : root.settings-tab == 3 ? @tr("数据与存储") : @tr("关于");
+                                text: root.settings-tab == 6 ? @tr("常规") : root.settings-tab == 0 ? @tr("记录与隐私") : root.settings-tab == 1 ? @tr("快照") : root.settings-tab == 2 ? @tr("应用规则") : root.settings-tab == 4 ? @tr("分类") : root.settings-tab == 3 ? @tr("数据与存储") : @tr("关于");
                                 color: Theme.ink; font-size: 20px; font-weight: 600;
                             }
                             Note {
                                 text: root.settings-tab == 6 ? @tr("设置 Timelens 的外观、统计显示与启动方式。")
                                     : root.settings-tab == 0 ? @tr("Timelens 记录什么、不记录什么。")
                                     : root.settings-tab == 1 ? @tr("定时拍摄屏幕快照，帮你回忆当时在做什么。")
-                                    : root.settings-tab == 2 ? @tr("为单个应用设置排除、合并显示或删除历史。")
+                                    : root.settings-tab == 2 ? @tr("为单个应用设置分类、排除、合并显示或删除历史。")
+                                    : root.settings-tab == 4 ? @tr("给应用分组，在统计的「趋势」里按分类查看。")
                                     : root.settings-tab == 3 ? @tr("保留时长、备份与存储位置。")
                                     : @tr("版本、更新与项目信息。");
                             }
@@ -2268,6 +2276,7 @@ export component AppWindow inherits Window {
                         }
 
                         if root.settings-tab == 2 : CollectionPanel { vertical-stretch: 1; }
+                        if root.settings-tab == 4 : CategoryPanel { vertical-stretch: 1; }
 
                         if root.settings-tab == 3 : ScrollView {
                             horizontal-scrollbar-policy: always-off;

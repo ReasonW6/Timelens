@@ -25,7 +25,7 @@ use slint::{
     },
 };
 
-use crate::{AppWindow, CollectionState, DataState};
+use crate::{AppWindow, CategoryState, CollectionState, DataState};
 
 static HEADLESS: AtomicBool = AtomicBool::new(false);
 
@@ -146,6 +146,7 @@ fn settings(window: &AppWindow, tab: i32) {
             window.global::<CollectionState>().set_page(0);
             window.global::<CollectionState>().invoke_opened();
         }
+        4 => window.global::<CategoryState>().invoke_opened(),
         _ => {}
     }
 }
@@ -206,9 +207,14 @@ const STEPS: &[Step] = &[
         w.set_app_detail_open(false);
         w.set_apps_gaps_open(true);
     }),
+    ("06a-stats-trend", |w| {
+        w.set_apps_gaps_open(false);
+        w.set_stats_tab(2);
+    }),
     ("08-settings-privacy", |w| settings(w, 0)),
     ("09-settings-snapshots", |w| settings(w, 1)),
     ("10-settings-rules", |w| settings(w, 2)),
+    ("10a-settings-categories", |w| settings(w, 4)),
     ("11-settings-data", |w| settings(w, 3)),
     ("13-settings-about", |w| settings(w, 5)),
     ("14-move-progress", |w| {
@@ -242,6 +248,13 @@ const STEPS: &[Step] = &[
         w.set_stats_tab(1);
         w.global::<CollectionState>().set_page(1);
         w.global::<CollectionState>().invoke_action(7);
+    }),
+    // The fixture's day, hour by hour.
+    ("18a-dark-trend-day", |w| {
+        w.set_stats_tab(2);
+        w.set_stats_all(false);
+        w.invoke_day_selected(-1);
+        w.invoke_apps_scope_changed();
     }),
     ("19-dark-snapshots", |w| w.invoke_navigate(2)),
     ("21-dark-settings-general", |w| settings(w, 6)),

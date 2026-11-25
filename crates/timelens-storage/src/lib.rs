@@ -1,5 +1,6 @@
 #![cfg(windows)]
 
+mod categories;
 mod collection;
 mod milestone3;
 mod portable;
@@ -8,6 +9,10 @@ mod relocation;
 mod snapshot_container;
 mod timeline_cache;
 mod timeline_series;
+pub use categories::{
+    ApplicationCategory, CATEGORY_COLORS, CATEGORY_NAME_LIMIT, Category, CategoryChoice,
+    FocusSpans, normalize_folder,
+};
 pub use portable::{BackupInfo, BackupOptions, ExportFormat, PreparedRestore};
 pub use recovery::RecoveryReport;
 pub use relocation::RelocationStep;
@@ -58,7 +63,7 @@ const BACKUP_FILE: &str = "timelens.sqlite3.migration-backup";
 const KEY_MAGIC: &[u8; 8] = b"TLKEY\0\0\x01";
 const KEY_BYTES: usize = 32;
 const DPAPI_ENTROPY: &[u8] = b"Timelens local data key v1";
-const LATEST_SCHEMA_VERSION: i64 = 16;
+const LATEST_SCHEMA_VERSION: i64 = 17;
 
 #[derive(Debug, thiserror::Error)]
 pub enum StorageError {
@@ -1896,6 +1901,41 @@ const MIGRATIONS: &[Migration] = &[
         ) STRICT;
         CREATE INDEX IF NOT EXISTS deleted_application_stretches_by_identity
             ON deleted_application_stretches (application_identity, ended_utc_ms);
+    ",
+    },
+    // Categories group applications for the statistics, chosen by hand or by
+    // folder. Five presets start every dataset; their names follow the
+    // interface language until the user renames them.
+    Migration {
+        version: 17,
+        sql: "
+        CREATE TABLE IF NOT EXISTS application_categories (
+            category_id INTEGER PRIMARY KEY,
+            preset TEXT UNIQUE
+                CHECK (preset IN ('work', 'study', 'entertainment', 'social', 'tools')),
+            name TEXT CHECK (name IS NULL OR length(name) BETWEEN 1 AND 40),
+            color INTEGER NOT NULL CHECK (color >= 0),
+            position INTEGER NOT NULL,
+            CHECK (preset IS NOT NULL OR name IS NOT NULL)
+        ) STRICT;
+        CREATE TABLE IF NOT EXISTS application_category_folders (
+            folder TEXT PRIMARY KEY CHECK (length(folder) > 0),
+            category_id INTEGER NOT NULL
+                REFERENCES application_categories(category_id) ON DELETE CASCADE
+        ) STRICT;
+        CREATE TABLE IF NOT EXISTS application_category_assignments (
+            application_identity TEXT PRIMARY KEY,
+            category_id INTEGER
+                REFERENCES application_categories(category_id) ON DELETE CASCADE,
+            assigned_utc_ms INTEGER NOT NULL
+        ) STRICT;
+        CREATE INDEX IF NOT EXISTS application_category_folders_by_category
+            ON application_category_folders (category_id);
+        CREATE INDEX IF NOT EXISTS application_category_assignments_by_category
+            ON application_category_assignments (category_id);
+        INSERT OR IGNORE INTO application_categories (preset, color, position) VALUES
+            ('work', 0, 0), ('study', 1, 1), ('entertainment', 2, 2),
+            ('social', 3, 3), ('tools', 4, 4);
     ",
     },
 ];

@@ -348,6 +348,7 @@ impl Storage {
                 ("tray_background_intervals", "application_identity"),
                 ("input_minute_buckets", "focused_application_identity"),
                 ("application_metadata_revisions", "application_identity"),
+                ("application_category_assignments", "application_identity"),
                 ("applications", "identity"),
             ] {
                 rows +=

@@ -36,6 +36,12 @@ export global CollectionState {
     in-out property <int> confirm;
     in-out property <string> stretch;
     callback merge-chosen(int);
+    // The chosen application's category: by folder (0), none (1), or one of
+    // the categories after them, and how it was chosen.
+    in-out property <[string]> category-options;
+    in-out property <int> category-index: 0;
+    in-out property <string> category-note;
+    callback category-chosen(int);
     // An application's right-click menu: 0 stop recording its activity, 1 ask
     // to delete its history, 2 open the rules page on it, 3 ask to delete the
     // stretch of it on screen.
@@ -195,6 +201,19 @@ export component CollectionPanel inherits Rectangle {
                                 selected(value) => { CollectionState.merge-confirmed = false; CollectionState.delete-confirmed = false; CollectionState.choose(CollectionState.app-index); }
                             }
                             Action { text: @tr("选择 EXE"); enabled: !CollectionState.busy; clicked => { CollectionState.action(1); } }
+                        }
+                    }
+                    Rule { }
+                    SettingRow {
+                        title: @tr("app" => "分类");
+                        description: CollectionState.category-note;
+                        icon: @image-url("icons/tag.svg");
+                        ComboBox {
+                            width: 220px; height: 34px;
+                            model: CollectionState.category-options;
+                            current-index <=> CollectionState.category-index;
+                            enabled: !CollectionState.busy && CollectionState.app-index >= 0;
+                            selected(value) => { CollectionState.category-chosen(CollectionState.category-index); }
                         }
                     }
                 }
