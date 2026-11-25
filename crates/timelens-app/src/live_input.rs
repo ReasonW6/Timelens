@@ -5,7 +5,8 @@
 //! are on screen, previews also count which keys: those counts are added to
 //! the stored key counts the same way, and each key lights as its count goes
 //! up from one preview to the next (tickets 20 and 21). Which keys a minute
-//! counted is let go once the minute is stored or the keys leave the screen.
+//! counted is let go once the minute shows up in the stored key counts read
+//! next, or the keys leave the screen; at the latest the preview expires.
 //! Previews are never stored, and leave out what the statistics leave out:
 //! paused collection and input the rules keep anonymous.
 
@@ -68,9 +69,18 @@ impl Previews {
     }
 
     /// Keep a preview, replacing the one before of its minute, and return
-    /// the keys pressed since the preview before.
-    fn keep(&mut self, input: LiveInput, now: Instant) -> Vec<u32> {
-        let pressed = self.press(&input);
+    /// the keys pressed since the preview before. With the keys off screen,
+    /// which keys it counted goes at once: a preview asked for before they
+    /// left can still arrive after, and nothing else would let its keys go
+    /// until the minute is stored or the preview expires.
+    fn keep(&mut self, mut input: LiveInput, keys: bool, now: Instant) -> Vec<u32> {
+        let pressed = if keys {
+            self.press(&input)
+        } else {
+            input.key_counts = Vec::new();
+            self.pressed = None;
+            Vec::new()
+        };
         self.current(now);
         self.minutes
             .retain(|(kept, _)| kept.minute_started_at_utc_ms != input.minute_started_at_utc_ms);
@@ -198,7 +208,11 @@ pub fn set_wanted(wanted: bool, keys: bool) {
 /// lighting the keys pressed since the one before.
 pub fn receive(window: &AppWindow, input: LiveInput) {
     let date = input.local_date.clone();
-    let pressed = PREVIEWS.with(|previews| previews.borrow_mut().keep(input, Instant::now()));
+    let pressed = PREVIEWS.with(|previews| {
+        previews
+            .borrow_mut()
+            .keep(input, keys_wanted(), Instant::now())
+    });
     crate::collection_ui::flash_keys(&date, &pressed);
     show_overview(window);
     crate::collection_ui::show_keys(window);
@@ -302,19 +316,22 @@ mod tests {
         // The first preview of keys is only what the next is told apart from.
         assert!(
             previews
-                .keep(with_keys(60_000, &[(0x1e, 2)]), now)
+                .keep(with_keys(60_000, &[(0x1e, 2)]), true, now)
                 .is_empty()
         );
         assert_eq!(
-            previews.keep(with_keys(60_000, &[(0x1e, 2), (0x1f, 1)]), now),
+            previews.keep(with_keys(60_000, &[(0x1e, 2), (0x1f, 1)]), true, now),
             [0x1f]
         );
         assert_eq!(
-            previews.keep(with_keys(60_000, &[(0x1e, 4), (0x1f, 1)]), now),
+            previews.keep(with_keys(60_000, &[(0x1e, 4), (0x1f, 1)]), true, now),
             [0x1e]
         );
         // The next minute counts afresh.
-        assert_eq!(previews.keep(with_keys(120_000, &[(0x1f, 1)]), now), [0x1f]);
+        assert_eq!(
+            previews.keep(with_keys(120_000, &[(0x1f, 1)]), true, now),
+            [0x1f]
+        );
         // The latest keys are what the next preview is told apart from.
         assert_eq!(
             previews
@@ -328,17 +345,17 @@ mod tests {
             [6, 2, 0, 0]
         );
         // Totals alone say the keys left the screen; back, nothing lights at once.
-        assert!(previews.keep(preview(120_000, 3), now).is_empty());
+        assert!(previews.keep(preview(120_000, 3), true, now).is_empty());
         assert!(previews.pressed.is_none());
         assert!(
             previews
-                .keep(with_keys(120_000, &[(0x1f, 3)]), now)
+                .keep(with_keys(120_000, &[(0x1f, 3)]), true, now)
                 .is_empty()
         );
         // A minute skipped is no frame to go by either.
         assert!(
             previews
-                .keep(with_keys(240_000, &[(0x1e, 1)]), now)
+                .keep(with_keys(240_000, &[(0x1e, 1)]), true, now)
                 .is_empty()
         );
     }
@@ -351,15 +368,15 @@ mod tests {
             ..Previews::default()
         };
         let all = |_: &LiveInput| true;
-        previews.keep(with_keys(60_000, &[(0x1e, 2)]), now);
-        previews.keep(with_keys(60_000, &[(0x1e, 3), (0x1f, 1)]), now);
+        previews.keep(with_keys(60_000, &[(0x1e, 2)]), true, now);
+        previews.keep(with_keys(60_000, &[(0x1e, 3), (0x1f, 1)]), true, now);
         // A newer preview of a minute replaces the one before.
         assert_eq!(
             previews.unstored_keys(&BTreeSet::new(), all, now),
             BTreeMap::from([(0x1e, 3), (0x1f, 1)])
         );
         // The next minute adds to the one before until that one is stored.
-        previews.keep(with_keys(120_000, &[(0x1e, 1)]), now);
+        previews.keep(with_keys(120_000, &[(0x1e, 1)]), true, now);
         assert_eq!(
             previews.unstored_keys(&BTreeSet::new(), all, now),
             BTreeMap::from([(0x1e, 4), (0x1f, 1)])
@@ -392,16 +409,58 @@ mod tests {
     }
 
     #[test]
+    fn previews_arriving_with_the_keys_off_screen_keep_no_keys() {
+        let now = Instant::now();
+        let mut previews = Previews {
+            generation: crate::data_ui::data_generation(),
+            ..Previews::default()
+        };
+        let all = |_: &LiveInput| true;
+        previews.keep(with_keys(60_000, &[(0x1e, 2)]), true, now);
+        previews.forget_keys();
+        // A preview of keys asked for before the keys left can still arrive
+        // after: its totals count, which keys it counted is let go at once.
+        assert!(
+            previews
+                .keep(with_keys(60_000, &[(0x1e, 3), (0x1f, 1)]), false, now)
+                .is_empty()
+        );
+        assert!(previews.pressed.is_none());
+        assert!(
+            previews
+                .minutes
+                .iter()
+                .all(|(input, _)| input.key_counts.is_empty())
+        );
+        assert!(
+            previews
+                .unstored_keys(&BTreeSet::new(), all, now)
+                .is_empty()
+        );
+        assert_eq!(previews.unstored(&BTreeSet::new(), all, now), [4, 1, 0, 0]);
+        // Back on screen, the next preview of keys is only a frame to go by.
+        assert!(
+            previews
+                .keep(with_keys(60_000, &[(0x1e, 4), (0x1f, 1)]), true, now)
+                .is_empty()
+        );
+        assert_eq!(
+            previews.unstored_keys(&BTreeSet::new(), all, now),
+            BTreeMap::from([(0x1e, 4), (0x1f, 1)])
+        );
+    }
+
+    #[test]
     fn previews_add_only_the_minutes_not_stored() {
         let now = Instant::now();
         let mut previews = Previews {
             generation: crate::data_ui::data_generation(),
             ..Previews::default()
         };
-        previews.keep(preview(60_000, 3), now);
-        previews.keep(preview(120_000, 2), now);
+        previews.keep(preview(60_000, 3), true, now);
+        previews.keep(preview(120_000, 2), true, now);
         // A newer preview of a minute replaces the one before.
-        previews.keep(preview(120_000, 5), now);
+        previews.keep(preview(120_000, 5), true, now);
         let all = |_: &LiveInput| true;
         assert_eq!(previews.unstored(&BTreeSet::new(), all, now), [8, 2, 0, 0]);
         // Told apart by minute, not by the latest stored: deleting that one
